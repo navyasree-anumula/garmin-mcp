@@ -1,0 +1,28 @@
+# Credentials and tokens — nothing auth-shaped ever gets committed.
+data/
+*token*.json
+garmin_tokens.json
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Test recordings — cassettes are scrubbed, but never commit an unreviewed one.
+tests/cassettes/*.unscrubbed.yaml
+
+# OS / editor
+.DS_Store
+
+# Build context only — never bake repo state into the image.
+.git/
+docs/
+tests/
+README.md
