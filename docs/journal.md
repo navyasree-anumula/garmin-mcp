@@ -773,3 +773,83 @@ docker run --rm -p 127.0.0.1:8765:8765 -v garmin-tokens:/data `
 
 The laptop clones the repo, pulls a branch, restarts the container. Merging goes back to
 recording a result rather than being part of finding it.
+
+---
+
+## 2026-08-30 (phase 4a) — Signed in through the web UI. Whole chain proven.
+
+The first credential login on this laptop went through the **web form**, not the CLI. The
+CLI-first sequencing recommended earlier was declined; recorded as a decision, and it came
+out fine.
+
+### What the run settled
+
+`garmin_auth_status`, called over stdio against the pinned image, returned
+`authenticated: true` with a fresh token timestamp and a `server_version` matching the tag
+that had been pulled. Tokens on the volume, container, stdio, MCP handshake, live
+authenticated Garmin call -- the whole chain, on the intended host.
+
+Two facts not previously recorded:
+
+- **`full_name` is populated.** Only `display_name` is the GUID. The account does have a
+  human name available, which matters for the eventual read surface.
+- **The account is metric**, re-confirmed on a second machine. §5\'s units contract now
+  rests on a fact observed twice rather than once.
+
+Values are deliberately not recorded here; this repository is public.
+
+### The first login attempt failed, and the container log said why
+
+The earlier refusal was not a typo. Output from the successful run carried:
+
+```
+mobile+cffi returned 429: IP rate limited by Garmin
+mobile+requests returned 429: IP rate limited by Garmin
+```
+
+Both mobile credential strategies were throttled from this IP; a later strategy got
+through. The same pattern the other laptop showed, now confirmed on a second network --
+§10\'s partial finding holds: **the 429 risk sits on the bootstrap login paths, not on
+serving.**
+
+It also vindicates narrowing the credential verdict an hour earlier. Had
+`GarminConnectAuthenticationError` been mapped wholesale onto "check your password", this
+failure -- which had nothing to do with the password -- would have been reported as a typo,
+and the operator would have gone off to reset a credential that was already correct.
+
+### `serverInfo.version` was empty
+
+Visible in the raw handshake. `MCPServer("garmin")` was constructed without a version, so
+the field a client displays before calling anything was blank: a server could show as
+connected while saying nothing about *which* build had connected. That is precisely the gap
+`_server_version` exists to close, left open at the one place it is cheapest to read. Now
+passed to the SDK, with a test.
+
+### Claude Desktop cannot use it on this machine
+
+Config verified valid, in the file the app actually reads (the MSIX-redirected path, found
+programmatically rather than guessed), with the absolute `docker.exe` path -- which turned
+out to be a **per-user install under `AppData\\Local\\Programs`**, not `Program Files`. The
+documented advice to use an absolute path was right; the commonly assumed value would have
+been wrong, and would have failed silently.
+
+The app never attempted to launch the server: the MCP log directory stayed empty, and
+Settings offers no Developer toggle, no Connectors section and no Extensions section. So
+this build does not expose local MCP servers at all. Nothing on our side is wrong and
+nothing on our side can fix it. **Open, and not a blocker** -- the server is verified
+working over stdio by hand.
+
+### A verification detour worth writing down
+
+Piping the three JSON-RPC messages into `docker run -i` from PowerShell does **not** work,
+and fails in a way that looks exactly like a hang in our code. PowerShell buffers output
+into a native command\'s stdin, so the messages arrive together with EOF immediately behind
+them; the server answers `initialize` instantly, starts the tool call, and is shut down by
+EOF before the live Garmin round trip can finish. Lengthening a `Start-Sleep` inside the
+pipeline does not help -- the sleep is inside the buffered block, so the timing is
+unchanged.
+
+Running `docker run -i` interactively and pasting each line keeps stdin open as long as the
+window is, and works first time. Worth knowing before somebody concludes the tool hangs.
+
+Tests: 164 -> 165.
