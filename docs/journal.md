@@ -420,3 +420,69 @@ Tests: 49 → 67.
   until it has.
 - Cache still deferred to phase 5.
 - Two-writer token race still structural, not observed.
+
+---
+
+## 2026-08-30 (phase 3 results) — The probe ran. 17 usable, 1 self-inflicted, 8 unresolved.
+
+First real run against the account, image `sha-b5a3069`. Counts and verdicts only — no
+readings are recorded here or in `capabilities.json`.
+
+### Settled
+
+**17 endpoints returned data**, and the field counts corroborate rather than just pass a
+threshold: stress 1935, respiration 1501, activity_types 923, steps 576, primary_device 322,
+devices 304, personal_records 181, activities 142, daily_stats 41, user_summary 41,
+training_status 25, fitness_age 11, body_battery 10, intensity_minutes 8, weigh_ins 2,
+body_composition 2, sleep 2.
+
+**The FR570 does produce Body Battery** (10 fields). That was one of the four device-tier
+unknowns §5 named, and it is now answered by measurement rather than a spec sheet.
+
+### Self-inflicted
+
+**`race_predictions` — the `ValueError` is ours.** The library ends the method with
+
+```python
+raise ValueError("you must either provide all parameters or no parameters")
+```
+
+It takes zero arguments or all three; the probe passed two, because the candidate is
+classified `RANGE` and should be `NONE`. **That endpoint has never actually been tested.**
+
+### Not trusted, deliberately not concluded
+
+**`sleep` returned 2 fields.** Beside stress at 1935 and respiration at 1501 that is not a
+sleep payload — it is a nearly-empty response that cleared a "greater than zero" threshold.
+The verdict says `HAS DATA`; the count disagrees. Recording the count is what made this
+visible, and it is an argument for the verdict being a judgement rather than a boolean.
+
+**`resting_hr` is empty while `daily_stats` and `user_summary` return 41 fields each**, and
+those almost certainly contain resting heart rate. The data plausibly exists for that date
+and `get_rhr_day` is not the way to reach it — a wrong call shape rather than an absent
+metric. Unverified either way.
+
+**Empty across all three spread dates:** `hrv`, `resting_hr`, `spo2`, `training_readiness`,
+`max_metrics`, `endurance_score`, `hill_score`, `floors`.
+
+Some are plausible on their face — Pulse Ox ships disabled on Garmin watches to save
+battery, and VO2 max needs a qualifying activity. **No conclusion is being drawn.** Declaring
+"this watch does not do HRV" on this evidence would be exactly the confident-and-wrong claim
+the counting heuristic was written to avoid, and it would permanently cut a tool.
+
+### What would resolve it
+
+A structure-only diagnostic: the response's **key paths and value types, never values**.
+`restingHeartRate: <int>` establishes the shape; `restingHeartRate: 52` would be a reading in
+a terminal scrollback. Key names are not health data, so this stays inside §8.
+
+That separates the two cases currently indistinguishable: *the endpoint returned an empty
+container* versus *it returned data our counter walked past*.
+
+Planned as `garmin-mcp probe --explain <key>`, **not yet built**.
+
+### State at pause
+
+`main` = `b5a3069`, image `sha-b5a3069`, 67 tests. Phases 1–3 merged. `capabilities.json` is
+written on the laptop volume and reflects the run above, including the two verdicts we do not
+believe — it should not be treated as final until `--explain` has run.
