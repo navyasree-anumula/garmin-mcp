@@ -87,6 +87,14 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
   out of conversation transcripts.
 - **Never `print()` in this server.** stdout carries the protocol. All logging goes to
   stderr; `tests/test_stdio_purity.py` enforces it.
+- **A configured server appears under Settings → Connectors, not Settings → Developer.**
+  The Developer page has a "Local MCP servers" list that stays on *"No servers added"* even
+  while a config-file server is connected and answering. Look in Connectors, where it shows
+  as `Desktop / Local dev / Connected`. An hour was lost to reading the Developer page and
+  concluding the config had been ignored.
+- **If it does not appear, redo the restart before anything else.** Quitting from the tray
+  icon is the documented step and it is easy to believe it happened when it did not —
+  closing the window is not enough. Ten seconds, and it beats every other diagnostic here.
 - **The web UI's loopback guarantee is in the publish spec, not the bind address.**
   Inside the container it binds `0.0.0.0` — it has to, because a process bound to
   `127.0.0.1` in a container's own network namespace is unreachable through a published
