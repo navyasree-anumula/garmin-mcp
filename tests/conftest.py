@@ -49,6 +49,19 @@ def fake_garmin(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fast_rate_limit(monkeypatch):
+    """Keep the real budget out of tests that are not about the budget.
+
+    The shipped default is one request every two seconds. Any test making more
+    than a burst of Garmin calls would otherwise sit in a sleep, and a suite
+    that is slow for a reason nobody remembers gets weakened later.
+    tests/test_ratelimit.py overrides this with its own values.
+    """
+    monkeypatch.setenv("GARMIN_RATE_PER_SEC", "10000")
+    monkeypatch.setenv("GARMIN_RATE_BURST", "10000")
+
+
+@pytest.fixture(autouse=True)
 def reset_client_cache():
     """The client is cached for the process lifetime by design (one login per
     session). Tests must not inherit each other's cached client."""
