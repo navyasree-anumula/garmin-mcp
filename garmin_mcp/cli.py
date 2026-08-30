@@ -201,6 +201,71 @@ _VERDICT_LABEL = {
 }
 
 
+def _cmd_probe_explain(args: argparse.Namespace) -> int:
+    """Describe what an endpoint returns, without recording what it said.
+
+    The counting heuristic answers "did anything come back". It cannot answer
+    "did nothing come back, or did our counter walk past it" -- and those have
+    opposite conclusions. Eight endpoints are currently stuck on exactly that
+    ambiguity, and declaring "this watch does not do HRV" on the strength of a
+    zero would permanently cut a tool that works.
+
+    Key paths and value types only. `restingHeartRate: int` establishes the
+    shape; `restingHeartRate: 52` would be a reading in a terminal and its
+    scrollback (docs/SCOPE.md §8). Key names are schema, not health data.
+    """
+    from .source import probe
+    from .source.client import tokenstore_path
+    from .source.errors import GarminSourceError
+
+    valid = {c.key: c for c in probe.CANDIDATES}
+    requested = [k.strip() for k in args.explain.split(",") if k.strip()]
+    unknown = [k for k in requested if k not in valid]
+    if unknown or not requested:
+        print(f"Unknown endpoint(s): {', '.join(unknown) or '(none given)'}", file=sys.stderr)
+        print("\nValid keys:", file=sys.stderr)
+        for group in sorted({c.group for c in probe.CANDIDATES}):
+            members = [c.key for c in probe.CANDIDATES if c.group == group]
+            print(f"  {group:<9} {' '.join(members)}", file=sys.stderr)
+        return 1
+
+    tokens = tokenstore_path()
+    offsets = tuple(int(n) for n in args.days.split(",") if n.strip())
+
+    print("garmin-mcp probe --explain\n", file=sys.stderr)
+    print(
+        "Key paths and value types only. No value is printed or stored, so this\n"
+        "output is schema and is safe to paste (docs/SCOPE.md §8).\n",
+        file=sys.stderr,
+    )
+
+    def progress(shape) -> None:
+        label = _VERDICT_LABEL.get(shape.verdict, shape.verdict)
+        detail = f" ({shape.detail})" if shape.detail else ""
+        print(
+            f"\n--- {shape.key} [{shape.group}] {label}"
+            f"  {shape.populated} populated  {shape.day}{detail}",
+            file=sys.stderr,
+            flush=True,
+        )
+        for line in shape.lines:
+            print(f"    {line}", file=sys.stderr, flush=True)
+        if not shape.lines:
+            # Distinct from an empty container, which prints "dict(empty)".
+            print("    (no payload — the call did not return one)", file=sys.stderr)
+
+    try:
+        probe.explain(tokens, requested, day_offsets=offsets, on_progress=progress)
+    except GarminSourceError as exc:
+        print(f"\nStopped: {exc}", file=sys.stderr)
+        return 1
+
+    # Deliberately writes nothing. capabilities.json has one writer -- the probe
+    # proper -- and a read-only diagnostic must not become a second one.
+    print("\n  Nothing was written. This is a diagnostic.", file=sys.stderr)
+    return 0
+
+
 def _cmd_probe(args: argparse.Namespace) -> int:
     """Ask the account what it can actually answer (docs/SCOPE.md §5).
 
@@ -209,6 +274,9 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     two seconds, so a full run takes about a minute. That is far past any MCP
     client's patience, and it is a thing you run once, not per conversation.
     """
+    if args.explain:
+        return _cmd_probe_explain(args)
+
     from .source import probe
     from .source.client import tokenstore_path
     from .source.errors import GarminSourceError
@@ -300,6 +368,15 @@ def main(argv: list[str] | None = None) -> int:
         default="1,3,7",
         help="Comma-separated day offsets to try. Spread, not consecutive: three "
         "days running can all be days the watch was not worn.",
+    )
+    p_probe.add_argument(
+        "--explain",
+        metavar="KEYS",
+        default="",
+        help="Comma-separated endpoint keys. Instead of a verdict, print the key "
+        "paths and value types of what each returns -- never the values. Answers "
+        "'did nothing come back, or did our counter walk past it', which a count "
+        "cannot. Writes nothing.",
     )
     p_probe.set_defaults(func=_cmd_probe)
 
