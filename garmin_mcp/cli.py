@@ -144,6 +144,49 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_web(args: argparse.Namespace) -> int:
+    """Serve the credential UI on demand (docs/SCOPE.md §7a).
+
+    Nothing starts this automatically and nothing should. A page that exchanges
+    a password for tokens has no business listening while nobody is using it,
+    and auto-start was rejected outright because a container starting another
+    container needs the Docker socket -- the daemon's full root-privileged
+    control interface. Mounting that into the agent-driven container would
+    invert the entire point of §4.
+
+    `--host` defaults to loopback, so typing nothing gets you the safe case. In
+    the container it is set to 0.0.0.0 and the loopback guarantee moves to the
+    publish spec (`127.0.0.1:8765:8765`), because a process bound to 127.0.0.1
+    inside a container's own netns is unreachable through a published port. The
+    Host allowlist is what backstops that, and it is always on.
+    """
+    import uvicorn
+
+    from .web.app import create_app, default_allowed_hosts
+
+    app = create_app(allowed_hosts=default_allowed_hosts(args.port))
+
+    print("garmin-mcp credential UI\n", file=sys.stderr)
+    print(f"  open        : http://127.0.0.1:{args.port}/", file=sys.stderr)
+    print(f"  bound to    : {args.host}:{args.port}", file=sys.stderr)
+    print(
+        f"  accepts Host: {', '.join(default_allowed_hosts(args.port))}\n",
+        file=sys.stderr,
+    )
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"  NOTE: bound to {args.host}, not loopback. That is correct only inside\n"
+            "  a container published as 127.0.0.1:PORT:PORT. On a bare host it serves\n"
+            "  a credential form to every network this machine has joined.\n",
+            file=sys.stderr,
+        )
+
+    # access_log off: the URLs are harmless but this process handles a password,
+    # and a request log is one refactor away from carrying a query string.
+    uvicorn.run(app, host=args.host, port=args.port, access_log=False)
+    return 0
+
+
 _VERDICT_LABEL = {
     "has_data": "HAS DATA",
     "empty": "empty",
@@ -253,6 +296,19 @@ def main(argv: list[str] | None = None) -> int:
         "days running can all be days the watch was not worn.",
     )
     p_probe.set_defaults(func=_cmd_probe)
+
+    p_web = sub.add_parser(
+        "web",
+        help="Serve the local credential UI on demand. Loopback by default.",
+    )
+    p_web.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address. Loopback by default; the container sets 0.0.0.0 and "
+        "relies on the 127.0.0.1:PORT:PORT publish instead.",
+    )
+    p_web.add_argument("--port", type=int, default=8765)
+    p_web.set_defaults(func=_cmd_web)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
