@@ -996,3 +996,104 @@ Tests: 165 -> 189.
 
 Run it against the five confirmed health endpoints, then `garmin_health` gets built from
 real field names rather than assumed ones.
+
+---
+
+## 2026-08-30 (phase 5a results) — The probe was wrong about sleep, and HRV was never missing
+
+First `--explain` run, against the real account, date 2026-08-29. Schema only — field names
+and types, no readings, which is why the output could be pasted around freely.
+
+### The counting heuristic was measuring the wrong thing
+
+**`sleep` returned 4589 populated fields.** The first probe run recorded **2**, and that
+verdict was explicitly recorded as one we did not believe — 2 fields beside stress at 1935
+is not a sleep payload. It was right not to believe it: the count was measuring an unworn or
+partial day, not the endpoint.
+
+Had the number been trusted, sleep would have been cut or stubbed. Recording the count
+alongside the verdict is what made the disagreement visible, and refusing to conclude from
+it is what left the door open.
+
+### Three metrics were never missing. We were asking the wrong endpoint.
+
+This is the case `--explain` was built for, and it landed on the first run.
+
+- **HRV.** `get_hrv_data` was empty across three spread dates. The sleep payload carries
+  `hrvData: list(115)` with `.value: float`, plus `avgOvernightHrv: float` and
+  `hrvStatus: str`.
+- **Resting heart rate.** `get_rhr_day` empty; `restingHeartRate: int` sits in the sleep
+  payload. This was suspected — `daily_stats` and `user_summary` returning 41 fields each
+  made "the data exists and we are not reaching it" the likelier reading — and is now
+  confirmed rather than suspected.
+- **Respiration and body battery** are in there too, as `wellnessEpochRespirationDataDTOList`
+  and `sleepBodyBattery`, independent of their own endpoints.
+
+Declaring "this watch does not produce HRV" on the strength of a zero would have permanently
+cut a working metric, and nothing downstream would ever have questioned it. That single
+outcome pays for the whole diagnostic.
+
+**Also found: skin temperature** — `avgSkinTempDeviationC`, `avgSkinTempDeviationF`,
+`skinTempDataExists`. It is not in `CANDIDATES` at all, so no probe run could have found it.
+The candidate list is a guess about what to ask for, and this is the first evidence of what
+that guess missed.
+
+### Two facts that constrain the extractor
+
+**The big arrays are positional, and a sibling list names the columns.**
+
+    stressValueDescriptorsDTOList[0].index / .key
+    stressValuesArray[0]: list(2)
+
+So each entry is `[<col0>, <col1>]` and the descriptor list says which is which. Hardcoding
+"index 0 is the timestamp" would work today and break silently later — and the trap is
+already visible: **`bodyBatteryValuesArray` is `list(4)` inside `stress` and `list(2)`
+inside `body_battery`.** Same name, different width, same account, same day. The extractor
+must read the descriptors.
+
+**Every payload carries GMT and Local timestamps** — `startTimestampGMT` beside
+`startTimestampLocal`, throughout. §5 requires every date-bearing response to state what its
+date means, and that can now rest on a fact rather than a choice.
+
+**Units are readable off the field names**: `…Seconds`, `…Mins`, `…InMilliseconds`,
+`…DeviationC` / `…DeviationF`. The §5 units contract does not need an invented mapping.
+
+### Scale, which is the real design constraint
+
+Sleep's series hold roughly 1,700 elements across ten lists (`sleepMovement` 701,
+`sleepHeartRate` 291, `wellnessEpochRespirationDataDTOList` 291, `sleepStress` 194,
+`sleepBodyBattery` 194, `hrvData` 115, `sleepRestlessMoments` 43, `sleepLevels` 24, ...).
+Stress carries 480 samples, respiration 720. Returning any of that raw is exactly the
+context-window destruction §5's hard cap exists to prevent.
+
+## RESUME HERE
+
+State: `main` = `76cb014`. 189 tests. Two branches pushed and **unmerged**, no open PRs:
+
+- `docs/client-wiring-findings` — journal + README only. The Connectors-not-Developer
+  finding and "redo the tray restart first".
+- `feature/probe-explain` — `--explain`, the `race_predictions` fix, and this entry.
+
+Laptop is fully working: tokens on the `garmin-tokens` volume, backed up at
+`C:\garmin-backup`, Claude Desktop connected and answering `garmin_auth_status` live. The
+source-mount debug loop is set up at `$HOME\pe\garmin-mcp-feature-probe-explain`.
+
+**Next, in order:**
+
+1. **Open PRs for both branches and merge.** Neither is in `main`.
+2. **`--explain` the remaining unresolved eight** — `spo2`, `training_readiness`,
+   `max_metrics`, `endurance_score`, `hill_score`, `floors`, and re-check `hrv` and
+   `resting_hr` now that we know where they actually live. ~8 requests. Three of eight
+   turned out to be findable elsewhere; the rest deserve the same question before any of
+   them is cut.
+3. **Add skin temperature to `CANDIDATES`**, and consider what else the list never thought
+   to ask for.
+4. **Then `garmin_health(metric, date)`** — named scalars with explicit units, never raw
+   arrays. Sourcing `hrv` and `resting_hr` from the sleep endpoint rather than their own,
+   because that is where this account's data measurably is. Descriptor-driven decoding for
+   any positional array. §6's short-TTL cache ships alongside it, as its first real consumer.
+
+**Open items unchanged:** SCOPE §7 (Connectors-not-Developer, per-user Docker path) and §7a
+(the bind-address correction) both need amending and both owe the 10-dimension pass — one
+session, together. Phase 4b tool selection and `tools.json` still unstarted. Write/workout
+tools still need structure validation before anything is uploaded to a real calendar.
