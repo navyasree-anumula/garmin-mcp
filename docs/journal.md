@@ -486,3 +486,119 @@ Planned as `garmin-mcp probe --explain <key>`, **not yet built**.
 `main` = `b5a3069`, image `sha-b5a3069`, 67 tests. Phases 1–3 merged. `capabilities.json` is
 written on the laptop volume and reflects the run above, including the two verdicts we do not
 believe — it should not be treated as final until `--explain` has run.
+
+---
+
+## 2026-08-30 (phase 4a) — The credential UI, and a laptop with nothing to lose
+
+### Why this and not `probe --explain`
+
+The working laptop changed mid-session. The Docker Desktop problem from the first entry is
+resolved after the reboot that never happened at the time, and that machine has **no token
+file and no backup** — the state §7a's login form exists for. `probe --explain` still
+matters and is still unbuilt; it just stopped being the thing the hardware was pointing at.
+
+### The sequencing, which mattered more than the code
+
+There is no token backup anywhere. So the first credential login on that laptop is a
+one-shot event: it runs the exact path Garmin 429'd on a first attempt from the other
+machine, a captcha lockout has no workaround by design, and the file that would be the way
+back does not exist yet.
+
+Spending that attempt on never-live-tested web code would have been the wrong risk, so the
+order is: **CLI bootstrap first** (shipped, proven end to end), back the volume up
+immediately, and only then re-authenticate through the new form with insurance in hand.
+The build itself cost nothing to verify — the entire UI is tested against injected seams,
+so 126 tests run without a token file, without a network, and without a single request
+against an account that has already been throttled once today.
+
+### §7a says to bind 127.0.0.1, and that is wrong in a container
+
+"Bind `127.0.0.1` only. Never `0.0.0.0`" is right on a bare host and unimplementable in a
+container: a process bound to loopback inside the container's own network namespace is
+unreachable through a published port, so following §7a literally produces a UI that does
+not work. The guarantee has to live in the publish spec — `127.0.0.1:8765:8765` — exactly
+as the existing `serve --http` path already documents for the MCP transport.
+
+The consequence is not cosmetic. It means the **Host allowlist is the real in-container
+backstop**, not merely a DNS-rebinding defence, so it is not optional and cannot be traded
+away later for convenience. The CLI still defaults to `127.0.0.1`, because the safe case
+should be what you get by typing nothing, and it prints a warning when told otherwise.
+
+§7a needs amending to say this. That is a plan-doc change and owes the full 10-dimension
+stress test, so it gets its own session rather than a quiet edit here.
+
+### A CSS rule made three security assertions vacuous
+
+`test_a_missing_field_leaves_the_button_usable` — the *negative* test, asserting the button
+is **not** disabled after an ordinary typo — failed on first run. The reason was the
+stylesheet: `button[disabled] { opacity: .5 }` contains the substring `disabled`, so
+`assert "disabled" in response.text` was true of every page ever rendered, including pages
+with a perfectly live button.
+
+Three assertions about the single most important UX property on the form — that a 429 or a
+captcha disables submit, because pressing it again is what extends the block — were
+passing without testing anything. They now match `<button type=submit disabled>`. The only
+reason this surfaced is that a negative case was written alongside the positive ones; three
+green positives would have looked exactly the same.
+
+### Every guard was watched failing
+
+Each of the four load-bearing checks was disabled in turn and the suite re-run:
+
+| Guard removed | Result |
+|---|---|
+| Host allowlist | 8 failed |
+| Same-origin check | 3 failed |
+| CSRF validation | 3 failed |
+| `disable_submit` | 3 failed |
+
+Restored, 126 pass. A security test that has never been seen to discriminate is decoration.
+
+### What the UI does and does not do
+
+**Status page** — tokens present, when written, permissions (`0600` flagged in red when it
+is not), `flock` support probed by *taking a real lock*, the budget in force, and the
+running build. It makes **no Garmin call**, which is what makes it free to reload while you
+are fixing something; a diagnostic page that could rate limit the account it is diagnosing
+would be self-defeating. It never renders token contents.
+
+**Login form** — the same exchange as the CLI, with the password never echoed into a
+re-rendered form (the email is, so a typo does not mean retyping both) and never logged.
+
+**MFA is not handled**, deliberately. The account has no MFA today; if Garmin asks for a
+code the page says so and names the CLI, which does implement the prompt. A page that
+pointed at itself would be pointing at a route that does not exist (§4).
+
+### Also
+
+- `web/` is the second adapter over `source/`, which is the first real pressure on §11.
+  `tests/test_layering.py` now enforces it by walking the AST rather than grepping —
+  `cli.py` and `web/app.py` both import lazily inside functions, so a grep for top-level
+  import lines would give a clean bill of health to a file that reaches past the boundary
+  in every handler.
+- No new shipped dependency. `starlette`, `uvicorn` and `python-multipart` were already in
+  `requirements.lock` via `mcp`. They are now declared explicitly in `pyproject.toml`: a
+  direct dependency satisfied only transitively breaks silently the day the intermediary
+  drops it. Lock unchanged, `pip-audit` still clean.
+- The compose volume is `external: true`, so `docker compose down -v` cannot delete the
+  tokens. Without a backup that would mean a fresh credential login, which is the one
+  operation that can end unrecoverably.
+- No Docker socket, anywhere. Auto-start was never on the table.
+
+Tests: 67 → 126.
+
+### Open
+
+- **Not yet run on the laptop.** Everything above was verified on the staging box: the real
+  server bound to `127.0.0.1` (confirmed with `ss`), a forged `Host` refused with 403, no
+  `Access-Control-*` header on any response, and the status page correctly reporting a
+  machine with no tokens. The compose path and the live login are next.
+- `errors.py::BOOTSTRAP_COMMAND` still names the CLI. §4 requires it name a route that
+  currently exists; it switches to the compose command once the UI has been used for real.
+- Tool selection and `tools.json` — phase 4b. It reads `capabilities.json`, which exists
+  only on the other laptop's volume.
+- `probe --explain` still unbuilt; the eight unresolved empties stay unresolved.
+- `race_predictions` is classified `RANGE` and should be `NONE` — a real one-line bug the
+  probe run exposed, kept out of a web-UI branch on purpose.
+- Cache still phase 5. Two-writer token race still structural, not observed.

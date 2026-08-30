@@ -1,0 +1,46 @@
+# The credential UI, started on demand and stopped when done (docs/SCOPE.md §7a).
+#
+#   docker compose up -d web     # then open http://127.0.0.1:8765/
+#   docker compose down
+#
+# The MCP server is deliberately NOT a service here. It is spawned by the MCP
+# client over stdio (`docker run -i`), not by compose, and giving it a service
+# definition would invite somebody to leave it running.
+
+services:
+  web:
+    image: ghcr.io/navyasree-anumula/garmin-mcp:latest
+    # Pin this to a sha- tag in real use. `docker run` and `compose up` never
+    # re-pull a moving tag, so `latest` silently runs whatever was pulled last
+    # (§7). The status page reports the build it is actually running.
+
+    # The loopback guarantee lives HERE, in the left-hand side of the publish.
+    # Inside the container the process binds 0.0.0.0, because a process bound to
+    # 127.0.0.1 in the container's own network namespace cannot be reached
+    # through a published port at all.
+    #
+    #   127.0.0.1:8765:8765   correct — reachable only from this machine
+    #   8765:8765             serves a credential-minting form to every network
+    #                         this laptop ever joins
+    ports:
+      - "127.0.0.1:8765:8765"
+
+    command: ["web", "--host", "0.0.0.0", "--port", "8765"]
+
+    volumes:
+      - garmin-tokens:/data
+      # No /var/run/docker.sock, for any reason. That socket is the daemon's
+      # full root-privileged control interface: a container holding it can start
+      # a privileged peer that mounts the host filesystem. Mounting it is
+      # equivalent to granting root on the host, and doing that anywhere in this
+      # project would invert §4, which exists to make the serving process the
+      # least privileged component.
+
+    restart: "no"   # on demand means on demand
+
+volumes:
+  garmin-tokens:
+    external: true
+    # External, so `docker compose down -v` cannot delete the tokens. Without a
+    # backup that would mean a fresh credential login, which is the one
+    # operation that can end in a captcha lockout with no way back (§9).

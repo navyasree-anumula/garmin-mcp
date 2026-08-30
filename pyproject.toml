@@ -10,6 +10,13 @@ dependencies = [
     # Floor-and-ceiling, never '==' (docs/SCOPE.md §2). The [workout] extra is
     # required: without it the workout builder models are silently absent.
     "garminconnect[workout]>=0.3.11,<0.4",
+    # The credential UI (docs/SCOPE.md §7a). Both already arrive with `mcp` and
+    # are already pinned in requirements.lock, so this adds nothing to the
+    # shipped image -- but `web/` imports them directly now, and a direct
+    # dependency that is only ever satisfied transitively breaks silently the
+    # day the intermediary drops it.
+    "starlette>=1.6,<2",
+    "uvicorn>=0.52,<1",
 ]
 
 [project.optional-dependencies]
