@@ -29,6 +29,12 @@ USER garmin
 
 VOLUME ["/data"]
 
+# Stamped by CI with the commit so the running container can report which build
+# it is (`docker run` never re-pulls a moving tag). Declared here, after the
+# expensive layers, so a changing value does not invalidate the pip install.
+ARG BUILD_REF=""
+ENV GARMIN_MCP_BUILD=${BUILD_REF}
+
 # No EXPOSE, deliberately. The HTTP transport binds 0.0.0.0 inside the container;
 # exposure is controlled at the Docker layer and must be loopback-scoped:
 #   -p 127.0.0.1:3001:3001    correct

@@ -41,13 +41,20 @@ class AuthExpired(GarminSourceError):
 
 
 class RateLimited(GarminSourceError):
-    """Garmin returned 429."""
+    """Garmin returned 429.
 
-    def __init__(self) -> None:
-        super().__init__(
+    Raised for both the login path and the data path, which reach us wearing
+    different exception types -- see `_translate` in `client.py`.
+    """
+
+    def __init__(self, detail: str | None = None) -> None:
+        message = (
             "Garmin is rate limiting this IP (HTTP 429). Wait several minutes. "
             "Do not retry in a loop — repeated attempts extend the block."
         )
+        if detail:
+            message += f" ({detail})"
+        super().__init__(message)
 
 
 class SourceUnavailable(GarminSourceError):

@@ -20,10 +20,18 @@ def _configure_logging() -> None:
     Under stdio transport stdout carries JSON-RPC. A single stray byte written
     there corrupts the stream and breaks every tool at once, silently.
     """
+    # force=True matters and is not boilerplate. basicConfig is a NO-OP when the
+    # root logger already has handlers, so without it a logging setup performed
+    # by any earlier import would stand and our level would silently not apply.
+    # That level is the only thing keeping health data out of the logs:
+    # garminconnect's _run_request logs the full response body at DEBUG
+    # ("API error response: status=%s body=%r"), and on a health endpoint that
+    # body is health data (docs/SCOPE.md §8).
     logging.basicConfig(
         stream=sys.stderr,
         level=logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
+        force=True,
     )
 
 

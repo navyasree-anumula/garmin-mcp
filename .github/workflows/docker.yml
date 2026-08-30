@@ -29,10 +29,29 @@ jobs:
       - name: Test
         run: pytest -q
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # docs/SCOPE.md §8. curl_cffi is a binary wheel whose stated purpose is TLS
+      # impersonation, so the lockfile is audited rather than trusted. Audits the
+      # lock, not the resolved env, because the lock is exactly what ships.
+      - name: Audit locked dependencies
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.lock --strict
+
   build-and-push:
     name: Build and publish
-    # An image built from code whose tests fail is worse than no image.
-    needs: test
+    # An image built from code whose tests fail is worse than no image, and one
+    # with a known-vulnerable pinned wheel is worse still.
+    needs: [test, audit]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -71,6 +90,8 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          build-args: |
+            BUILD_REF=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
