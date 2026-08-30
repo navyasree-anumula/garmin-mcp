@@ -61,6 +61,24 @@ _local = threading.local()
 _warned_no_flock = False
 
 
+class LockUnsupported(GarminSourceError):
+    """The filesystem cannot do advisory locking at all.
+
+    Distinct from LockTimeout on purpose. Both arrive as OSError from flock, and
+    conflating them produces a confidently wrong diagnosis: the operator is told
+    another instance is busy and goes looking for a process that does not exist,
+    when the truth is that cross-process protection was never active here.
+    """
+
+    def __init__(self, path: str, detail: str) -> None:
+        super().__init__(
+            f"The filesystem holding {path} does not support advisory locking "
+            f"({detail}). Cross-process protection for the Garmin token file is "
+            f"NOT active on this volume. Two containers could refresh tokens "
+            f"concurrently and lose one another's rotated refresh token."
+        )
+
+
 class LockTimeout(GarminSourceError):
     """Another process held the Garmin lock for too long."""
 
@@ -100,17 +118,50 @@ def file_lock(path: Path, timeout: float = DEFAULT_TIMEOUT_S) -> Iterator[None]:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except OSError:
-                # Blocking flock cannot be interrupted with a deadline, so poll.
+            except BlockingIOError:
+                # Genuinely held by someone else. Blocking flock cannot be
+                # interrupted with a deadline, so poll instead.
                 if time.monotonic() >= deadline:
                     raise LockTimeout(str(path), timeout) from None
                 time.sleep(_POLL_INTERVAL_S)
+            except OSError as exc:
+                # NOT contention. ENOLCK/EINVAL mean this filesystem cannot lock
+                # -- some network and volume drivers cannot. Retrying would
+                # spin to the deadline and then blame a second process that was
+                # never there, which is the worst kind of error message: precise,
+                # actionable, and wrong.
+                raise LockUnsupported(str(path), f"{type(exc).__name__}: {exc}") from exc
         try:
             yield
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+def probe_locking(tokens_path: str) -> tuple[bool, str]:
+    """Find out whether this filesystem can actually lock, by locking it.
+
+    Checking that `fcntl` imports proves only that we are on a UNIX; it says
+    nothing about the volume, and the volume is the part that varies. Some
+    network and container volume drivers cannot do advisory locking, and on
+    those the protection is silently absent. So this takes a real lock.
+    """
+    if not _HAVE_FLOCK:
+        return False, "fcntl.flock is unavailable on this platform"
+
+    path = lock_path_for(tokens_path)
+    try:
+        with file_lock(path, timeout=2.0):
+            pass
+    except LockUnsupported as exc:
+        return False, str(exc)
+    except LockTimeout:
+        # Contention is proof it works -- somebody else is holding it.
+        return True, "supported (currently held by another process)"
+    except OSError as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, "supported"
 
 
 @contextmanager

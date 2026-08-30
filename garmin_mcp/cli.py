@@ -90,6 +90,60 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_selftest(args: argparse.Namespace) -> int:
+    """Exercise the cross-process machinery without touching Garmin.
+
+    Everything this command uses -- the lock file and the request budget -- lives
+    beside the token file on the shared volume, and none of it needs the token
+    file to exist. So this runs before bootstrap, and more importantly it can be
+    run in two containers at once to prove that the budget really is global and
+    the lock really does exclude. That claim is untestable from inside a single
+    process, and it is the entire reason both modules keep state on disk.
+    """
+    import time
+
+    from .source import ratelimit
+    from .source.client import tokenstore_path
+    from .source.lock import lock_path_for, probe_locking
+
+    tokens = tokenstore_path()
+    directory = lock_path_for(tokens).parent
+    budget = ratelimit.Budget.from_env()
+    ok, detail = probe_locking(tokens)
+
+    print("garmin-mcp selftest — no Garmin API calls are made.\n", file=sys.stderr)
+    print(f"  tokens path : {tokens}", file=sys.stderr)
+    print(f"  lock file   : {lock_path_for(tokens)}", file=sys.stderr)
+    print(f"  budget file : {directory / ratelimit.STATE_FILENAME}", file=sys.stderr)
+    print(f"  flock       : {'SUPPORTED' if ok else 'NOT SUPPORTED'} — {detail}", file=sys.stderr)
+    print(
+        f"  budget      : {budget.rate_per_sec:g} req/s, burst {budget.burst:g}\n",
+        file=sys.stderr,
+    )
+
+    if not ok:
+        print(
+            "FAIL: cross-process protection is not active on this volume.",
+            file=sys.stderr,
+        )
+        return 1
+
+    from .source.client import _garmin_access
+
+    started = time.time()
+    for n in range(1, args.count + 1):
+        with _garmin_access(tokens):
+            # GRANT lines go to stdout, one per line, so the output of two
+            # containers can be concatenated and sorted by timestamp.
+            print(f"GRANT {args.label} {n} {time.time():.5f}", flush=True)
+    elapsed = time.time() - started
+
+    print(
+        f"\n  {args.label}: {args.count} grants in {elapsed:.2f}s", file=sys.stderr
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_logging()
 
@@ -107,6 +161,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_serve.add_argument("--port", type=int, default=3001)
     p_serve.set_defaults(func=_cmd_serve)
+
+    p_selftest = sub.add_parser(
+        "selftest",
+        help="Exercise the lock and request budget. Makes no Garmin calls.",
+    )
+    p_selftest.add_argument("--label", default="A", help="Tag for the GRANT lines.")
+    p_selftest.add_argument("--count", type=int, default=4)
+    p_selftest.set_defaults(func=_cmd_selftest)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
