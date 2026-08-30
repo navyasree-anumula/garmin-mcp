@@ -61,6 +61,9 @@ authenticated profile fetch on every path including cached-token reuse.
 
 ### Resume here after the reboot
 
+> **Superseded by the next entry.** The reboot never happened — bootstrap ran on a
+> different laptop that already had a working Docker Desktop. Kept for the record.
+
 ```powershell
 docker version                      # expect a Server: section, not just Client:
 docker pull ghcr.io/navyasree-anumula/garmin-mcp:latest
@@ -110,3 +113,110 @@ That route needs one contained change first, currently **not done**:
   there (315MB), now redundant since CI builds the image.
 - Pass 2 is unstarted: the FR570 capability probe, then the first real data tools. That is
   where the units, timezone and result-cap contracts get designed rather than guessed.
+
+---
+
+## 2026-08-30 (later) — Bootstrap done on a real account. Stress-test found a live bug.
+
+### The blocker dissolved
+
+The pending Windows reboot never happened. Bootstrap ran on a **different laptop** that
+already had a working Docker Desktop (4.44.2, engine 28.3.2, `linux/amd64`, WSL2). The
+previous entry's resume steps are superseded.
+
+Pass 1 is now proven end to end against the real account: bootstrap → token volume →
+container → stdio → Claude Desktop → `garmin_auth_status` returning a live authenticated
+profile. The full chain, on the intended host.
+
+### What the live run settled
+
+Four things §10 carried as unverified now have measured answers:
+
+- **Laptop toolchain** — verified, above.
+- **Protocol revision** is `2025-11-25`, not the `2026-07-28` §10 claims.
+- **Account unit system is metric.** This settles the §5 units contract with a fact.
+- **`display_name` is a GUID**, not a human name — and it is load-bearing, not cosmetic:
+  `_require_display_name()` builds the URL path for sleep, resting HR, daily summary, heart
+  rates and personal records. The read surface depends on it. (Value not recorded here; the
+  repo is public.)
+
+And one thing nobody had asked:
+
+- **Garmin 429s this IP on the mobile *credential* login paths**, both `mobile+cffi` and
+  `mobile+requests`, on the very first attempt. A later strategy succeeded. The **token
+  load and refresh path is not throttled** — proven by the serve-time call returning
+  cleanly. So §6's rate-limit concern lands on bootstrap, not on serving.
+
+### Two containers, not one
+
+`docker ps` during a live session shows **two** containers for one configured stdio server,
+stable across queries (not accumulating). `source/client.py` claimed "under stdio is exactly
+one client session." That comment was wrong and is now corrected. It matters because
+garminconnect re-dumps tokens whenever it refreshes them, so the token file has two
+independent writers with only an in-process lock between them.
+
+### The stress test (10 dimensions, per sop/stress-test-10-dimensions.md)
+
+Run against real library source before building pass 2. Full findings live in
+`docs/SCOPE.md` v1.3. The ones that changed the code:
+
+**A data-path 429 does not raise `GarminConnectTooManyRequestsError`.** That type is raised
+only by the login strategies. `client._run_request` maps every status >= 400 except 404 onto
+`GarminConnectConnectionError` — there is no 429 branch. So a throttled *read* reached our
+`_translate` dressed as a connectivity error, and the agent would read it as transient and
+retry: exactly what §6 forbids, against an IP already being throttled. **Fixed**, with tests
+covering both directions so the check is shown to be able to say no.
+
+**`get_activities_by_date` auto-paginates up to `MAX_PAGINATED_REQUESTS = 2000`** with no
+delay between pages. §5's hard result cap lives in our layer, which is too late — the library
+has already fired the requests. Recorded so pass 2 builds on `get_activities(start, limit)`
+instead.
+
+**§6's rate limiter and short-TTL cache do not exist.** Zero hits across `garmin_mcp/`. Pass 1
+did not need them; pass 2 is the first multi-call surface, so they come first.
+
+### pip-audit found something better than a CVE
+
+§8 has always mandated `pip-audit` in CI and it was never wired up. Adding it flagged
+`pytest 8.4.2`. Chasing that surfaced the real problem: **`requirements.lock` carried
+`pytest`, `pluggy`, `iniconfig`, `Pygments` and `packaging`**, and the Dockerfile does
+`pip install -r requirements.lock` — so the production image shipped the test runner and its
+whole dependency tree.
+
+The lock is now runtime-only: 40 pins down to 35. Verified by installing the new lock into a
+clean venv and importing every module, so nothing load-bearing was cut. `pip-audit` on the
+result reports no known vulnerabilities, and a test now fails if dev packages return.
+
+The pytest CVE itself remains in the dev environment. `pyproject.toml` pins `pytest>=8,<9`
+and the fix is 9.0.3, so clearing it means widening that ceiling — left as a deliberate
+decision rather than a silent bump.
+
+### Also this pass
+
+- `garmin_auth_status` now reports `server_version`, stamped by CI with the commit.
+  `docker run` never re-pulls a moving tag, so a config pinned to `latest` runs whatever was
+  pulled last with nothing saying so. This makes "am I on the current build?" answerable from
+  inside a conversation.
+- `_configure_logging` now passes `force=True`. Without it `basicConfig` is a **no-op** when
+  the root logger already has handlers, so an earlier import configuring logging at DEBUG
+  would have stood — and garminconnect logs full response bodies at DEBUG, which on a health
+  endpoint is health data (§8). The level was the only thing preventing that; it now has a
+  regression test.
+
+Tests: 10 → 26.
+
+### Client wiring, which cost an hour
+
+Claude Desktop on Windows is the **MSIX/Store build**. Its config is not at `%APPDATA%\Claude`
+— it is under `%LOCALAPPDATA%\Packages\Claude_<pkgid>\LocalCache\Roaming\Claude\`, and the
+folder only exists after first launch. A packaged app also does not reliably inherit `PATH`,
+so `"command": "docker"` is unsafe; use the absolute path to `docker.exe`. Both are now in
+§7.
+
+### Open items
+
+- Two containers per session — understood, not yet mitigated. Cross-process token-refresh
+  lock is Phase 2.
+- Pass 2 phases 2–5 (rate limiter, cache, capability probe, web UI, first read tools) are
+  planned and unstarted.
+- The `vcrpy` cassette coverage §8 claims still does not exist.

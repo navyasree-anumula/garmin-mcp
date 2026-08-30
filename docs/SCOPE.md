@@ -1,8 +1,10 @@
 # garmin-mcp — Scope
 
-**Status:** scoping. No implementation exists.
-**Version:** 1.2 · 2026-08-30
+**Status:** pass 1 shipped and proven live on the target laptop. Pass 2 in progress.
+**Version:** 1.3 · 2026-08-30
 **Ratification:** this document is the artifact to approve before any code is written.
+**v1.3** stress-tested across all 10 dimensions of `sop/stress-test-10-dimensions.md`;
+audit trail in the final section.
 
 ---
 
@@ -19,6 +21,10 @@
 | Transport | **stdio** (`docker run -i`) | v1.2 |
 | MFA on the account | **Not enabled** | v1.2 |
 | Watch | **Forerunner 570** | v1.2 |
+| Credential entry | **Local web form**, CLI retained as fallback | v1.3 |
+| Web UI lifecycle | **On demand**, loopback-bound, **no Docker socket** | v1.3 |
+| Tool surface | **User-selected** from what the capability probe finds | v1.3 |
+| Multi-tenancy | **Still no.** Re-confirmed at v1.3 | v1.3 |
 
 ---
 
@@ -108,13 +114,30 @@ the day Garmin decides to require it.
 
 ## §4 Credential boundary
 
-**The password never enters the MCP surface.** Bootstrap is a CLI that Mahi runs by hand:
+**The password never enters the MCP surface.** That is the invariant. *How* the password
+is typed is an implementation detail underneath it; *where it can appear* is not.
+
+Two entry points satisfy it:
+
+1. **Local web form** (v1.3, pass 2 phase 4) — the primary route. Served on
+   `127.0.0.1` only, on demand. See §7a for what makes this safe.
+2. **CLI bootstrap** (v1.1, shipped) — retained as the hardened fallback:
 
 ```
-docker run -it --rm -v garmin-tokens:/data garmin-mcp login
+docker run -it --rm -v garmin-tokens:/data \
+    ghcr.io/navyasree-anumula/garmin-mcp:<tag> login
 ```
 
-The password is read via `getpass`. It is **never** passed as argv, never as `-e` or any
+The CLI reads the password via `getpass`. The web form posts it once over loopback and
+never renders it back.
+
+**The web form is a deliberate, and real, security regression** against `getpass`: a browser
+means password managers, autofill, extensions and devtools can all see the field, where a
+terminal exposed none of them. It is taken knowingly, for a UX that stopped being
+theoretical — wiring the CLI route by hand cost an hour of a real session. The CLI stays
+for anyone who wants the tighter boundary.
+
+The password is read once. It is **never** passed as argv, never as `-e` or any
 environment variable (both are visible in `docker inspect`), never as a tool argument,
 never logged. It is exchanged once for tokens and **never persisted**.
 
@@ -132,7 +155,9 @@ prompt.
 > missing capability; it is the correct boundary.
 
 **Missing token file on `serve`** must fail with an actionable message naming the bootstrap
-command — not a stack trace.
+route — not a stack trace. Once the web UI ships, that message names the compose command and
+the URL. **Until then it must keep naming the CLI**: pointing an operator at a UI that does
+not exist is worse than the imperfect instruction it replaces.
 
 ---
 
@@ -164,6 +189,21 @@ this account.
 candidate metric endpoint for a recent date and record which return data. The surface is
 trimmed to that result. Tools for metrics this device never produces are dead weight and
 get cut.
+
+**Availability and exposure are two different things (v1.3).** The probe determines what the
+account and watch *can* return, and writes `capabilities.json`. The web UI then lets Mahi
+choose which of those are actually *exposed* to the agent, writing `tools.json`. The MCP
+server reads that at startup.
+
+Three rules on that config, each earned:
+
+- **An absent `tools.json` means the default read-only set, never "no tools".** A missing
+  config file must not silently disarm the server.
+- **One writer.** The web UI writes it; the MCP server only reads. Written atomically.
+- **A change does not take effect until the MCP client restarts.** MCP clients read the tool
+  list once at session start and cache it. Ticking a box and then asking the agent would
+  otherwise be a silent no-op — the worst failure class. The UI must say so, and
+  `garmin_auth_status` reports the tool set actually in force.
 
 ### Response contracts
 
@@ -203,16 +243,31 @@ volume, which is the only lever we have on the risk in §9.
 Decided here rather than discovered later, because TTL logic that leaks into individual
 tools never comes back out.
 
+**Status (v1.3): neither exists.** Pass 1 shipped one tool making one call and needed
+neither. Pass 2 adds the first multi-call surface, so both are built **before** the tools,
+not after — which is the whole point of having decided placement up front.
+
+**A rate limit does not always announce itself.** `GarminConnectTooManyRequestsError` is
+raised only by the *login* strategies. On a data request `client._run_request` maps every
+status >= 400 except 404 onto `GarminConnectConnectionError`, with no 429 branch at all — so
+a throttled read arrives looking like a connectivity blip, and an agent reading "could not
+reach Garmin" will retry into the block. Our `source/` layer must detect and re-type it.
+
 ---
 
 ## §7 Deployment and transport
 
 **Host: Mahi's laptop. Transport: stdio, via `docker run -i`.**
 
+> **Superseded in part, v1.3.** "No listening port" no longer holds unconditionally: the
+> credential UI listens on one, loopback-bound and on demand. The rest of this section
+> stands, and §7a covers what the port costs and what pays for it.
+
 This decision resolves four separate findings at once:
 
-- No listening port, therefore no unauthenticated endpoint serving special-category health
-  data and accepting workout writes.
+- No listening port during normal operation, therefore no unauthenticated endpoint serving
+  special-category health data and accepting workout writes. The web UI is off unless
+  explicitly started.
 - Login originates from a Dutch consumer ISP — the neighbourhood Garmin expects Connect
   Mobile to come from. A datacenter IP presenting itself as `GCM-Android-5.23` is the
   same wrong-neighbourhood pattern that forced the residential-proxy work on the WhatsApp
@@ -229,10 +284,25 @@ Claude web or a phone, and would cost a real authentication design. Not worth it
 authored here, pushed to GitHub, cloned on the laptop. The staging box never builds or
 runs the image.
 
-**Unverified:** Docker and a Python 3.12 toolchain on the laptop. The `3.12.3` + Docker
-check in the plan was run against *staging* and does not transfer. Confirm on the laptop
-before the first build. If the laptop is Apple Silicon, the aarch64 wheel situation is
-already checked and fine.
+**Verified 2026-08-30**, on the laptop, not inferred from staging: Docker Desktop 4.44.2,
+engine 28.3.2, `linux/amd64`, WSL2 backend. The full chain ran end to end against the real
+account.
+
+**Client wiring — Windows, Claude Desktop (v1.3).** Two findings that cost an hour:
+
+- Claude Desktop from the Microsoft Store is an **MSIX package**, and MSIX redirects the
+  roaming profile. The config is **not** at `%APPDATA%\Claude`; it is under
+  `%LOCALAPPDATA%\Packages\Claude_<packageid>\LocalCache\Roaming\Claude\`. The folder
+  does not exist until the app has been launched once. Use **Settings → Developer → Edit
+  Config** rather than guessing the path.
+- A packaged app does **not** reliably inherit the shell `PATH`. `"command": "docker"` can
+  fail to resolve with no visible error — the server simply never appears. Use the absolute
+  path to `docker.exe`, with backslashes escaped for JSON.
+
+**Pin the image tag in the client config, not `latest`.** `docker run` does not re-pull a
+moving tag: it uses whatever was last pulled. A config on `latest` therefore runs a silently
+stale image with nothing anywhere saying so. `garmin_auth_status` reports `server_version`,
+stamped by CI with the commit, so the running build is always identifiable.
 
 **Image hygiene from day one:** tag, and prune old tags. Do not repeat the no-retention
 mistake on a second machine.
@@ -245,9 +315,48 @@ login impossible, a saved working token file is the only way back in.
 
 ---
 
+## §7a Web UI security (v1.3)
+
+One port, `127.0.0.1:8765`, started on demand by `docker compose up -d web` and stopped when
+done. It serves three pages: **login**, **tool selection**, **status**.
+
+**Loopback is not the same as safe.** The threat is not someone on the network — it is the
+browser already running on the same machine. Any page you visit can issue requests to
+`127.0.0.1`, and DNS rebinding defeats a naive origin check by making a hostname the browser
+trusts resolve to loopback. So:
+
+- **Bind `127.0.0.1` only.** Never `0.0.0.0`. The port publish is
+  `127.0.0.1:8765:8765` — a bare `8765:8765` would serve a credential-minting page to every
+  network the laptop joins.
+- **Validate the `Host` header against an allowlist** (`127.0.0.1:8765`, `localhost:8765`).
+  This is the DNS-rebinding defence; an origin check alone is not.
+- **Require same-origin** on every state-changing request, and send **no CORS headers at
+  all**. No `Access-Control-Allow-Origin`, ever.
+- **CSRF token per form**, bound to the session cookie.
+- **No auto-start.** Nothing brings this up on its own.
+
+**No Docker socket, anywhere, for any reason.** Auto-start was considered and rejected: for
+a container to start another container it needs `/var/run/docker.sock`, and that socket is
+the daemon's full root-privileged control interface — a container holding it can start a
+privileged peer that mounts the host filesystem. Mounting it is equivalent to granting root
+on the host. Doing that to the *agent-driven* container would invert the entire design of §4,
+which exists precisely to make the serving process the least privileged component. The cost
+of not having it is one command, typed rarely.
+
+**The UI never displays a token or a password.** Status shows whether tokens exist and when
+they were written — never their contents.
+
+---
+
 ## §8 Testing
 
-`pytest` + `vcrpy` cassettes. **CI never touches live Garmin.**
+`pytest`. **CI never touches live Garmin.**
+
+> **v1.3 correction.** This section claimed `vcrpy` cassettes. `vcrpy` is not a dependency
+> and no cassette has ever existed. Rather than leave the document asserting coverage that
+> is not there, the claim is downgraded to a **plan**: cassettes arrive with the first write
+> tool, which is the point at which they earn their cost. The scrubbing requirements below
+> are requirements *on that future work*, not descriptions of the present.
 
 - **Cassettes will capture credentials unless we stop them.** A recording of the auth flow
   contains the password POST body and the bearer tokens. Requires
@@ -265,8 +374,21 @@ login impossible, a saved working token file is the only way back in.
   that.
 - **Supply chain.** `curl_cffi` is a binary wheel whose stated purpose is TLS
   impersonation. Pin exact versions in the lockfile and run `pip-audit` in CI.
+  **Wired up in v1.3** as a job gating the image publish, auditing `requirements.lock`
+  because the lock is exactly what ships.
+- **The lockfile is the shipped artifact.** `Dockerfile` runs
+  `pip install -r requirements.lock`, so every pin lands in the production image. Until
+  2026-08-30 the lock carried `pytest`, `pluggy`, `iniconfig`, `Pygments` and `packaging` —
+  the test runner and its tree, inside the runtime container. Found by adding `pip-audit`,
+  which flagged a pytest CVE in an image that should never have contained pytest. A test now
+  fails if dev packages return to the lock.
+- **No health data in logs — and the log level is what enforces it.** garminconnect logs the
+  full response body at DEBUG on any API error; on a health endpoint that body *is* the
+  health data. Nothing else stands in the way, so `_configure_logging` uses `force=True`
+  (`basicConfig` is a silent no-op when root already has handlers) and the level has a
+  regression test.
 - **Baseline: 0 tests.** This repo starts empty. That is the reference point for every
-  later count.
+  later count. **Pass 1: 10. v1.3 phase 1: 26.**
 
 ---
 
@@ -278,7 +400,10 @@ login impossible, a saved working token file is the only way back in.
 | Captcha lockout | Medium | Cannot log in | No workaround by design. Token backup, gentle rates, never retry into it |
 | Terms-of-service violation | Certain | Own account, own data, single user | **Accepted.** This is the mild end of the spectrum, but it is a real violation and is recorded as one, not rationalised away |
 | Agent writes a junk workout | Low | Bad workout on the watch | Structure validation (§5) + delete exclusions |
-| Health-data exposure | Near-zero under stdio | High if it were HTTP | Mitigated by §7 |
+| Health-data **network** exposure | Near-zero | High if it were a public HTTP endpoint | Mitigated by §7 / §7a: loopback only, on demand |
+| Health data **reaching the model provider** | **Certain, by design** | The data you ask for becomes conversation content | **Accepted and stated plainly.** A model cannot reason over data it cannot see. Tool results travel to the provider exactly like pasted text. Nothing is fetched unless asked for — there is no sync, no background job. "Tokens stay on the laptop" is true; "nothing leaves the laptop" is false, and conflating them is the actual risk |
+| Password enters a browser | Certain once §7a ships | Password managers, autofill, extensions and devtools see the field | **Accepted for UX.** A real regression against `getpass`; CLI bootstrap retained as the tighter path (§4) |
+| Two containers, one token file | **Observed** 2026-08-30 | Concurrent refresh could lose an update | Cross-process file lock around refresh. Structural risk; not yet observed to bite |
 | Single-maintainer bus factor | Low now | Fork treadmill | Accepted. MIT means forking is at least possible |
 | Datacenter-IP flag | **Resolved** | — | Eliminated by the laptop decision (§7) |
 
@@ -286,18 +411,128 @@ login impossible, a saved working token file is the only way back in.
 
 ## §10 Carried forward to build time
 
-- **`mcp` SDK decorator API shape.** Protocol revision 2026-07-28; `mcp` 2.1.1;
-  `fastmcp` 3.4.7 stable. The SDK went through a major version bump and its source has not
-  been read. Verify before writing tool definitions.
-- **Device capability probe** (§5) — must run before the tool surface is fixed.
-- **Laptop toolchain** (§7) — Docker and Python 3.12 unverified on the target machine.
-- **Rate limit number** (§6) — a guess until there is observed behaviour behind it.
+All four items below were carried from v1.2. Three are now closed by measurement.
+
+- ~~**`mcp` SDK decorator API shape.**~~ **CLOSED.** `FastMCP` was *removed* in mcp 2.x; the
+  entry class is `MCPServer` from `mcp.server`. The negotiated protocol revision is
+  **`2025-11-25`**, not the `2026-07-28` this document previously claimed.
+- **Device capability probe** (§5) — **still open.** Must run before the tool surface is
+  fixed. Built in pass 2 phase 3.
+- ~~**Laptop toolchain**~~ **CLOSED.** Verified on the laptop 2026-08-30 — see §7.
+- **Rate limit number** (§6) — **partially closed.** First real observation: Garmin 429s this
+  IP on the mobile *credential login* paths, on a first attempt, while the *token load and
+  refresh* path is clean. So the risk sits on bootstrap, not on serving. The steady-state
+  read number is still a guess.
+
+Also settled by the same live run:
+
+- **Account unit system is `metric`** — the §5 units contract now rests on a fact.
+- **`display_name` is a GUID, and it is load-bearing.** `_require_display_name()` builds the
+  URL path for sleep, resting HR, daily summary, heart rates and personal records. It is not
+  a cosmetic label; the read surface depends on it. (Value deliberately not recorded here —
+  this repository is public.)
 
 ---
 
 ## §11 Internal architecture rule
 
-All `garminconnect` imports are confined to `garmin_mcp/source/`. The tool layer never
-imports the library directly. There are no sister modules to be consistent with in a new
+All `garminconnect` imports are confined to `garmin_mcp/source/`. **Every adapter above it
+is a peer**: `server.py` (MCP tools) and `web/` (the credential and configuration UI, v1.3)
+both talk to `source/` and neither imports the library directly. A second adapter is exactly
+the pressure this rule exists to survive. There are no sister modules to be consistent with in a new
 repo, so "consistency" here means one piece of internal discipline: a future source swap —
 official API, a fork, a different library — touches exactly one package.
+
+---
+
+## §12 v1.3 10-dimension stress-test absorption notes
+
+Walked all 10 dimensions of `sop/stress-test-10-dimensions.md`. Findings verified against
+real library source and against a live run on the target laptop — not reasoned about
+abstractly. The primary artifact is §12.1, the lifecycle walkthrough; the dimensional log
+in §12.2 is the disposition trail.
+
+### §12.1 Lifecycle adverse-case walkthrough
+
+| Stage | Adverse case | Desired behaviour |
+|---|---|---|
+| Pull image | (U) pulls `latest`, gets a stale local image, believes it current | `server_version` reports the build; config pins a tag (§7) |
+| Start web UI | (S) port 8765 already bound | Fail naming the port, not a stack trace |
+| Login page | (S) another origin POSTs to loopback | Host allowlist + same-origin + CSRF → reject (§7a) |
+| Login page | (U) blank or wrong password | Plain "invalid credentials"; never echo the value back |
+| Login | (S) 429 on every strategy | "Wait, do not retry", and **disable the submit button** rather than invite a loop |
+| Login | (S) captcha on every strategy | Same, plus point at the token backup as the only way back |
+| Login | (U) closes the tab mid-flow | No partial token file — `dump()` is already atomic |
+| Token at rest | (U) syncs the backup into OneDrive/Dropbox | Docs warn explicitly; it is a live credential |
+| Client wiring | (U) hand-edits a large config and breaks the JSON | Docs give backup + validate commands before the edit (§7) |
+| Session start | (S) two containers spawn, two logins | Expected and documented; cross-process lock makes refresh safe |
+| First call | (S) no tokens yet | Message names the bootstrap route that **currently exists** (§4) |
+| Read query | (U) "show me every activity I've ever done" | Hard cap + default window; the response says it was capped and how to page |
+| Read query | (S) Garmin 429s mid-conversation | Re-typed as a rate limit; agent told not to retry (§6) |
+| Read query | (S) a day the watch was not worn | "No data for this date", distinct from a failed call |
+| Tool config | (U) ticks a tool, asks the agent, nothing happens | UI states the restart requirement; status reports the live set (§5) |
+| Token expiry | (U) tools fail days later with no context | `AUTH_EXPIRED` names the cause and the fix |
+| Upgrade | (U) pulls a new image, config still pins the old tag | `server_version` makes the mismatch visible |
+| Decommission | (U) wants access revoked | `docker volume rm garmin-tokens`, delete the backup, change the Garmin password |
+
+### §12.2 Dimensional findings
+
+**#1 Edge cases** — 5 findings, 5 actionable.
+- 1.a: a data-path 429 is indistinguishable from a connectivity error — **ACTIONABLE, fixed** (§6).
+- 1.b: `get_activities_by_date` paginates up to `MAX_PAGINATED_REQUESTS = 2000` with no delay, before our cap applies — **ACTIONABLE §5**: build on `get_activities(start, limit)`.
+- 1.c: token refresh fires on every data request and rewrites the file; two containers, no cross-process lock — **ACTIONABLE**, phase 2.
+- 1.d: absent `tools.json` must not mean "no tools" — **ACTIONABLE §5**.
+- 1.e: 15s default timeout × ~15 probe endpoints exceeds MCP client patience — **(no action)**: the probe is a CLI command, never a tool.
+
+**#2 Unverified assumptions** — 3 findings.
+- 2.a: §6's rate limiter and cache asserted as placed, never built — **ACTIONABLE §6**.
+- 2.b: §10's protocol revision, laptop toolchain, units, `display_name` shape — **CLOSED by measurement** (§10).
+- 2.c: §8's `vcrpy` cassette coverage does not exist — **ACTIONABLE §8**, downgraded to a plan.
+
+**#3 Actual code checks** — 0 *new*; this pass was the code check. Findings 1.a–1.c came from reading `garminconnect/client.py` and `__init__.py` directly.
+
+**#4 Security** — 4 findings.
+- 4.a: library logs full response bodies at DEBUG; only our log level prevents health data on disk — **ACTIONABLE, fixed** with `force=True` + regression test.
+- 4.b: `requirements.lock` shipped `pytest` and its tree into the production image — **ACTIONABLE, fixed**; lock is runtime-only, guarded by a test.
+- 4.c: web UI is reachable by any page in the local browser; DNS rebinding defeats naive origin checks — **ACTIONABLE §7a**.
+- 4.d: Docker socket for auto-start would grant host root to the agent-driven container — **REJECTED outright** (§7a).
+
+**#5 Vision alignment** — 0 findings. §1 states this is a personal tool with no relationship to the WhatsScale vision; the web UI does not change that. Single-user was re-confirmed at v1.3.
+
+**#6 Architecture** — 2 findings.
+- 6.a: `web/` must be a peer adapter over `source/`, not a second importer of the library — **ACTIONABLE §11**.
+- 6.b: rate limiter and cache belong below the tool layer, as §6 already said — **(no action)**, honoured by phase ordering.
+
+**#7 Impact on other features** — 1 finding, state-machine sub-analysis **triggered** by the new tool-enabled state.
+- 7.a: the enabled-tool set is written by the UI and read by the MCP server at session start, which clients cache. A toggle therefore produces **no observable change** until restart — a silent no-op, the exact failure class the sub-analysis exists to catch. **ACTIONABLE §5**: UI states it, status tool reports the live set.
+
+**#8 Test coverage** — 2 findings.
+- 8.a: no cassettes despite §8 claiming them — **ACTIONABLE §8**, downgraded.
+- 8.b: no regression test on the log level or the lockfile contents, both load-bearing — **ACTIONABLE, both added**.
+
+**#9 Deployment & rollback** — 3 findings.
+- 9.a: `docker run` never re-pulls a moving tag, so `latest` runs silently stale — **ACTIONABLE §7**: pin tags, report `server_version`.
+- 9.b: MSIX config path and absolute `docker.exe` requirement undocumented — **ACTIONABLE §7**.
+- 9.c: rollback unchanged and still sound — the token volume is independent of the image, so a rollback never costs a re-authentication. **✓ VERIFIED**.
+
+**#10 Risks** — 2 findings.
+- 10.a: §9 conflated network exposure with provider exposure — **ACTIONABLE §9**, restated.
+- 10.b: the browser as a new credential surface — **ACTIONABLE §9**, recorded as accepted.
+
+### §12.3 Net v1.3 changes
+
+| Finding | Section | Change |
+|---|---|---|
+| 1.a | §6 | Rate limits must be re-typed in `source/`; fixed in code |
+| 1.b | §5 | Never call `get_activities_by_date` |
+| 1.c, 9.c | §9 | Two-writer risk recorded; lock in phase 2 |
+| 1.d, 7.a | §5 | Tool-config rules: default set, one writer, restart required |
+| 2.a | §6 | Rate limiter and cache marked not-built, required before tools |
+| 2.b | §10 | Three of four carried items closed by measurement |
+| 2.c, 8.a | §8 | `vcrpy` claim downgraded to a plan |
+| 4.a, 8.b | §8 | Log level is the enforcement point; tested |
+| 4.b | §8 | Lockfile is the shipped artifact; runtime-only, tested |
+| 4.c, 4.d | §7a | New section: loopback, Host allowlist, CSRF, no socket |
+| 6.a | §11 | `server.py` and `web/` are peer adapters |
+| 9.a, 9.b | §7 | Pin tags, report `server_version`, document MSIX wiring |
+| 10.a, 10.b | §9 | Health data reaching the provider stated plainly; browser risk accepted |
