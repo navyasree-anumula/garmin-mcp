@@ -11,7 +11,7 @@ import logging
 import sys
 from getpass import getpass
 
-from .source.errors import GarminSourceError, RateLimited
+from .source.errors import GarminSourceError, InvalidCredentials, RateLimited
 
 
 def _configure_logging() -> None:
@@ -48,6 +48,12 @@ def _cmd_login(_args: argparse.Namespace) -> int:
             password=password,
             prompt_mfa=lambda: input("MFA code: ").strip(),
         )
+    except InvalidCredentials as exc:
+        # Reported plainly, with no lockout advice attached. Telling somebody to
+        # wait several minutes after a typo is how a tool earns a reputation for
+        # being flaky (docs/SCOPE.md §3: "Report plainly").
+        print(f"\n{exc}", file=sys.stderr)
+        return 1
     except RateLimited as exc:
         print(f"\n{exc}", file=sys.stderr)
         print(

@@ -177,3 +177,51 @@ class TestErrorTextIsOurs:
 
         assert "<script>x</script>" not in response.text
         assert "&lt;script&gt;" in response.text
+
+
+class TestAWrongPasswordIsNotALockout:
+    """The form disables its own submit button on a 429 or a captcha, and that
+    is the right call. Doing it for a typo is not: the recovery is to fix the
+    field and press the button again, and a form that refuses to let you would
+    make an ordinary mistake look like an outage -- which also devalues the
+    times it IS disabled."""
+
+    def test_the_button_stays_live(self):
+        from garmin_mcp.source.errors import InvalidCredentials
+
+        client = build(lambda e, p: (_ for _ in ()).throw(InvalidCredentials("401")))
+
+        response = submit(client)
+
+        assert response.status_code == 400
+        assert LIVE_BUTTON in response.text
+        assert DISABLED_BUTTON not in response.text
+
+    def test_it_does_not_tell_the_operator_to_wait(self):
+        from garmin_mcp.source.errors import InvalidCredentials
+
+        client = build(lambda e, p: (_ for _ in ()).throw(InvalidCredentials("401")))
+
+        response = submit(client)
+
+        assert "Do not retry" not in response.text
+        assert "connect.garmin.com" in response.text
+
+    def test_the_email_survives_so_only_the_password_is_retyped(self):
+        from garmin_mcp.source.errors import InvalidCredentials
+
+        client = build(lambda e, p: (_ for _ in ()).throw(InvalidCredentials("401")))
+
+        response = submit(client, email="mahi@example.com")
+
+        assert "mahi@example.com" in response.text
+        assert "hunter2" not in response.text
+
+    def test_a_real_lockout_still_disables_it(self):
+        """The mirror image: if InvalidCredentials handling had been written by
+        widening the non-disabling branch, this would have broken silently."""
+        client = build(lambda e, p: (_ for _ in ()).throw(RateLimited()))
+
+        response = submit(client)
+
+        assert DISABLED_BUTTON in response.text

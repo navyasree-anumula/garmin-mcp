@@ -40,6 +40,34 @@ class AuthExpired(GarminSourceError):
         )
 
 
+class InvalidCredentials(GarminSourceError):
+    """Garmin rejected the email and password themselves.
+
+    Distinct from `AuthExpired`, and the distinction is not pedantry: the two
+    arrive as the SAME library exception, and the only thing separating them is
+    which of our own calls was in flight. Telling somebody their stored tokens
+    expired when they have just typed a password is advice that cannot be acted
+    on -- it names a file they do not have and tells them to run the bootstrap
+    they are already running.
+
+    It is also the one authentication failure that is NOT a lockout. Getting
+    that wrong in the other direction is just as bad: telling somebody to wait
+    several minutes after a typo teaches them the tool is flaky.
+    """
+
+    def __init__(self, detail: str = "") -> None:
+        message = (
+            "Garmin rejected this email and password. Check them at "
+            "connect.garmin.com — they are the same credentials.\n"
+            "This is not a lockout and the tokens on this machine are "
+            "untouched, so it is safe to correct the typo and try again. Do "
+            "not hammer it: repeated failures can still attract bot protection."
+        )
+        if detail:
+            message += f"\n({detail})"
+        super().__init__(message)
+
+
 class RateLimited(GarminSourceError):
     """Garmin returned 429.
 

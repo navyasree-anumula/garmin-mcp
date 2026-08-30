@@ -144,3 +144,9 @@ RATE_LIMIT_ADVICE = (
     "this becomes a captcha lockout there is no workaround by design. The submit "
     "button is disabled deliberately. Come back in several minutes."
 )
+
+BAD_PASSWORD_ADVICE = (
+    "Nothing is locked and no tokens were touched. Check the credentials at "
+    "<code>connect.garmin.com</code> — signing in there is free and settles it "
+    "without spending an attempt here. Then correct the field and submit again."
+)

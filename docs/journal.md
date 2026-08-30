@@ -694,3 +694,82 @@ was fixed. A cross-origin POST is still refused. The fix does not widen what is 
 it makes the accepted set reachable.
 
 Tests: 133 -> 136.
+
+---
+
+## 2026-08-30 (phase 4a, follow-up 3) — Every noun in the error was wrong
+
+Second attempt at the form, on `sha-21829cc`. The same-origin fix held: the POST reached
+the handler and a real login was attempted. Garmin rejected it, and the page said:
+
+```
+Garmin rejected the stored tokens at /data/garmin_tokens.json. They have expired
+or been revoked. Re-run the bootstrap to get new ones: docker run ... login
+```
+
+On a machine with no token file, to somebody who was running the bootstrap, with lockout
+advice attached and the submit button disabled. Every noun was wrong and the prescribed
+action was the one already in progress.
+
+### One exception, two meanings
+
+`GarminConnectAuthenticationError` is raised on both of our call paths.
+
+On a **token load** it means the stored tokens are no longer good -- `AuthExpired`, and
+naming the file and the backup is exactly right. On a **credential login** the library
+raises the same type for `INVALID_USERNAME_PASSWORD` ("401 Unauthorized (Invalid Username
+or Password)") and stops the strategy chain immediately rather than trying the rest.
+
+Nothing on the exception distinguishes them. The only thing that can is which of our own
+calls was in flight, so `_translate` now takes `during_login`. Opt-in, because `_connect`
+is the common path and a default of True would mislabel every genuine expiry -- the mirror
+mistake, and just as bad: it would tell somebody to check a password when the fix is to
+re-authenticate.
+
+Three defects, one line of code:
+
+1. **Wrong type.** A typo reported as an expiry.
+2. **The library\'s own message was discarded.** `AuthExpired(path)` never carried
+   `str(exc)`, so "401 Unauthorized (Invalid Username or Password)" -- the one line that
+   said what actually happened -- was thrown away at the boundary. That is why the cause
+   could not be stated with certainty after the fact.
+3. **Wrong advice.** The web layer attached rate-limit advice and disabled submit for
+   *every* `GarminSourceError`. A wrong password is the one authentication failure that is
+   not a lockout; the recovery is to fix the field and press the button again. Disabling it
+   makes an ordinary mistake look like an outage, and devalues the times it is disabled for
+   real.
+
+§3\'s table has said "INVALID_USERNAME_PASSWORD | Wrong credentials | Report plainly" since
+v1.0. The code had never done it, and nothing noticed until a real password was typed.
+
+`InvalidCredentials` now names `connect.garmin.com`: signing in there is free and settles
+"is it the password or is it us" without spending an attempt against an IP this project has
+already seen throttled. The CLI gets the same treatment -- reported plainly, no captcha
+advice bolted on.
+
+### What it cost
+
+An auth rejection is much cheaper than a 429 or a captcha: the library stops the strategy
+chain on the first one instead of burning all four. One rejected login, no lockout risk.
+
+Tests: 136 -> 152, including the mirror cases -- an expired token must still say
+`AuthExpired`, no token file must still say `NotBootstrapped`, and a 429 must still disable
+the button. Three states, three messages; the bug was two of them collapsing into one.
+
+### The release loop was being used as a debug loop
+
+Three bugs, three PR-merge-CI-pull cycles. The bugs were real and each lived in a seam no
+test could reach -- garminconnect\'s exception types, the browser\'s header derivation, and
+now one exception with two meanings. First real use was always going to find them.
+
+What was wrong was the cost of each discovery. `WORKDIR /app` puts `/app` first on
+`sys.path`, so a bind mount at `/app/garmin_mcp` shadows the installed package and code
+changes take effect on container restart with no rebuild:
+
+```powershell
+docker run --rm -p 127.0.0.1:8765:8765 -v garmin-tokens:/data `
+  -v "${PWD}\\garmin_mcp:/app/garmin_mcp" ghcr.io/...:<tag> web --host 0.0.0.0 --port 8765
+```
+
+The laptop clones the repo, pulls a branch, restarts the container. Merging goes back to
+recording a result rather than being part of finding it.

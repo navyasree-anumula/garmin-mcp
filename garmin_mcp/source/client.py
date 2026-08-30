@@ -28,6 +28,7 @@ from . import ratelimit
 from .errors import (
     AuthExpired,
     GarminSourceError,
+    InvalidCredentials,
     NotBootstrapped,
     RateLimited,
     SourceUnavailable,
@@ -83,12 +84,30 @@ class AuthStatus:
 _API_ERROR_429 = re.compile(r"\bAPI Error 429\b")
 
 
-def _translate(exc: Exception, path: str) -> GarminSourceError:
-    """Map a garminconnect exception onto our vocabulary."""
+def _translate(
+    exc: Exception, path: str, *, during_login: bool = False
+) -> GarminSourceError:
+    """Map a garminconnect exception onto our vocabulary.
+
+    `during_login` is not a convenience flag. `GarminConnectAuthenticationError`
+    is raised on both of our call paths and means opposite things on each: on a
+    token load it is "these tokens are no longer good"; on a credential login it
+    is "this password is wrong" (the library raises it for
+    `INVALID_USERNAME_PASSWORD` and stops the strategy chain immediately). The
+    exception carries nothing that distinguishes them, so the only thing that
+    can is the caller.
+
+    Without it, the web form answered a mistyped password with "Garmin rejected
+    the stored tokens at /data/garmin_tokens.json ... re-run the bootstrap" --
+    on a machine with no token file, to somebody who was running the bootstrap.
+    """
     if isinstance(exc, GarminConnectTooManyRequestsError):
         return RateLimited()
     if isinstance(exc, GarminConnectAuthenticationError):
-        return AuthExpired(path)
+        # str(exc) is the library's own text, e.g. "401 Unauthorized (Invalid
+        # Username or Password)". It was previously discarded, which threw away
+        # the one line that said what had actually gone wrong.
+        return InvalidCredentials(str(exc)) if during_login else AuthExpired(path)
     if isinstance(exc, GarminConnectConnectionError):
         # GarminConnectTooManyRequestsError is raised ONLY by the login paths.
         # On a data request, client._run_request maps every status >= 400 except
@@ -209,7 +228,7 @@ def bootstrap_login(
         with _garmin_access(path):
             api.login(tokenstore=path)
     except Exception as exc:
-        raise _translate(exc, path) from exc
+        raise _translate(exc, path, during_login=True) from exc
 
     # Tokens are the credential now. Keep them owner-only.
     with contextlib.suppress(OSError):
