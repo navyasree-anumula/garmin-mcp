@@ -358,3 +358,65 @@ paths; local DoS or privilege escalation, through 9.0.2). Dev-only and never shi
 Measured before changing it: the suite passes unchanged on 9.1.1.
 
 Tests: 39 → 49.
+
+---
+
+## 2026-08-30 (phase 3) — Capability probe
+
+Phase 2 was verified in the real containers first: `flock : SUPPORTED` on the Docker named
+volume — the load-bearing assumption behind the whole locking design — and two containers
+running four grants each produced eight grants, span 8.00s, gaps `0, 0, 0, 2.00, 2.00, 2.00,
+2.00` at the shipped 0.5 req/s. Per-container buckets would have shown a span near zero. The
+budget is shared. No Garmin calls were spent proving it.
+
+### `garmin-mcp probe`
+
+26 candidate endpoints across health, training, body, daily, activity and device. §5 requires
+the tool surface be trimmed to what this account and this watch actually return, and a spec
+sheet is not evidence about an API.
+
+**It needs no delay of its own.** The original plan called for a manual 2s sleep between
+endpoints; the phase 2 rate limiter already does exactly that, so the probe calls through
+`_garmin_access` and inherits the spacing. About a minute for a full run — which is why it is
+a CLI command and never a tool.
+
+**It never prints or stores a value.** The question is a boolean. A diagnostic is an absurd
+reason to put sleep scores and heart rates into a terminal, its scrollback and a JSON file
+(§8). Verdicts and a count of populated fields are all that leave it.
+
+**The hard part was telling "no data" from "not supported".** Garmin answers an unworn day
+with a well-formed envelope: the date echoed back and every measurement null. `bool(payload)`
+is not imprecise there, it is *inverted* — it reports data for a response containing none.
+So `count_populated` walks the payload ignoring echoed request parameters and identifiers,
+and counts meaningful leaves. Zero and `False` count as measurements; a zero-step day is a
+reading, not an absence.
+
+Anything that still looks empty is retried on further dates, and the offsets are **spread
+(1, 3, 7) rather than consecutive** — three days running can all be days the watch was not
+worn. Only the empties are retried, which matters against an account that has already been
+rate limited once today. A 404 is reported distinctly, as the only reliable signal that an
+endpoint does not exist for this account.
+
+A `RateLimited` aborts the entire probe rather than being recorded per-endpoint. Carrying on
+through a 429 across 26 endpoints is the retry storm §6 exists to forbid.
+
+### Two bugs the dry run found that the tests did not
+
+**`write_capabilities` never created its parent directory.** The unit test used `tmp_path`,
+which always exists, and `/data` always exists inside the container — so both hid it. Running
+the real command against a fresh directory surfaced it immediately. Fixed, with a test that
+writes into a directory that does not exist.
+
+**Progress reported a stale date on retries.** An empty retry does not replace the stored
+result, and the progress callback was handed the stored one — so the second pass printed the
+*first* date beside a probe of a later one. The verdict was right and the provenance was
+wrong, which is the sort of thing that gets believed. Now reports what the current pass saw.
+
+Tests: 49 → 67.
+
+### Open
+
+- The probe has **not been run against the real account yet.** The tool surface stays unfixed
+  until it has.
+- Cache still deferred to phase 5.
+- Two-writer token race still structural, not observed.

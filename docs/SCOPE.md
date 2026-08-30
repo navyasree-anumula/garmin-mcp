@@ -1,7 +1,7 @@
 # garmin-mcp — Scope
 
 **Status:** pass 1 shipped and proven live on the target laptop. Pass 2 in progress.
-**Version:** 1.3.1 · 2026-08-30
+**Version:** 1.3.2 · 2026-08-30
 **Ratification:** this document is the artifact to approve before any code is written.
 **v1.3** stress-tested across all 10 dimensions of `sop/stress-test-10-dimensions.md`;
 audit trail in the final section.
@@ -189,6 +189,23 @@ this account.
 candidate metric endpoint for a recent date and record which return data. The surface is
 trimmed to that result. Tools for metrics this device never produces are dead weight and
 get cut.
+
+**Built in v1.3.2** as `garmin-mcp probe` over `source/probe.py` — 26 candidate endpoints.
+A CLI command, never a tool: at the shipped budget it takes about a minute, far past any MCP
+client's patience, and it is run once rather than per conversation.
+
+Three properties it needs, none of them obvious:
+
+- **It never records or prints a value.** The question is "does this endpoint answer for
+  me", which is a boolean. Emitting readings into a terminal, its scrollback and a JSON file
+  for the sake of a diagnostic is precisely what §8 forbids. Verdicts and a count of
+  populated fields are all that leave it.
+- **"No data" is not "not supported".** Garmin answers a day the watch was not worn with a
+  well-formed envelope — the date echoed back, every measurement null — so `bool(payload)`
+  is not merely imprecise, it is inverted. Anything that looks empty is retried on further,
+  **non-consecutive** dates before the verdict sticks; three days running can all be days the
+  watch sat on a dresser. Only the empties are retried, which keeps the request count down.
+- **A 404 is the only reliable "unsupported" signal**, and it is reported distinctly.
 
 **Availability and exposure are two different things (v1.3).** The probe determines what the
 account and watch *can* return, and writes `capabilities.json`. The web UI then lets Mahi
@@ -441,8 +458,9 @@ All four items below were carried from v1.2. Three are now closed by measurement
 - ~~**`mcp` SDK decorator API shape.**~~ **CLOSED.** `FastMCP` was *removed* in mcp 2.x; the
   entry class is `MCPServer` from `mcp.server`. The negotiated protocol revision is
   **`2025-11-25`**, not the `2026-07-28` this document previously claimed.
-- **Device capability probe** (§5) — **still open.** Must run before the tool surface is
-  fixed. Built in pass 2 phase 3.
+- **Device capability probe** (§5) — **built, not yet run.** `garmin-mcp probe` ships in
+  v1.3.2. The surface stays unfixed until it has run once against the real account and the
+  FR570.
 - ~~**Laptop toolchain**~~ **CLOSED.** Verified on the laptop 2026-08-30 — see §7.
 - **Rate limit number** (§6) — **partially closed.** First real observation: Garmin 429s this
   IP on the mobile *credential login* paths, on a first attempt, while the *token load and
