@@ -643,3 +643,54 @@ things that had to keep working across the extra layer: a login 429 still arrive
 status page report "tokens present" for something that cannot authenticate.
 
 Tests: 126 -> 133.
+
+---
+
+## 2026-08-30 (phase 4a, follow-up 2) — A security header that disabled a security check
+
+First real use of the login form, on the laptop, against `sha-a04b05b`. Pressing Sign in
+returned:
+
+```
+Refused: this request did not come from this page.
+```
+
+The form refused its own submission. No Garmin call was made -- the middleware rejects
+before routing -- so the one-shot login attempt was not spent, which is the only reason
+this was a nuisance rather than a real cost.
+
+### The conflict
+
+`_SECURITY_HEADERS` set `Referrer-Policy: no-referrer`. Per Fetch, appending the `Origin`
+header to a non-CORS request whose method is not GET or HEAD switches on the referrer
+policy, and for `no-referrer` it sets the serialized origin to **`null`**. No `Referer` is
+sent either, by definition. So the browser posted `Origin: null` and nothing else, the
+same-origin check had nothing it could match, and the request was refused.
+
+Two defences that are individually correct and jointly unsatisfiable. The header was
+chosen for one reason and the check for another, and nothing in between them knew both.
+
+### Why no test caught it
+
+Every test in `test_web_security.py` sets `Origin` by hand, because that is the only way to
+exercise a rejection. `TestClient` does not derive the header from a referrer policy the
+way a browser does, so the two settings never met in a test -- and there is no test at that
+level that could have made them meet. A real browser found it on first use.
+
+The tempting fix was to accept `Origin: null`. That would have removed the check rather
+than repaired it: `null` is also what a sandboxed iframe and a cross-origin redirect send.
+It is now refused explicitly.
+
+`Referrer-Policy: same-origin` sends a real Origin and a full Referer for our own requests
+and neither for anybody else's -- the exact distinction the check is trying to draw, and
+the loosest policy that works. Nothing leaks: CSP is `default-src 'none'`, so there are no
+third-party requests to leak to.
+
+### Verified against a running server, not only in tests
+
+Browser-shaped headers under `same-origin` reach the success page (200). `Origin: null` is
+refused with the identical message the laptop saw, so the failure was reproduced before it
+was fixed. A cross-origin POST is still refused. The fix does not widen what is accepted;
+it makes the accepted set reachable.
+
+Tests: 133 -> 136.
