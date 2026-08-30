@@ -6,7 +6,10 @@ whoever reads it — an agent or a human — because the alternative is a stack 
 in a chat window.
 """
 
-BOOTSTRAP_COMMAND = "docker run -it --rm -v garmin-tokens:/data garmin-mcp:0.1.0 login"
+BOOTSTRAP_COMMAND = (
+    "docker run -it --rm -v garmin-tokens:/data "
+    "ghcr.io/navyasree-anumula/garmin-mcp:latest login"
+)
 
 
 class GarminSourceError(Exception):

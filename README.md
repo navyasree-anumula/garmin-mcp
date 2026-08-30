@@ -10,17 +10,28 @@ Read [`docs/SCOPE.md`](docs/SCOPE.md) before adding to it.
 
 ## Use it
 
-Build the image (on the machine that will run it):
+Pull the image. It is built for `linux/amd64` and `linux/arm64`, so it runs natively on
+both Intel and Apple Silicon:
 
 ```bash
-docker build -t garmin-mcp:0.1.0 .
+docker pull ghcr.io/navyasree-anumula/garmin-mcp:latest
+```
+
+If the GHCR package is private you will need to authenticate once first
+(`docker login ghcr.io` with a personal access token carrying `read:packages`). If it is
+public, the pull needs no authentication at all.
+
+To build it yourself instead:
+
+```bash
+docker build -t ghcr.io/navyasree-anumula/garmin-mcp:latest .
 ```
 
 Bootstrap once. This is the only place a password is ever entered — `-it` because
 `getpass` needs a TTY:
 
 ```bash
-docker run -it --rm -v garmin-tokens:/data garmin-mcp:0.1.0 login
+docker run -it --rm -v garmin-tokens:/data ghcr.io/navyasree-anumula/garmin-mcp:latest login
 ```
 
 Then back up the token volume immediately. If a captcha ever blocks a fresh login, this
@@ -38,7 +49,8 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
   "mcpServers": {
     "garmin": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "garmin-tokens:/data", "garmin-mcp:0.1.0", "serve"]
+      "args": ["run", "-i", "--rm", "-v", "garmin-tokens:/data",
+                "ghcr.io/navyasree-anumula/garmin-mcp:latest", "serve"]
     }
   }
 }
@@ -76,3 +88,12 @@ unauthenticated endpoint serving your health data. That work gets its own plan.
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest tests/ -q
 ```
+
+## CI
+
+`.github/workflows/docker.yml` runs the tests, then builds and publishes the multi-arch
+image to GHCR. Pull requests build the image but cannot publish it — the registry login
+step is skipped for them, so a PR proves the build without being able to ship one.
+
+Tags: `latest` on `main`, a short-SHA tag on every push, and a semver tag when a `v*` tag
+is pushed.
