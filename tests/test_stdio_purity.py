@@ -7,6 +7,7 @@ has to stay clean too, so this asserts it rather than trusting it.
 """
 
 import json
+import os
 import subprocess
 import sys
 
@@ -46,15 +47,20 @@ def _run(code_prefix: str = "") -> subprocess.CompletedProcess:
         "import sys;from garmin_mcp.cli import main;sys.argv=['garmin-mcp','serve'];"
         "sys.exit(main())"
     )
+    # Inherit the real environment so the child resolves its interpreter and
+    # site-packages the same way pytest did -- replacing it wholesale breaks on
+    # runners whose Python lives outside /usr. GARMINTOKENS is overridden rather
+    # than cleared so a developer's real token file can never leak into a test.
+    env = dict(os.environ)
+    env["GARMINTOKENS"] = "/nonexistent/tokens.json"
+
     return subprocess.run(
         [sys.executable, "-c", program],
         input=INITIALIZE + "\n",
         capture_output=True,
         text=True,
         timeout=60,
-        # Deliberately absent: the server must start and complete the handshake
-        # without any tokens. It only needs them when a tool is actually called.
-        env={"PATH": "/usr/bin:/bin", "GARMINTOKENS": "/nonexistent/tokens.json"},
+        env=env,
     )
 
 
