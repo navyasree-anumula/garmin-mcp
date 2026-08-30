@@ -40,6 +40,59 @@ class AuthExpired(GarminSourceError):
         )
 
 
+class InvalidCredentials(GarminSourceError):
+    """Garmin rejected the email and password themselves.
+
+    Distinct from `AuthExpired`, and the distinction is not pedantry: the two
+    arrive as the SAME library exception, and the only thing separating them is
+    which of our own calls was in flight. Telling somebody their stored tokens
+    expired when they have just typed a password is advice that cannot be acted
+    on -- it names a file they do not have and tells them to run the bootstrap
+    they are already running.
+
+    It is also the one authentication failure that is NOT a lockout. Getting
+    that wrong in the other direction is just as bad: telling somebody to wait
+    several minutes after a typo teaches them the tool is flaky.
+    """
+
+    def __init__(self, detail: str = "") -> None:
+        message = (
+            "Garmin rejected this email and password. Check them at "
+            "connect.garmin.com — they are the same credentials.\n"
+            "This is not a lockout and the tokens on this machine are "
+            "untouched, so it is safe to correct the typo and try again. Do "
+            "not hammer it: repeated failures can still attract bot protection."
+        )
+        if detail:
+            message += f"\n({detail})"
+        super().__init__(message)
+
+
+class LoginRejected(GarminSourceError):
+    """Garmin refused the login, and did not say it was the password.
+
+    `GarminConnectAuthenticationError` is raised from roughly fifteen places in
+    the library and only two of them concern credentials. The rest are things
+    like "Invalid profile data found", "Not authenticated", and a bot challenge
+    answered with a 401. Reporting any of those as "check your password" is the
+    same mistake as reporting them as an expired token: a confident, specific,
+    wrong instruction that sends the operator somewhere with nothing to find.
+
+    So when Garmin has not actually said the credentials were bad, this reports
+    what it did say, verbatim, and asks rather than asserts.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            "Garmin refused the login, but did not say the credentials were "
+            "wrong. This is what it said:\n"
+            f"    {detail}\n"
+            "If the same email and password work at connect.garmin.com, this is "
+            "not a typo — it is more likely a bot challenge or a temporary block "
+            "on this IP. Wait rather than retrying immediately."
+        )
+
+
 class RateLimited(GarminSourceError):
     """Garmin returned 429.
 

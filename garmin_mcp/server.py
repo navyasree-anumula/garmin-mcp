@@ -20,8 +20,6 @@ from .source.errors import GarminSourceError
 
 logger = logging.getLogger(__name__)
 
-mcp = MCPServer("garmin")
-
 
 def _server_version() -> str:
     """Which build is actually answering.
@@ -33,6 +31,15 @@ def _server_version() -> str:
     """
     build = os.environ.get("GARMIN_MCP_BUILD", "").strip()
     return f"{__version__}+{build}" if build else __version__
+
+
+# Passed to the SDK so the build also appears in `serverInfo` on the initialize
+# handshake, not only inside a tool result. That is the first thing a client
+# shows and the only thing visible without calling anything -- it was empty, so
+# a client could display the server as connected while saying nothing about
+# which build had connected. Exactly the gap `_server_version` exists to close,
+# left open at the one place it is cheapest to read.
+mcp = MCPServer("garmin", version=_server_version())
 
 
 class AuthStatus(BaseModel):

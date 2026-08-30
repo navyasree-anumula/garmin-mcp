@@ -333,10 +333,33 @@ def create_app(
         if not email or not password:
             return _rerender("Email and password are both required.")
 
-        from ..source.errors import GarminSourceError, RateLimited
+        from ..source.errors import (
+            GarminSourceError,
+            InvalidCredentials,
+            LoginRejected,
+            RateLimited,
+        )
 
         try:
             who = bootstrap(email, password)
+        except InvalidCredentials as exc:
+            # Deliberately NOT disabled. A wrong password is the one
+            # authentication failure that is not a lockout, and the recovery is
+            # to fix it and press the button again. Disabling here would make an
+            # ordinary typo look like an outage and teach the operator to
+            # distrust the times it IS disabled -- which is the whole value of
+            # disabling it at all.
+            return _rerender(str(exc).splitlines()[0], advice=pages.BAD_PASSWORD_ADVICE)
+        except LoginRejected as exc:
+            # Garmin refused but did not blame the credentials. Not a confirmed
+            # lockout, so the button stays live -- but the page reports what
+            # Garmin actually said instead of inventing a cause, because the
+            # last two versions of this branch each invented a different wrong
+            # one.
+            return _rerender(
+                " ".join(str(exc).split("\n")[:2]).strip(),
+                advice=pages.UNEXPLAINED_REFUSAL_ADVICE,
+            )
         except MfaRequired:
             return _rerender(
                 "Garmin asked for an MFA code.", disable=True, advice=pages.MFA_ADVICE

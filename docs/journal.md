@@ -694,3 +694,162 @@ was fixed. A cross-origin POST is still refused. The fix does not widen what is 
 it makes the accepted set reachable.
 
 Tests: 133 -> 136.
+
+---
+
+## 2026-08-30 (phase 4a, follow-up 3) — Every noun in the error was wrong
+
+Second attempt at the form, on `sha-21829cc`. The same-origin fix held: the POST reached
+the handler and a real login was attempted. Garmin rejected it, and the page said:
+
+```
+Garmin rejected the stored tokens at /data/garmin_tokens.json. They have expired
+or been revoked. Re-run the bootstrap to get new ones: docker run ... login
+```
+
+On a machine with no token file, to somebody who was running the bootstrap, with lockout
+advice attached and the submit button disabled. Every noun was wrong and the prescribed
+action was the one already in progress.
+
+### One exception, two meanings
+
+`GarminConnectAuthenticationError` is raised on both of our call paths.
+
+On a **token load** it means the stored tokens are no longer good -- `AuthExpired`, and
+naming the file and the backup is exactly right. On a **credential login** the library
+raises the same type for `INVALID_USERNAME_PASSWORD` ("401 Unauthorized (Invalid Username
+or Password)") and stops the strategy chain immediately rather than trying the rest.
+
+Nothing on the exception distinguishes them. The only thing that can is which of our own
+calls was in flight, so `_translate` now takes `during_login`. Opt-in, because `_connect`
+is the common path and a default of True would mislabel every genuine expiry -- the mirror
+mistake, and just as bad: it would tell somebody to check a password when the fix is to
+re-authenticate.
+
+Three defects, one line of code:
+
+1. **Wrong type.** A typo reported as an expiry.
+2. **The library\'s own message was discarded.** `AuthExpired(path)` never carried
+   `str(exc)`, so "401 Unauthorized (Invalid Username or Password)" -- the one line that
+   said what actually happened -- was thrown away at the boundary. That is why the cause
+   could not be stated with certainty after the fact.
+3. **Wrong advice.** The web layer attached rate-limit advice and disabled submit for
+   *every* `GarminSourceError`. A wrong password is the one authentication failure that is
+   not a lockout; the recovery is to fix the field and press the button again. Disabling it
+   makes an ordinary mistake look like an outage, and devalues the times it is disabled for
+   real.
+
+§3\'s table has said "INVALID_USERNAME_PASSWORD | Wrong credentials | Report plainly" since
+v1.0. The code had never done it, and nothing noticed until a real password was typed.
+
+`InvalidCredentials` now names `connect.garmin.com`: signing in there is free and settles
+"is it the password or is it us" without spending an attempt against an IP this project has
+already seen throttled. The CLI gets the same treatment -- reported plainly, no captcha
+advice bolted on.
+
+### What it cost
+
+An auth rejection is much cheaper than a 429 or a captcha: the library stops the strategy
+chain on the first one instead of burning all four. One rejected login, no lockout risk.
+
+Tests: 136 -> 152, including the mirror cases -- an expired token must still say
+`AuthExpired`, no token file must still say `NotBootstrapped`, and a 429 must still disable
+the button. Three states, three messages; the bug was two of them collapsing into one.
+
+### The release loop was being used as a debug loop
+
+Three bugs, three PR-merge-CI-pull cycles. The bugs were real and each lived in a seam no
+test could reach -- garminconnect\'s exception types, the browser\'s header derivation, and
+now one exception with two meanings. First real use was always going to find them.
+
+What was wrong was the cost of each discovery. `WORKDIR /app` puts `/app` first on
+`sys.path`, so a bind mount at `/app/garmin_mcp` shadows the installed package and code
+changes take effect on container restart with no rebuild:
+
+```powershell
+docker run --rm -p 127.0.0.1:8765:8765 -v garmin-tokens:/data `
+  -v "${PWD}\\garmin_mcp:/app/garmin_mcp" ghcr.io/...:<tag> web --host 0.0.0.0 --port 8765
+```
+
+The laptop clones the repo, pulls a branch, restarts the container. Merging goes back to
+recording a result rather than being part of finding it.
+
+---
+
+## 2026-08-30 (phase 4a) — Signed in through the web UI. Whole chain proven.
+
+The first credential login on this laptop went through the **web form**, not the CLI. The
+CLI-first sequencing recommended earlier was declined; recorded as a decision, and it came
+out fine.
+
+### What the run settled
+
+`garmin_auth_status`, called over stdio against the pinned image, returned
+`authenticated: true` with a fresh token timestamp and a `server_version` matching the tag
+that had been pulled. Tokens on the volume, container, stdio, MCP handshake, live
+authenticated Garmin call -- the whole chain, on the intended host.
+
+Two facts not previously recorded:
+
+- **`full_name` is populated.** Only `display_name` is the GUID. The account does have a
+  human name available, which matters for the eventual read surface.
+- **The account is metric**, re-confirmed on a second machine. §5\'s units contract now
+  rests on a fact observed twice rather than once.
+
+Values are deliberately not recorded here; this repository is public.
+
+### The first login attempt failed, and the container log said why
+
+The earlier refusal was not a typo. Output from the successful run carried:
+
+```
+mobile+cffi returned 429: IP rate limited by Garmin
+mobile+requests returned 429: IP rate limited by Garmin
+```
+
+Both mobile credential strategies were throttled from this IP; a later strategy got
+through. The same pattern the other laptop showed, now confirmed on a second network --
+§10\'s partial finding holds: **the 429 risk sits on the bootstrap login paths, not on
+serving.**
+
+It also vindicates narrowing the credential verdict an hour earlier. Had
+`GarminConnectAuthenticationError` been mapped wholesale onto "check your password", this
+failure -- which had nothing to do with the password -- would have been reported as a typo,
+and the operator would have gone off to reset a credential that was already correct.
+
+### `serverInfo.version` was empty
+
+Visible in the raw handshake. `MCPServer("garmin")` was constructed without a version, so
+the field a client displays before calling anything was blank: a server could show as
+connected while saying nothing about *which* build had connected. That is precisely the gap
+`_server_version` exists to close, left open at the one place it is cheapest to read. Now
+passed to the SDK, with a test.
+
+### Claude Desktop cannot use it on this machine
+
+Config verified valid, in the file the app actually reads (the MSIX-redirected path, found
+programmatically rather than guessed), with the absolute `docker.exe` path -- which turned
+out to be a **per-user install under `AppData\\Local\\Programs`**, not `Program Files`. The
+documented advice to use an absolute path was right; the commonly assumed value would have
+been wrong, and would have failed silently.
+
+The app never attempted to launch the server: the MCP log directory stayed empty, and
+Settings offers no Developer toggle, no Connectors section and no Extensions section. So
+this build does not expose local MCP servers at all. Nothing on our side is wrong and
+nothing on our side can fix it. **Open, and not a blocker** -- the server is verified
+working over stdio by hand.
+
+### A verification detour worth writing down
+
+Piping the three JSON-RPC messages into `docker run -i` from PowerShell does **not** work,
+and fails in a way that looks exactly like a hang in our code. PowerShell buffers output
+into a native command\'s stdin, so the messages arrive together with EOF immediately behind
+them; the server answers `initialize` instantly, starts the tool call, and is shut down by
+EOF before the live Garmin round trip can finish. Lengthening a `Start-Sleep` inside the
+pipeline does not help -- the sleep is inside the buffered block, so the timing is
+unchanged.
+
+Running `docker run -i` interactively and pasting each line keeps stdin open as long as the
+window is, and works first time. Worth knowing before somebody concludes the tool hangs.
+
+Tests: 164 -> 165.

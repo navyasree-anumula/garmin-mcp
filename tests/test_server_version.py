@@ -34,3 +34,27 @@ def test_blank_build_ref_does_not_produce_a_dangling_suffix(monkeypatch):
 
 def test_auth_status_exposes_the_version_field():
     assert "server_version" in AuthStatus.model_fields
+
+
+def test_the_build_is_also_in_the_handshake(monkeypatch):
+    """`serverInfo.version` is the only build information a client can see
+    without calling anything, and it is what the client displays. It was empty:
+    a server could show as connected while saying nothing about WHICH build had
+    connected -- the exact gap `_server_version` exists to close, left open at
+    the cheapest place to read it.
+
+    Observed empty in a real handshake against the published image before this
+    was fixed.
+    """
+    import importlib
+
+    monkeypatch.setenv("GARMIN_MCP_BUILD", "abc1234")
+    import garmin_mcp.server as server
+
+    reloaded = importlib.reload(server)
+    try:
+        assert reloaded.mcp.version == reloaded._server_version()
+        assert "abc1234" in reloaded.mcp.version
+    finally:
+        monkeypatch.delenv("GARMIN_MCP_BUILD", raising=False)
+        importlib.reload(server)
