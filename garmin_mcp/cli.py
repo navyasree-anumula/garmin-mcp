@@ -144,6 +144,78 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     return 0
 
 
+_VERDICT_LABEL = {
+    "has_data": "HAS DATA",
+    "empty": "empty",
+    "not_found": "NOT SUPPORTED",
+    "error": "ERROR",
+}
+
+
+def _cmd_probe(args: argparse.Namespace) -> int:
+    """Ask the account what it can actually answer (docs/SCOPE.md §5).
+
+    A CLI command, never an MCP tool. It makes one request per candidate
+    endpoint -- roughly 26 of them -- and the shipped budget is one request every
+    two seconds, so a full run takes about a minute. That is far past any MCP
+    client's patience, and it is a thing you run once, not per conversation.
+    """
+    from .source import probe
+    from .source.client import tokenstore_path
+    from .source.errors import GarminSourceError
+    from .server import _server_version
+
+    tokens = tokenstore_path()
+    offsets = tuple(int(n) for n in args.days.split(",") if n.strip())
+
+    print("garmin-mcp capability probe\n", file=sys.stderr)
+    print(
+        "Reports only whether each endpoint returned anything, never what it\n"
+        "returned. No health data is printed or written (docs/SCOPE.md §8).\n",
+        file=sys.stderr,
+    )
+
+    def progress(result) -> None:
+        label = _VERDICT_LABEL.get(result.verdict, result.verdict)
+        detail = f" ({result.detail})" if result.detail else ""
+        fields = f"{result.populated:>5} fields" if result.populated else " " * 12
+        # The date is shown because empties get retried on later dates, and two
+        # lines for one metric otherwise looks like a bug rather than a retry.
+        print(
+            f"  {result.group:<9} {result.key:<20} {label:<14}{fields}"
+            f"  {result.day}{detail}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    try:
+        results = probe.run(tokens, day_offsets=offsets, on_progress=progress)
+    except GarminSourceError as exc:
+        print(f"\nProbe stopped: {exc}", file=sys.stderr)
+        return 1
+
+    from datetime import UTC, datetime, timedelta
+
+    today = datetime.now(UTC).date()
+    days = [str(today - timedelta(days=n)) for n in offsets]
+    path = probe.write_capabilities(tokens, results, days, _server_version())
+
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r.verdict] = counts.get(r.verdict, 0) + 1
+    summary = ", ".join(f"{_VERDICT_LABEL.get(k, k)}: {v}" for k, v in sorted(counts.items()))
+
+    print(f"\n  {summary}", file=sys.stderr)
+    print(f"  written: {path}", file=sys.stderr)
+    print(
+        "\n  'empty' after every probed date usually means the watch was not worn,\n"
+        "  not that the metric is unsupported. 'NOT SUPPORTED' is a 404 and is\n"
+        "  the only reliable signal that an endpoint does not exist for you.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_logging()
 
@@ -169,6 +241,18 @@ def main(argv: list[str] | None = None) -> int:
     p_selftest.add_argument("--label", default="A", help="Tag for the GRANT lines.")
     p_selftest.add_argument("--count", type=int, default=4)
     p_selftest.set_defaults(func=_cmd_selftest)
+
+    p_probe = sub.add_parser(
+        "probe",
+        help="Discover which Garmin metrics this account and watch return.",
+    )
+    p_probe.add_argument(
+        "--days",
+        default="1,3,7",
+        help="Comma-separated day offsets to try. Spread, not consecutive: three "
+        "days running can all be days the watch was not worn.",
+    )
+    p_probe.set_defaults(func=_cmd_probe)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
