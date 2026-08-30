@@ -1,7 +1,7 @@
 # garmin-mcp — Scope
 
 **Status:** pass 1 shipped and proven live on the target laptop. Pass 2 in progress.
-**Version:** 1.3 · 2026-08-30
+**Version:** 1.3.1 · 2026-08-30
 **Ratification:** this document is the artifact to approve before any code is written.
 **v1.3** stress-tested across all 10 dimensions of `sop/stress-test-10-dimensions.md`;
 audit trail in the final section.
@@ -243,9 +243,34 @@ volume, which is the only lever we have on the risk in §9.
 Decided here rather than discovered later, because TTL logic that leaks into individual
 tools never comes back out.
 
-**Status (v1.3): neither exists.** Pass 1 shipped one tool making one call and needed
-neither. Pass 2 adds the first multi-call surface, so both are built **before** the tools,
-not after — which is the whole point of having decided placement up front.
+**Status (v1.3.1): the rate limiter is built; the cache is deferred to phase 5.**
+
+The limiter is `source/ratelimit.py`, and it keeps its state **in a file on the shared token
+volume, not in memory**. That is not over-engineering. Two containers run per client session
+(§7), so an in-process bucket would be enforced twice and the real rate against Garmin would
+be double the configured one — a limiter permitting twice what it claims is worse than none,
+because it invites trust it has not earned. Default: one request every two seconds, burst of
+four, overridable by `GARMIN_RATE_PER_SEC` / `GARMIN_RATE_BURST`.
+
+**The cache is deferred, deliberately.** Its only possible consumer today is
+`garmin_auth_status`, which must *never* be cached — the tool's entire job is proving the
+tokens work *right now*, and a cached answer makes it vacuous. Building it now would mean
+inventing TTLs before a single data endpoint has been seen. It ships in phase 5 alongside its
+first real consumer, with TTLs derived from what the endpoints actually return. §6's
+placement rule is unaffected and still binding: the cache lives in `source/`, and no tool
+implements its own.
+
+**Concurrency: `source/lock.py`.** garminconnect rewrites the token file whenever it refreshes
+(`_run_request` refreshes inline at the start of any request), guarded only by a
+`threading.Lock` — which means nothing between two containers. A cross-process `flock`
+serialises our call sites, which are the only seam available: the refresh happens inside the
+library and we have no hook into it.
+
+Two details that are easy to get wrong and were: **the lock must not be taken on the token
+file**, because `dump()` writes a temp file and `replace()`s it, so the inode changes on every
+refresh and a lock on that path would end up held on an unlinked inode — healthy-looking and
+excluding nobody. And it must be **re-entrant within a process**, because `flock` binds to the
+open file description, so a second acquire in the same process blocks against the first.
 
 **A rate limit does not always announce itself.** `GarminConnectTooManyRequestsError` is
 raised only by the *login* strategies. On a data request `client._run_request` maps every
@@ -421,8 +446,10 @@ All four items below were carried from v1.2. Three are now closed by measurement
 - ~~**Laptop toolchain**~~ **CLOSED.** Verified on the laptop 2026-08-30 — see §7.
 - **Rate limit number** (§6) — **partially closed.** First real observation: Garmin 429s this
   IP on the mobile *credential login* paths, on a first attempt, while the *token load and
-  refresh* path is clean. So the risk sits on bootstrap, not on serving. The steady-state
-  read number is still a guess.
+  refresh* path is clean. So the risk sits on bootstrap, not on serving. The shipped default
+  is one request per two seconds with a burst of four; that number is **still a guess**, now
+  with a value attached and an env override. Raise it against observed behaviour, never to
+  make something feel faster.
 
 Also settled by the same live run:
 

@@ -11,7 +11,8 @@ import logging
 import os
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
+from . import ratelimit
 from .errors import (
     AuthExpired,
     GarminSourceError,
@@ -30,6 +32,7 @@ from .errors import (
     RateLimited,
     SourceUnavailable,
 )
+from .lock import garmin_lock
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,24 @@ _client_lock = threading.Lock()
 def tokenstore_path() -> str:
     """Where the token file lives. Set by GARMINTOKENS in the image."""
     return os.environ.get("GARMINTOKENS") or DEFAULT_TOKENSTORE
+
+
+@contextmanager
+def _garmin_access(path: str) -> Iterator[None]:
+    """The single doorway to Garmin. Every round trip goes through here.
+
+    Order is fixed and matters: the cross-process lock first, then the request
+    budget. Taking the budget first would let a process burn a token and then
+    queue on the lock, so tokens would be spent by waiting rather than by
+    requesting.
+
+    The wait for a budget therefore happens while holding the lock. That is
+    deliberate -- the alternative is both containers waking together and racing,
+    and the point of the limiter is a global rate, not a per-process one.
+    """
+    with garmin_lock(path):
+        ratelimit.acquire(path)
+        yield
 
 
 @dataclass(frozen=True)
@@ -127,7 +148,8 @@ def _connect() -> Garmin:
         # token-only (docs/SCOPE.md §4).
         api = Garmin()
         try:
-            api.login(tokenstore=path)
+            with _garmin_access(path):
+                api.login(tokenstore=path)
         except FileNotFoundError as exc:
             raise NotBootstrapped(path) from exc
         except Exception as exc:
@@ -181,7 +203,11 @@ def bootstrap_login(
 
     api = Garmin(email=email, password=password, prompt_mfa=prompt_mfa)
     try:
-        api.login(tokenstore=path)
+        # Bootstrap takes the lock too. It runs in its own container invocation
+        # and can coincide with a serving container refreshing tokens; without
+        # this, a bootstrap write and a refresh write race for the same file.
+        with _garmin_access(path):
+            api.login(tokenstore=path)
     except Exception as exc:
         raise _translate(exc, path) from exc
 

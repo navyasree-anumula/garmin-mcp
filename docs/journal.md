@@ -220,3 +220,81 @@ so `"command": "docker"` is unsafe; use the absolute path to `docker.exe`. Both 
 - Pass 2 phases 2–5 (rate limiter, cache, capability probe, web UI, first read tools) are
   planned and unstarted.
 - The `vcrpy` cassette coverage §8 claims still does not exist.
+
+---
+
+## 2026-08-30 (phase 2) — Rate limiter and cross-process lock. Cache deferred.
+
+Phase 1 was verified end to end on the laptop first: the old image reports `pytest in image:
+True`, the new one `False`; `server_version` reads `0.2.0+12e6960…`; a live authenticated call
+against the new image returns the account name. Both halves of the pytest check were run,
+because a single `False` would have been equally consistent with a broken probe.
+
+### What phase 2 built
+
+**`source/ratelimit.py` — a token bucket whose state lives in a file, not in memory.**
+This is the direct consequence of the two-container finding. An in-process bucket is enforced
+once per process, and there are two processes sharing one token volume, so the real rate
+against Garmin would be exactly double the configured one. A limiter that permits twice what
+it claims is worse than no limiter, because it invites trust it has not earned. State sits on
+the shared volume so both containers draw from one allowance.
+
+Default is one request every two seconds with a burst of four, overridable by
+`GARMIN_RATE_PER_SEC` / `GARMIN_RATE_BURST`. The number still has **no empirical basis** and
+the module says so in its own docstring.
+
+**`source/lock.py` — a cross-process `flock`.** garminconnect refreshes tokens inline at the
+top of every data request and dumps the result to disk, guarded by a `threading.Lock` that
+means nothing between containers.
+
+Two details that were easy to get wrong, and would have produced a lock that looked fine:
+
+- **The lock must not be on the token file.** `dump()` writes a temp file and `replace()`s it,
+  so the token file gets a new inode on every refresh. `flock` binds to the open file
+  description, not the path — a lock held there would, after the first refresh, be held on an
+  unlinked inode and exclude nobody. Separate `.garmin.lock`, never replaced.
+- **It must be re-entrant within a process.** `flock` is per open file description, so a
+  second acquire in the same process blocks against the first. Depth-counted instead.
+
+Both are reached through one doorway, `_garmin_access()` in `client.py`: lock first, then
+budget. The other order would let a process spend a token and *then* queue on the lock, so
+tokens would be spent by waiting rather than by requesting.
+
+### The cache was deferred, deliberately
+
+§6 called for a short-TTL cache in this phase. Its only possible consumer today is
+`garmin_auth_status`, and that tool must never be cached — its entire job is proving the
+tokens work *right now*, so a cached answer makes it vacuous. Building it now meant inventing
+TTLs before a single data endpoint had been seen. It moves to phase 5, alongside its first
+real consumer. §6's placement rule is untouched and still binding: the cache lives in
+`source/`, and no tool implements its own.
+
+### Testing the claim, not the code
+
+Both modules assert cross-process behaviour, so both are tested with real subprocesses. An
+in-process test here would prove nothing — `threading.Lock` would pass it, and
+`threading.Lock` is precisely the thing garminconnect already has and which does not help.
+
+The rate-limit test merges the grant timestamps from two child processes and measures the
+spacing of the merged sequence, which is the global rate directly, independent of how the two
+happened to interleave.
+
+That test was then **shown to fail**: re-run with a separate state directory per process —
+simulating the in-memory bucket — six requests completed in 0.21s against a required 0.35s,
+and both assertions failed. A passing test is not evidence until it has been seen to
+discriminate.
+
+Also added: an autouse fixture pinning a very high rate for every test that is not about the
+rate. The shipped default is one request per two seconds, and a suite that is slow for a
+reason nobody remembers is a suite somebody weakens later.
+
+Tests: 26 → 39.
+
+### Open items
+
+- Cache: phase 5.
+- Capability probe: phase 3, unstarted. Still the precondition for fixing the tool surface.
+- The two-writer risk remains **structural, not observed** — tokens have not needed a refresh
+  yet, so the concurrent path has never actually run. The lock is insurance bought before the
+  fire.
+- `pytest>=8,<9` still blocks the 9.0.3 that clears the dev-side CVE.
