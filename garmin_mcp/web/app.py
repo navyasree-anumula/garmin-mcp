@@ -52,7 +52,19 @@ _SECURITY_HEADERS = {
     # The pages carry a CSRF token; a cached copy is a stale token at best.
     "Cache-Control": "no-store, no-cache, must-revalidate, private",
     "Pragma": "no-cache",
-    "Referrer-Policy": "no-referrer",
+    # `same-origin`, NOT `no-referrer`, and this is load-bearing rather than a
+    # preference. Per Fetch, a page whose referrer policy is `no-referrer`
+    # sends `Origin: null` on a form POST and no `Referer` at all -- so
+    # `no-referrer` makes the same-origin check below unsatisfiable and the
+    # login form refuses its own submission. Observed in a real browser; no
+    # TestClient test could have found it, because TestClient does not compute
+    # `Origin` the way a browser does.
+    #
+    # `same-origin` sends the real Origin and a full Referer for our own
+    # requests, and neither for anyone else's -- which is exactly the
+    # distinction the check is trying to make. Nothing leaks: CSP is
+    # `default-src 'none'`, so there are no third-party requests to leak to.
+    "Referrer-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": (
@@ -149,6 +161,13 @@ class LoopbackGuard(BaseHTTPMiddleware):
         """
         origin = request.headers.get("origin")
         if origin is not None:
+            # `null` is a real value a browser sends -- from a sandboxed iframe,
+            # a cross-origin redirect, or a `no-referrer` page. It is never us,
+            # and the allowlist contains no entry it could match. Checked
+            # explicitly so that stays true if the allowlist is ever built from
+            # something less careful.
+            if origin.lower() == "null":
+                return False
             return origin.lower() in self._origins
         referer = request.headers.get("referer")
         if referer is not None:

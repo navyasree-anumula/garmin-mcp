@@ -232,12 +232,57 @@ class TestResponseHygiene:
 
         assert "no-store" in response.headers["cache-control"]
 
-    def test_framing_and_referrer_are_locked_down(self, client):
+    def test_framing_and_csp_are_locked_down(self, client):
         response = client.get("/", headers={"Host": GOOD_HOST})
 
         assert response.headers["x-frame-options"] == "DENY"
-        assert response.headers["referrer-policy"] == "no-referrer"
         assert "form-action 'self'" in response.headers["content-security-policy"]
+        assert "default-src 'none'" in response.headers["content-security-policy"]
+
+
+class TestTheReferrerPolicyDoesNotBreakTheOriginCheck:
+    """A security header that disables a security check.
+
+    Per Fetch, `Origin` on a non-CORS POST is set to `null` when the page's
+    referrer policy is `no-referrer` -- and no `Referer` is sent either. So
+    shipping `Referrer-Policy: no-referrer` made the same-origin check below
+    unsatisfiable: the login form refused its own submission with "this request
+    did not come from this page".
+
+    It shipped because every test here sets `Origin` by hand. `TestClient` does
+    not derive it from a referrer policy the way a browser does, so no test at
+    this level could have caught it, and none of them noticed the two headers
+    were in conflict. A real browser found it on first use.
+    """
+
+    FORBIDDEN = {"no-referrer"}
+
+    def test_the_policy_we_send_still_permits_a_real_origin(self, client):
+        response = client.get("/login", headers={"Host": GOOD_HOST})
+
+        assert response.headers["referrer-policy"] not in self.FORBIDDEN
+
+    def test_an_origin_of_null_is_refused(self, client, calls):
+        """What a `no-referrer` page, a sandboxed iframe, or a cross-origin
+        redirect sends. It is never us, and accepting it to "fix" the bug above
+        would have removed the check instead of repairing it."""
+        token = _csrf(client)
+
+        response = client.post(
+            "/login",
+            headers={"Host": GOOD_HOST, "Origin": "null"},
+            data={"csrf_token": token, "email": "a@b.c", "password": PASSWORD},
+        )
+
+        assert response.status_code == 403
+        assert calls == []
+
+    def test_the_policy_still_withholds_the_referer_from_third_parties(self, client):
+        """`same-origin` is the loosest policy that works and no looser: our own
+        requests carry a Referer, nobody else's does."""
+        response = client.get("/login", headers={"Host": GOOD_HOST})
+
+        assert response.headers["referrer-policy"] == "same-origin"
 
 
 class TestThePasswordNeverEscapes:
