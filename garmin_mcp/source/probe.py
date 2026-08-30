@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -92,7 +93,12 @@ CANDIDATES: tuple[Candidate, ...] = (
     Candidate("endurance_score", "training", "get_endurance_score", RANGE),
     Candidate("hill_score", "training", "get_hill_score", RANGE),
     Candidate("fitness_age", "training", "get_fitnessage_data", DATE),
-    Candidate("race_predictions", "training", "get_race_predictions", RANGE),
+    # NONE, not RANGE. `get_race_predictions` accepts zero arguments or all
+    # three (startdate, enddate, _type) and raises ValueError for anything
+    # between -- so a RANGE call, which passes two, failed before issuing a
+    # request. The first probe run recorded an ERROR for this endpoint that was
+    # entirely our own: it has never actually been tested.
+    Candidate("race_predictions", "training", "get_race_predictions", NONE),
     Candidate("body_composition", "body", "get_body_composition", RANGE),
     Candidate("weigh_ins", "body", "get_weigh_ins", RANGE),
     Candidate("daily_stats", "daily", "get_stats", DATE),
@@ -161,7 +167,15 @@ class Result:
     detail: str = ""
 
 
-def _probe_one(api: Any, cand: Candidate, day: str, tokens_path: str) -> Result:
+def _fetch(
+    api: Any, cand: Candidate, day: str, tokens_path: str
+) -> tuple[Result, Any]:
+    """One request, returning both the verdict and the payload.
+
+    Split out from `_probe_one` so `explain` can describe the shape of what came
+    back without spending a second request to see it. The payload never leaves
+    this module intact -- `explain` reduces it to key paths and type names.
+    """
     from garminconnect import GarminConnectNotFoundError
 
     try:
@@ -169,15 +183,19 @@ def _probe_one(api: Any, cand: Candidate, day: str, tokens_path: str) -> Result:
             payload = _call(api, cand, day)
     except GarminConnectNotFoundError:
         # 404 is a clean signal: this endpoint does not exist for this account.
-        return Result(cand.key, cand.group, NOT_FOUND, 0, day)
+        return Result(cand.key, cand.group, NOT_FOUND, 0, day), None
     except RateLimited:
         raise
     except Exception as exc:  # noqa: BLE001 - a probe records failures, not raises
-        return Result(cand.key, cand.group, ERROR, 0, day, type(exc).__name__)
+        return Result(cand.key, cand.group, ERROR, 0, day, type(exc).__name__), None
 
     populated = count_populated(payload)
     verdict = HAS_DATA if populated else EMPTY
-    return Result(cand.key, cand.group, verdict, populated, day)
+    return Result(cand.key, cand.group, verdict, populated, day), payload
+
+
+def _probe_one(api: Any, cand: Candidate, day: str, tokens_path: str) -> Result:
+    return _fetch(api, cand, day, tokens_path)[0]
 
 
 def run(
@@ -247,3 +265,162 @@ def write_capabilities(
     tmp.write_text(json.dumps(document, indent=2))
     tmp.replace(path)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Structure-only diagnostic (docs/SCOPE.md §5, §8)
+# ---------------------------------------------------------------------------
+
+# `restingHeartRate: int` establishes the shape. `restingHeartRate: 52` would be
+# a reading in a terminal, its scrollback and anywhere the output gets pasted.
+# Key names are schema, not health data, so describing structure stays inside §8
+# while describing values would not.
+
+MAX_SHAPE_LINES = 200
+_MAX_SHAPE_DEPTH = 8
+
+# Keys that are themselves data rather than schema: a payload keyed by date or
+# epoch would otherwise print one line per day, so the diagnostic would grow with
+# the size of the account instead of with the shape of the response.
+_DATA_SHAPED_KEY = re.compile(
+    r"^\d{4}-\d{2}-\d{2}([T ].*)?$"   # 2026-08-29, 2026-08-29T22:10:00
+    r"|^\d{8,}$"                       # epoch millis
+    r"|^-?\d+(\.\d+)?$"                # plain numbers
+)
+
+
+def _type_name(value: Any) -> str:
+    if value is None:
+        return "null"
+    # bool before int: bool IS an int in Python, and reporting `enabled: int`
+    # would send whoever reads this looking for a number.
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str(empty)" if value == "" else "str"
+    return type(value).__name__
+
+
+def _is_data_keyed(node: dict) -> bool:
+    keys = [str(k) for k in node]
+    return len(keys) >= 3 and all(_DATA_SHAPED_KEY.match(k) for k in keys)
+
+
+def describe_shape(payload: Any, max_lines: int = MAX_SHAPE_LINES) -> list[str]:
+    """Key paths and value types. Never a value.
+
+    Written to answer one question the counting heuristic cannot: an endpoint
+    that looks empty may have returned an empty container, or may have returned
+    data that `count_populated` walked past. Those have opposite conclusions --
+    "this watch does not produce HRV" versus "we are calling it wrong" -- and
+    are currently indistinguishable.
+
+    So `null` leaves are REPORTED rather than skipped. `restingHeartRate: null`
+    against the key being absent entirely is exactly the distinction being
+    drawn, and dropping nulls would throw away the answer.
+    """
+    lines: list[str] = []
+    truncated = False
+
+    def walk(node: Any, path: str, depth: int) -> None:
+        nonlocal truncated
+        if truncated:
+            return
+        if len(lines) >= max_lines:
+            truncated = True
+            return
+
+        label = path or "(root)"
+
+        if isinstance(node, dict):
+            if not node:
+                lines.append(f"{label}: dict(empty)")
+                return
+            if depth >= _MAX_SHAPE_DEPTH:
+                # Bounded rather than trusted: the bound is also what makes a
+                # self-referential payload safe, as in count_populated.
+                lines.append(f"{label}: dict({len(node)} keys, not descended)")
+                return
+            if _is_data_keyed(node):
+                lines.append(f"{label}: dict({len(node)} data-shaped keys)")
+                walk(next(iter(node.values())), f"{label}.<key>", depth + 1)
+                return
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else str(key), depth + 1)
+            return
+
+        if isinstance(node, (list, tuple)):
+            lines.append(f"{label}: list({len(node)})")
+            if not node or depth >= _MAX_SHAPE_DEPTH:
+                return
+            # First element only. Stress returned 1935 leaves, nearly all of it
+            # one per-minute sample array; describing every element would make
+            # the diagnostic exactly as unreadable as the payload it explains.
+            walk(node[0], f"{label}[0]", depth + 1)
+            return
+
+        lines.append(f"{label}: {_type_name(node)}")
+
+    walk(payload, "", 0)
+    if truncated:
+        lines.append(f"... capped at {max_lines} lines")
+    return lines
+
+
+@dataclass(frozen=True)
+class Shape:
+    key: str
+    group: str
+    verdict: str
+    populated: int
+    day: str
+    lines: list[str]
+    detail: str = ""
+
+
+def explain(
+    tokens_path: str,
+    keys: list[str],
+    day_offsets: tuple[int, ...] = DEFAULT_DAY_OFFSETS,
+    on_progress=None,
+) -> list[Shape]:
+    """Describe the shape of what each named endpoint returns.
+
+    Stops at the first date that yields a populated payload, so the common case
+    costs one request rather than three. An endpoint that stays empty is still
+    described from the last payload it returned -- that empty envelope is the
+    interesting case, not a failure to report.
+    """
+    api = source._connect()
+    today = datetime.now(UTC).date()
+    days = [str(today - timedelta(days=n)) for n in day_offsets]
+    by_key = {c.key: c for c in CANDIDATES}
+
+    shapes: list[Shape] = []
+    for key in keys:
+        cand = by_key[key]
+        best: tuple[Result, Any] | None = None
+
+        for day in days:
+            result, payload = _fetch(api, cand, day, tokens_path)
+            if best is None or result.populated > best[0].populated:
+                best = (result, payload)
+            if result.verdict in (HAS_DATA, NOT_FOUND, ERROR):
+                # Populated, or a verdict no further date will improve.
+                break
+
+        result, payload = best  # type: ignore[misc]
+        lines = describe_shape(payload) if payload is not None else []
+        shape = Shape(
+            result.key, result.group, result.verdict,
+            result.populated, result.day, lines, result.detail,
+        )
+        shapes.append(shape)
+        if on_progress:
+            on_progress(shape)
+
+    return shapes

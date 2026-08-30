@@ -920,3 +920,79 @@ something is broken.
   plan-doc amendment and owes the 10-dimension pass, so it rides with the §7a bind-address
   correction in a session of its own.
 - Everything else unchanged: `probe --explain`, `race_predictions`, phase 4b, phase 5.
+
+---
+
+## 2026-08-30 (phase 5a) — `probe --explain`, and an endpoint we had never tested
+
+Asked for real data tools. This is the step before them, and it is not a detour.
+
+### Why the tool could not be written yet
+
+§5 requires units on every numeric and a hard result cap, so `garmin_health` cannot hand
+back Garmin's payload — **stress alone returned 1935 populated fields**, which would destroy
+a conversation's context window on one call. Our layer has to define the shape: a named
+subset, each field with an explicit unit.
+
+That means knowing what the fields are called. The probe deliberately never recorded them —
+it counts leaves and prints nothing (§8) — so the names had to be learned before the
+extractor could be written. The alternative was guessing them from library source, which is
+the same guessing that cost three release cycles earlier today.
+
+### What it answers that a count cannot
+
+A zero from `count_populated` is consistent with two opposite situations:
+
+    the endpoint returned an empty container    -> the watch has no such data
+    it returned data our counter walked past    -> we are calling it wrong
+
+Eight endpoints are stuck on exactly that ambiguity. Declaring "this watch does not produce
+HRV" on the strength of a zero would permanently cut a tool that works.
+
+`describe_shape` emits key paths and value **types**. `restingHeartRate: int` establishes
+the shape; `restingHeartRate: 52` would be a reading in a terminal, its scrollback, and
+anywhere the output gets pasted. Key names are schema, not health data, so this stays inside
+the §8 line the probe already holds.
+
+Three decisions that were not obvious:
+
+- **`null` leaves are reported, not skipped.** `restingHeartRate: null` against the key
+  being absent entirely *is* the distinction being drawn. Dropping nulls — the natural
+  instinct, since they are not data — would throw away the answer.
+- **Repeated siblings collapse.** A list prints its length and the shape of its first
+  element only. Without it, stress would emit ~1440 lines and the diagnostic would be as
+  unreadable as the payload it explains.
+- **Data-shaped dict keys collapse to `<key>`.** A payload keyed by date would otherwise
+  print one line per day, so the output would grow with the size of the account rather than
+  with the shape of the response — and would leak a set of dates for no benefit.
+
+Verified by removing the redaction: emitting values instead of type names fails 9 of the 20
+tests. A privacy guarantee that has never been observed to fail is an assumption.
+
+### `race_predictions` had never actually been tested
+
+Confirmed in library source: `get_race_predictions` accepts **zero arguments or all three**
+and raises `ValueError` for anything between. The candidate was classified `RANGE`, so
+`_call` passed two — and it failed before issuing a request. The ERROR recorded against it
+in the first probe run was entirely our own.
+
+Now `NONE`, with a test pinning the classification and a second test asserting the real
+library still rejects two arguments, so a future release that accepts them fails loudly
+rather than silently making the comment wrong.
+
+### Cost, deliberately
+
+Stops at the first date that yields a populated payload, so the common case is one request
+per endpoint rather than three. Runs through `_garmin_access`, inheriting the shipped
+spacing. An unknown key refuses the whole run rather than probing the valid ones first —
+partial execution would spend requests and then fail, which is the worst of both.
+
+It writes nothing. `capabilities.json` has one writer and a read-only diagnostic must not
+quietly become a second.
+
+Tests: 165 -> 189.
+
+### Next
+
+Run it against the five confirmed health endpoints, then `garmin_health` gets built from
+real field names rather than assumed ones.

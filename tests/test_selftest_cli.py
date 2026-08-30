@@ -61,3 +61,35 @@ def test_selftest_makes_no_garmin_calls(monkeypatch, capsys):
     monkeypatch.setattr(client, "Garmin", explode)
 
     assert main(["selftest", "--count", "2"]) == 0
+
+
+class TestProbeExplainCli:
+    """The CLI half: an unknown key must fail loudly and helpfully rather than
+    silently probing nothing."""
+
+    def test_an_unknown_key_exits_non_zero(self, capsys):
+        from garmin_mcp.cli import main
+
+        assert main(["probe", "--explain", "nonsense"]) == 1
+
+    def test_it_names_the_valid_keys(self, capsys):
+        from garmin_mcp.cli import main
+
+        main(["probe", "--explain", "nonsense"])
+        err = capsys.readouterr().err
+
+        assert "sleep" in err and "stress" in err and "hrv" in err
+
+    def test_an_empty_value_is_refused_rather_than_probing_everything(self, capsys):
+        """`--explain ""` must not fall through to probing all 26 endpoints
+        against an account that has been rate limited today."""
+        from garmin_mcp.cli import main
+
+        assert main(["probe", "--explain", ","]) == 1
+
+    def test_one_bad_key_among_good_ones_still_refuses(self, capsys):
+        """Partial execution would spend requests and then fail, which is the
+        worst of both."""
+        from garmin_mcp.cli import main
+
+        assert main(["probe", "--explain", "sleep,nonsense"]) == 1
