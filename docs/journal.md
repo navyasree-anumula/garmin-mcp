@@ -602,3 +602,44 @@ Tests: 67 → 126.
 - `race_predictions` is classified `RANGE` and should be `NONE` — a real one-line bug the
   probe run exposed, kept out of a web-UI branch on purpose.
 - Cache still phase 5. Two-writer token race still structural, not observed.
+
+---
+
+## 2026-08-30 (phase 4a, follow-up) — The MFA branch was dead code
+
+Mahi chose to skip the CLI bootstrap and do the first login on the new laptop through the
+web form instead. That put weight on a path no test had ever run: every web test injects a
+fake `bootstrap`, which is right for testing the form and wrong for testing the wiring
+underneath it. Reading it before the live attempt found the branch broken.
+
+**`raise` from `prompt_mfa` does not come back as itself.** garminconnect calls the
+callback inside `resolve_mfa`, deep in the strategy loop of `client.login`. Nothing there
+re-raises our type; it crosses the loop, crosses `Garmin.login`, and lands in
+`bootstrap_login`'s broad `except Exception`, which hands everything to `_translate`.
+`_translate` knows only the library's vocabulary, so an unrecognised exception becomes
+`SourceUnavailable(str(exc))` -- and `str(MfaRequired())` is the empty string.
+
+So `except MfaRequired` in the web layer was unreachable, and the operator would have been
+shown:
+
+```
+Could not reach Garmin Connect:
+```
+
+An empty reason, in the one situation where the message has real work to do: the web flow
+genuinely cannot collect a code, and the CLI genuinely can. Printed from the actual code
+path rather than reasoned about, then re-checked after the fix.
+
+The answer is now read from a flag the callback sets before raising, not from the
+exception type, which is robust to how `bootstrap_login` re-types things. Reverting to the
+type-based catch fails two of the new tests.
+
+`tests/test_web_bootstrap_wiring.py` exercises `_default_bootstrap` for real -- through
+`bootstrap_login`, `_garmin_access` and `_translate` -- replacing only
+`garminconnect.Garmin`, the one thing that would reach the network. It also pins the
+things that had to keep working across the extra layer: a login 429 still arrives as
+`RateLimited` (the type the form keys on to disable submit), tokens are still written
+`0600`, and a failed login leaves no token file behind, since a partial one would make the
+status page report "tokens present" for something that cannot authenticate.
+
+Tests: 126 -> 133.

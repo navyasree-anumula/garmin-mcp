@@ -206,25 +206,43 @@ def default_status_rows() -> list[tuple[str, str, str]]:
     return rows
 
 
-def _default_bootstrap(email: str, password: str) -> str:
-    from ..source.client import bootstrap_login
-
-    return bootstrap_login(
-        email=email,
-        password=password,
-        # The web flow has no way to ask for a code mid-request, so it must not
-        # pretend to. Raising here turns "we would hang forever" into a page
-        # that names the CLI, which does implement the prompt (§4).
-        prompt_mfa=_mfa_unsupported,
-    )
-
-
 class MfaRequired(Exception):
     """Garmin asked for a code and this surface cannot collect one."""
 
 
-def _mfa_unsupported() -> str:
-    raise MfaRequired()
+def _default_bootstrap(email: str, password: str) -> str:
+    """Exchange the password for tokens through the one function that may.
+
+    The MFA callback records that it was asked before raising, and the answer is
+    read back from that flag rather than from the exception type. That looks
+    like belt and braces and is not: raising from `prompt_mfa` does NOT reach
+    us as itself. garminconnect calls the callback deep inside its login
+    strategy loop, nothing there re-raises our type, and `bootstrap_login` ends
+    in a broad `except Exception` that hands everything to `_translate` -- which
+    knows only the library's vocabulary and maps an unrecognised exception onto
+    `SourceUnavailable(str(exc))`. `str(MfaRequired())` is the empty string, so
+    catching the type would have produced "Could not reach Garmin Connect: "
+    and never the page naming the CLI, in the one situation where naming it is
+    the whole point (§4).
+    """
+    from ..source.client import bootstrap_login
+    from ..source.errors import GarminSourceError
+
+    asked_for_a_code = False
+
+    def prompt_mfa() -> str:
+        nonlocal asked_for_a_code
+        asked_for_a_code = True
+        # The web flow has no way to collect a code mid-request, so it must not
+        # pretend to. Raising turns "this request hangs forever" into an error.
+        raise MfaRequired()
+
+    try:
+        return bootstrap_login(email=email, password=password, prompt_mfa=prompt_mfa)
+    except GarminSourceError:
+        if asked_for_a_code:
+            raise MfaRequired() from None
+        raise
 
 
 def _default_version() -> str:
