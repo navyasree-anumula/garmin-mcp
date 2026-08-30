@@ -140,3 +140,66 @@ class TestThroughTheRealBootstrap:
 
         with pytest.raises(NotBootstrapped):
             source._connect()
+
+
+class TestOnlyGarminGetsToSayItWasThePassword:
+    """`GarminConnectAuthenticationError` is raised from roughly fifteen places
+    in the library and only two concern credentials. The others are "Invalid
+    profile data found", "Not authenticated", "Authentication error", and a bot
+    challenge answered with a 401.
+
+    This class exists because the password WAS correct when the form reported a
+    login failure. Mapping the whole exception type onto "check your password"
+    would have replaced one confidently wrong message with another."""
+
+    from garmin_mcp.source.errors import LoginRejected
+
+    def translate(self, message):
+        return source._translate(
+            GarminConnectAuthenticationError(message), "/d/t.json", during_login=True
+        )
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "401 Unauthorized (Invalid Username or Password)",
+            "INVALID_USERNAME_PASSWORD",
+            "invalid username or password",
+        ],
+    )
+    def test_garmin_saying_so_is_the_only_route_to_a_password_verdict(self, message):
+        assert isinstance(self.translate(message), InvalidCredentials)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Invalid profile data found",
+            "Invalid user settings found",
+            "Not authenticated",
+            "Authentication error",
+            "401 Unauthorized",
+        ],
+    )
+    def test_everything_else_reports_what_garmin_said(self, message):
+        from garmin_mcp.source.errors import LoginRejected
+
+        result = self.translate(message)
+
+        assert isinstance(result, LoginRejected)
+        assert message in str(result)
+
+    def test_it_does_not_accuse_the_password(self):
+        from garmin_mcp.source.errors import LoginRejected
+
+        text = str(LoginRejected("Invalid profile data found")).lower()
+
+        assert "did not say the credentials were wrong" in text
+        assert "connect.garmin.com" in text
+
+    def test_a_bare_401_is_not_read_as_a_password_problem(self):
+        """A bot challenge answered with a 401 carries no INVALID_USERNAME
+        marker. Reading it as a typo sends the operator to reset a password that
+        was never the problem."""
+        from garmin_mcp.source.errors import LoginRejected
+
+        assert isinstance(self.translate("401 Unauthorized"), LoginRejected)

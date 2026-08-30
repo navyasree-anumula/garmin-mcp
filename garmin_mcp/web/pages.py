@@ -150,3 +150,10 @@ BAD_PASSWORD_ADVICE = (
     "<code>connect.garmin.com</code> — signing in there is free and settles it "
     "without spending an attempt here. Then correct the field and submit again."
 )
+
+UNEXPLAINED_REFUSAL_ADVICE = (
+    "Garmin did not say the credentials were wrong, so do not assume they are. "
+    "Verify them once at <code>connect.garmin.com</code> — free, and it settles "
+    "it. If they work there, this is more likely a bot challenge or a temporary "
+    "block on this IP than anything you typed, and waiting beats retrying."
+)

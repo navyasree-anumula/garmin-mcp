@@ -68,6 +68,31 @@ class InvalidCredentials(GarminSourceError):
         super().__init__(message)
 
 
+class LoginRejected(GarminSourceError):
+    """Garmin refused the login, and did not say it was the password.
+
+    `GarminConnectAuthenticationError` is raised from roughly fifteen places in
+    the library and only two of them concern credentials. The rest are things
+    like "Invalid profile data found", "Not authenticated", and a bot challenge
+    answered with a 401. Reporting any of those as "check your password" is the
+    same mistake as reporting them as an expired token: a confident, specific,
+    wrong instruction that sends the operator somewhere with nothing to find.
+
+    So when Garmin has not actually said the credentials were bad, this reports
+    what it did say, verbatim, and asks rather than asserts.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            "Garmin refused the login, but did not say the credentials were "
+            "wrong. This is what it said:\n"
+            f"    {detail}\n"
+            "If the same email and password work at connect.garmin.com, this is "
+            "not a typo — it is more likely a bot challenge or a temporary block "
+            "on this IP. Wait rather than retrying immediately."
+        )
+
+
 class RateLimited(GarminSourceError):
     """Garmin returned 429.
 

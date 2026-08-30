@@ -29,6 +29,7 @@ from .errors import (
     AuthExpired,
     GarminSourceError,
     InvalidCredentials,
+    LoginRejected,
     NotBootstrapped,
     RateLimited,
     SourceUnavailable,
@@ -83,6 +84,13 @@ class AuthStatus:
 # not as a typed rate-limit error. _translate explains why.
 _API_ERROR_429 = re.compile(r"\bAPI Error 429\b")
 
+# What the library says when Garmin actually rejected the credentials, from
+# resp_type == "INVALID_USERNAME_PASSWORD". Anything else wearing the same
+# exception type is not a password problem.
+_INVALID_CREDENTIALS = re.compile(
+    r"Invalid Username or Password|INVALID_USERNAME_PASSWORD", re.IGNORECASE
+)
+
 
 def _translate(
     exc: Exception, path: str, *, during_login: bool = False
@@ -104,10 +112,23 @@ def _translate(
     if isinstance(exc, GarminConnectTooManyRequestsError):
         return RateLimited()
     if isinstance(exc, GarminConnectAuthenticationError):
-        # str(exc) is the library's own text, e.g. "401 Unauthorized (Invalid
-        # Username or Password)". It was previously discarded, which threw away
-        # the one line that said what had actually gone wrong.
-        return InvalidCredentials(str(exc)) if during_login else AuthExpired(path)
+        if not during_login:
+            return AuthExpired(path)
+        # str(exc) is the library's own text. It was previously discarded, which
+        # threw away the one line that said what had actually gone wrong.
+        #
+        # Only two of the ~15 places the library raises this type concern
+        # credentials; the rest are "Invalid profile data found", "Not
+        # authenticated", a bot challenge answered with a 401, and similar. So
+        # the credential verdict is given only when Garmin actually said so, and
+        # everything else reports what it did say instead of guessing.
+        #
+        # Matching on message text is fragile and deliberately so rather than
+        # silently wrong, exactly as the 429 branch below is.
+        detail = str(exc)
+        if _INVALID_CREDENTIALS.search(detail):
+            return InvalidCredentials(detail)
+        return LoginRejected(detail)
     if isinstance(exc, GarminConnectConnectionError):
         # GarminConnectTooManyRequestsError is raised ONLY by the login paths.
         # On a data request, client._run_request maps every status >= 400 except

@@ -225,3 +225,30 @@ class TestAWrongPasswordIsNotALockout:
         response = submit(client)
 
         assert DISABLED_BUTTON in response.text
+
+
+class TestAnUnexplainedRefusal:
+    """Garmin refused but did not blame the credentials. The page must report
+    what it actually said rather than inventing a cause -- the previous two
+    versions of this branch each invented a different wrong one."""
+
+    def test_the_library_text_reaches_the_page(self):
+        from garmin_mcp.source.errors import LoginRejected
+
+        client = build(
+            lambda e, p: (_ for _ in ()).throw(LoginRejected("Invalid profile data found"))
+        )
+
+        response = submit(client)
+
+        assert "Invalid profile data found" in response.text
+
+    def test_it_does_not_claim_the_password_was_wrong(self):
+        from garmin_mcp.source.errors import LoginRejected
+
+        client = build(lambda e, p: (_ for _ in ()).throw(LoginRejected("401 Unauthorized")))
+
+        response = submit(client)
+
+        assert "rejected this email and password" not in response.text
+        assert LIVE_BUTTON in response.text
