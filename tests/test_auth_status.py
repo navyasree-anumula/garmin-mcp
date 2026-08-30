@@ -18,48 +18,6 @@ from garmin_mcp.source.errors import (
 )
 
 
-class FakeGarmin:
-    """Stands in for garminconnect.Garmin. Records how it was constructed and
-    how many times login() was attempted."""
-
-    instances: list["FakeGarmin"] = []
-
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-        self.login_calls = 0
-        self.raises = None
-        self.display_name = "mahi"
-        self.full_name = "Mahidhar"
-        self.unit_system = "metric"
-        FakeGarmin.instances.append(self)
-
-    def login(self, tokenstore=None):
-        self.login_calls += 1
-        if self.raises is not None:
-            raise self.raises
-        return None, None
-
-    def get_full_name(self):
-        return self.full_name
-
-    def get_unit_system(self):
-        return self.unit_system
-
-
-@pytest.fixture
-def fake_garmin(monkeypatch):
-    FakeGarmin.instances = []
-
-    def factory(**kwargs):
-        inst = FakeGarmin(**kwargs)
-        inst.raises = factory.raises
-        return inst
-
-    factory.raises = None
-    monkeypatch.setattr(source, "Garmin", factory)
-    return factory
-
-
 def test_missing_token_file_is_not_bootstrapped(no_tokenfile, fake_garmin):
     """A server that was never bootstrapped must say so, and name the command.
 
@@ -75,7 +33,7 @@ def test_missing_token_file_is_not_bootstrapped(no_tokenfile, fake_garmin):
     assert "docker run" in message
     assert str(no_tokenfile) in message
     # It must not have tried to talk to Garmin at all.
-    assert FakeGarmin.instances == []
+    assert fake_garmin.instances == []
 
 
 def test_rejected_token_is_auth_expired(tokenfile, fake_garmin):
@@ -117,8 +75,8 @@ def test_rate_limit_is_surfaced_and_not_retried(tokenfile, fake_garmin):
     assert "do not retry" in str(excinfo.value).lower()
     # Exactly one client, exactly one login attempt. Retrying into a 429 extends
     # the block.
-    assert len(FakeGarmin.instances) == 1
-    assert FakeGarmin.instances[0].login_calls == 1
+    assert len(fake_garmin.instances) == 1
+    assert fake_garmin.instances[0].login_calls == 1
 
 
 def test_happy_path_returns_populated_status(tokenfile, fake_garmin):
@@ -137,8 +95,8 @@ def test_serving_client_is_built_without_credentials(tokenfile, fake_garmin):
     of silently falling back to a full login (docs/SCOPE.md §4)."""
     source.auth_status()
 
-    assert len(FakeGarmin.instances) == 1
-    kwargs = FakeGarmin.instances[0].kwargs
+    assert len(fake_garmin.instances) == 1
+    kwargs = fake_garmin.instances[0].kwargs
     assert "email" not in kwargs
     assert "password" not in kwargs
 
@@ -149,5 +107,5 @@ def test_client_is_reused_across_calls(tokenfile, fake_garmin):
     source.auth_status()
     source.auth_status()
 
-    assert len(FakeGarmin.instances) == 1
-    assert FakeGarmin.instances[0].login_calls == 1
+    assert len(fake_garmin.instances) == 1
+    assert fake_garmin.instances[0].login_calls == 1

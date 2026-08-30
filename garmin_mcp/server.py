@@ -7,18 +7,32 @@ This module must NEVER import `garminconnect` (docs/SCOPE.md §11). It talks to
 from __future__ import annotations
 
 import logging
+import os
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .source import client as source
 from .source.errors import GarminSourceError
 
 logger = logging.getLogger(__name__)
 
 mcp = MCPServer("garmin")
+
+
+def _server_version() -> str:
+    """Which build is actually answering.
+
+    `docker run` does not re-pull a moving tag, so a config pinned to `latest`
+    silently keeps running whatever was pulled last. Without this, "am I on the
+    current image?" is unanswerable from inside a conversation. GARMIN_MCP_BUILD
+    is stamped by CI with the commit; it is absent on a local build.
+    """
+    build = os.environ.get("GARMIN_MCP_BUILD", "").strip()
+    return f"{__version__}+{build}" if build else __version__
 
 
 class AuthStatus(BaseModel):
@@ -32,6 +46,7 @@ class AuthStatus(BaseModel):
     unit_system: str = Field(description="Account measurement system, e.g. 'metric' or 'statute'.")
     tokens_path: str = Field(description="Path to the token file inside the container.")
     tokens_modified_utc: str = Field(description="When the token file was last written, ISO-8601 UTC.")
+    server_version: str = Field(description="Version of this MCP server, plus the build commit when CI-built.")
 
 
 @mcp.tool(
@@ -58,4 +73,5 @@ def garmin_auth_status() -> AuthStatus:
         unit_system=status.unit_system,
         tokens_path=status.tokens_path,
         tokens_modified_utc=status.tokens_modified_utc,
+        server_version=_server_version(),
     )

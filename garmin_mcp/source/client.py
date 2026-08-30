@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,6 +57,11 @@ class AuthStatus:
     tokens_modified_utc: str
 
 
+# A data-path 429 arrives as GarminConnectConnectionError carrying this text,
+# not as a typed rate-limit error. _translate explains why.
+_API_ERROR_429 = re.compile(r"\bAPI Error 429\b")
+
+
 def _translate(exc: Exception, path: str) -> GarminSourceError:
     """Map a garminconnect exception onto our vocabulary."""
     if isinstance(exc, GarminConnectTooManyRequestsError):
@@ -63,6 +69,19 @@ def _translate(exc: Exception, path: str) -> GarminSourceError:
     if isinstance(exc, GarminConnectAuthenticationError):
         return AuthExpired(path)
     if isinstance(exc, GarminConnectConnectionError):
+        # GarminConnectTooManyRequestsError is raised ONLY by the login paths.
+        # On a data request, client._run_request maps every status >= 400 except
+        # 404 onto GarminConnectConnectionError -- there is no 429 branch. So a
+        # rate limit reaches us dressed as a connectivity error, and left
+        # untranslated the agent reads it as transient and retries, which is
+        # precisely what docs/SCOPE.md §6 forbids.
+        #
+        # Matching on the message is fragile, and deliberately so rather than
+        # silently wrong: the status code is not carried on the exception. If a
+        # future release adds a real 429 type, the isinstance branch above
+        # catches it first and this becomes dead code.
+        if _API_ERROR_429.search(str(exc)):
+            return RateLimited("on a data request, not the login")
         return SourceUnavailable(str(exc))
     return SourceUnavailable(str(exc))
 
@@ -73,7 +92,14 @@ def _connect() -> Garmin:
     `login()` is a real two-call round-trip to Garmin on every invocation,
     including the cached-token path. Building a client per tool call would rate
     limit us against our own server, so the instance is cached for the process
-    lifetime -- which under stdio is exactly one client session.
+    lifetime.
+
+    That cache is per-PROCESS, and a process is not the same thing as a client
+    session. Measured on 2026-08-30: Claude Desktop spawns TWO containers for a
+    single configured stdio server, both long-lived. So the token file has two
+    independent readers and -- because garminconnect re-dumps tokens whenever it
+    refreshes them -- two independent writers, with only an in-process lock
+    between them. Cross-process safety is not solved here.
     """
     global _client
     if _client is not None:
