@@ -13,7 +13,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9"]
+# Floor at 9.0.3: PYSEC-2026-1845 (predictable /tmp/pytest-of-{user} paths,
+# local DoS or privilege escalation) affects every release through 9.0.2. It is
+# a dev-only dependency and never ships -- requirements.lock is runtime-only --
+# but pip-audit gates CI, and a standing advisory teaches people to skim it.
+# Verified: the suite passes unchanged on 9.1.1.
+dev = ["pytest>=9.0.3,<10"]
 
 [build-system]
 requires = ["setuptools>=68"]

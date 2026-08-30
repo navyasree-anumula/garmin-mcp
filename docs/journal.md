@@ -298,3 +298,63 @@ Tests: 26 → 39.
   yet, so the concurrent path has never actually run. The lock is insurance bought before the
   fire.
 - `pytest>=8,<9` still blocks the 9.0.3 that clears the dev-side CVE.
+
+---
+
+## 2026-08-30 (phase 2b) — `selftest`, and a lock that blamed the wrong thing
+
+### The bug writing `selftest` exposed
+
+`lock.py` shipped in PR #5 with the retry loop catching bare `OSError`:
+
+```python
+except OSError:
+    if time.monotonic() >= deadline:
+        raise LockTimeout(...)
+    time.sleep(_POLL_INTERVAL_S)
+```
+
+`flock` signals two entirely different conditions through that one base. It raises
+`BlockingIOError` when the lock is genuinely held by someone else — and `OSError` with
+`ENOLCK`/`EINVAL` when **the filesystem cannot do advisory locking at all**. Some network
+and container volume drivers cannot.
+
+Treating them alike meant a volume without locking would poll for the full 30 seconds and
+then report *"Another instance of this server is busy."* Precise, actionable, and wrong: it
+sends the operator hunting a container that does not exist, while the truth is that
+cross-process protection was never active. The one thing the lock exists to guarantee would
+be absent, and the error message would argue it was present.
+
+Now `BlockingIOError` means contention and everything else raises `LockUnsupported`, which
+says plainly that protection is not active on this volume. Tested both directions, because a
+fix that turned every failure into `LockUnsupported` would pass the new test while breaking
+the old behaviour.
+
+This matters right now rather than theoretically: the next thing to happen is a real
+two-container test on a **Docker named volume**, which is precisely where flock support is
+worth verifying instead of assuming.
+
+### `garmin-mcp selftest`
+
+The cross-process claims — one global budget, real mutual exclusion — cannot be tested from
+inside one process. `threading.Lock` would pass any such test, and `threading.Lock` is
+exactly the thing garminconnect already has and which does not help across containers.
+
+`selftest` acquires the lock and budget N times and prints one `GRANT <label> <n> <epoch>`
+line per grant to stdout, so two containers' output can be concatenated and sorted. It makes
+**zero Garmin calls**, needs no token file, and can therefore be run repeatedly against a
+live account with no risk and no rate-limit cost.
+
+It also probes locking **by actually taking a lock**, not by checking that `fcntl` imports —
+that only proves we are on a UNIX, and it is the volume that varies. If the probe fails it
+exits non-zero and emits no `GRANT` lines, so it cannot report a budget it never exercised.
+
+### pytest ceiling widened
+
+`pytest>=8,<9` → `>=9.0.3,<10`, clearing PYSEC-2026-1845 (predictable `/tmp/pytest-of-{user}`
+paths; local DoS or privilege escalation, through 9.0.2). Dev-only and never shipped, but
+`pip-audit` gates CI and a standing advisory teaches people to skim the output.
+
+Measured before changing it: the suite passes unchanged on 9.1.1.
+
+Tests: 39 → 49.
