@@ -853,3 +853,70 @@ Running `docker run -i` interactively and pasting each line keeps stdin open as 
 window is, and works first time. Worth knowing before somebody concludes the tool hangs.
 
 Tests: 164 -> 165.
+
+---
+
+## 2026-08-30 (phase 4a, follow-up 4) — Connected to Claude Desktop. It was the restart.
+
+`garmin_auth_status` now answers inside a real Claude Desktop conversation: authenticated,
+metric, live call, tokens refreshed today. The full chain works through the intended client,
+not just by hand over stdio.
+
+### An hour lost to looking in the wrong place
+
+The server showed as **`garmin · Desktop · Local dev · Connected` under Settings →
+Connectors**, alongside the web connectors. We spent the whole search on **Settings →
+Developer**, which has a "Local MCP servers" section that said *"No servers added"* the
+entire time — and still did while the server was connected and working.
+
+So on this build, the Developer page's server list is not where a config-file server
+appears. Connectors is. Anyone debugging this by reading the Developer page will conclude
+the config was ignored, which is what happened here.
+
+### The evidence that misled, and what it was actually worth
+
+The diagnosis ran down a chain of plausible causes, and most of the readings were weaker
+than they looked:
+
+- **Empty MCP log directory.** Read as "the app never tried to launch it". Wrong: this
+  build writes nothing to that directory at all, not even a `main.log`, so it was evidence
+  of nothing. Stated too confidently at the time.
+- **No Developer toggle, no Connectors, no Extensions.** Reported as absent; Connectors did
+  exist and was where the answer was. A UI question asked from a Linux box about a Windows
+  app, answered by someone scanning quickly, is a lossy channel — the fix is to ask "tell me
+  everything on this page" rather than "is X present", which is what eventually worked.
+- **Org policy.** Ruled out properly, and cheaply: `extensions-blocklist.json` was empty
+  and `dxt:allowlistEnabled:<org>` was `false`. Worth doing — a managed account was a real
+  hypothesis given `orgWorkAcrossAppsDisabled` in the config.
+- **Stale build.** Ruled out: `first_launch_at` decoded to the same day.
+
+The actual cause was that the earlier "fully quit from the tray" did not take effect. The
+timestamps could not distinguish "restarted after saving the config" from "still running
+since before", and that ambiguity is what made every other reading look meaningful.
+
+**The cheap check that resolved it was the one already in the docs**: quit from the tray and
+reopen. It was performed once, believed, and not repeated. When a config-driven feature does
+not appear, re-doing the restart costs ten seconds and should come before any forensics.
+
+### Also confirmed
+
+`claude_desktop_config.json` at the MSIX-redirected path **is** read by this build — the
+config we wrote is the one that worked. The MSIX path finding and the absolute `docker.exe`
+requirement in §7 both held. The Docker path being a **per-user install under
+`AppData\Local\Programs`** rather than `Program Files` is new, and is exactly why §7 says to
+resolve it rather than assume it.
+
+### Note on the tool surface
+
+The Desktop session correctly observed that only `garmin_auth_status` is exposed, and
+speculated the server might "still be loading more tools". It is not: there is one tool by
+design (pass 1), and the data tools are gated on the capability probe. Worth recording
+because that speculation is the natural reading, and the next person to see it will assume
+something is broken.
+
+### Open
+
+- §7 needs the Connectors-not-Developer finding and the per-user Docker path. That is a
+  plan-doc amendment and owes the 10-dimension pass, so it rides with the §7a bind-address
+  correction in a session of its own.
+- Everything else unchanged: `probe --explain`, `race_predictions`, phase 4b, phase 5.
