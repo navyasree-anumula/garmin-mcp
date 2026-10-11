@@ -1309,12 +1309,91 @@ of §13.12 (the pass A matrix). Noted for the next session: `pytest` lives at
 
 Tests: 192 -> 192 (documentation-only commit).
 
+## 2026-10-11 (CI) — The audit gate had been red for six weeks, and a timing test cried wolf
+
+### A gate that only fires on PRs is silent exactly when nobody is working
+
+Opening PR #15 ran CI for the first time since 2026-08-30, and `pip-audit -r requirements.lock
+--strict` failed with **17 advisories across two packages**. Nothing in the repository had
+changed to cause it: every ID is a `PYSEC-2026-41xx` disclosed in the six weeks since the last
+run. `main` was failing its own gate, and a four-file documentation-and-probe PR inherited the
+failure.
+
+`PyJWT 2.13.0 -> 2.15.1` cleared fourteen (`PYSEC-2026-4140..4152`, `4183`) and
+`urllib3 2.7.0 -> 2.8.0` cleared three (`4175..4177`). Both are transitive — neither appears
+in `pyproject.toml`; PyJWT arrives under `mcp`, urllib3 under `requests`. The audit went to
+`No known vulnerabilities found`, and `build-and-publish` — which had been skipping behind the
+failed audit, not building — published an image for the first time since August.
+
+**The open question this leaves:** the gate fires on pull requests and on pushes to `main`.
+Six weeks of no commits meant six weeks of not knowing. A scheduled weekly run would have
+said so on the day. Not decided.
+
+### PYSEC-2026-4146 listed no fix version, so it was read rather than assumed
+
+An advisory with no fix version normally means a bump cannot clear it and the gate needs an
+ignore entry with a written justification. That is worth not guessing at, so it was audited by
+hand first.
+
+`PyJWT.decode()` mutates a **caller-supplied `options` dict in place** when `verify_signature`
+is falsy, writing `verify_exp`/`verify_nbf`/`verify_aud`/… onto the caller's object. Code that
+reuses one dict — a module-level constant, a wrapper's `self.options` — can have a later
+verifying call silently inherit `verify_exp=False` and accept an expired or wrong-audience
+token. Signature verification is unaffected; it is a claims-check bypass, and a regression of
+a 2021 bug fixed in 2022 and reintroduced by a 2025 refactor.
+
+**There is no `jwt.decode` call site in this dependency graph at all.** `garminconnect`
+hand-decodes Garmin's tokens with base64 (`client.py:263`) — deliberately unverified, since
+the client holds no signing key, with its own `alg: none` rejection. The only `import jwt`
+anywhere in site-packages is `mcp/client/auth/extensions/client_credentials.py`, which calls
+`jwt.encode` in a flow this server never runs. So exposure was nil independently of the
+version, and 2.15.1 clears the advisory regardless — **no ignore entry was added**. Written
+down because the next no-fix advisory needs the same walk: read the mechanism, then look for
+the call site, and only then argue about versions.
+
+### A timing test cried wolf, and the arithmetic says the limiter was fine
+
+`test_two_processes_share_one_budget` failed on the deps PR:
+
+    global rate not enforced: [0.210, 0.0317, 0.176, 0.0697, 0.0885]
+
+Six stamps at `GARMIN_RATE_PER_SEC=10`, `GARMIN_RATE_BURST=1`. One is free, so five paid
+requests need **0.5s** end to end, and the observed span was **0.576s** — compliant. The
+companion assertion, `stamps[-1] - stamps[0] >= 0.35`, passed. What failed is
+`all(g >= 0.07 for g in paid)`, which requires every *individual* gap to be wide.
+
+A lock-serialised token bucket across two processes cannot promise instantaneous spacing. The
+telltale is in the data: `0.210` followed by `0.0317` sums to `0.242`, about two full
+intervals. Credit accrued while both children were blocked, then was spent back-to-back — the
+long-run rate held, the momentary spacing did not. A re-run of the **same commit** passed, and
+the suite passes on this box.
+
+The test's own docstring says the merged-spacing check "does not depend on how the two
+processes happened to interleave". The per-gap assertion is precisely the part that does.
+**Not fixed, deliberately** — changing a load-bearing test's invariant is a decision, not a
+cleanup. What it should assert is the aggregate invariant the limiter actually promises:
+elapsed span >= (n - burst) / rate, with tolerance, keeping the existing span check.
+
+### Merge order, and why #15 was merged into rather than rebased
+
+#16 (deps) merged first so #15 could land on a green `main`. #15 was then brought up to date
+with GitHub's update-branch endpoint, which performs a **merge** (`85cba73`) — a true rebase of
+a pushed branch needs the force push the standing orders deny absolutely, and routing the same
+history rewrite through the API would have been a bypass rather than a compliance. Worth
+knowing: `gh pr update-branch` does not exist in this `gh` build;
+`gh api --method PUT /repos/.../pulls/15/update-branch` is the working equivalent.
+
+Also: `gh`'s active account on this box is `mahidhark`, which has no write access here — a
+push 403s with the repo's own `user.name` set correctly, so the symptom points at the wrong
+thing. `gh auth switch -u navyasree-anumula`, push, and switch back.
+
+Tests: 192 -> 192. Lock: PyJWT 2.13.0 -> 2.15.1, urllib3 2.7.0 -> 2.8.0.
+
 ## RESUME HERE
 
-State: `main` = `9d7caae`. **192 tests.** Branch **`fix/probe-envelope-timestamps`** is two
-commits ahead and pushed: `c178318` (the envelope-timestamp suffix rule, seven new candidates
-26 -> 33, three tests) and `249799f` (SCOPE v1.4). **PR not yet opened** — both commits are
-sitting on the remote branch awaiting one.
+State: `main` = `07d1e4a`. **192 tests.** CI green on `main` and the image is published.
+PRs **#15** (probe envelope timestamps + SCOPE v1.4) and **#16** (the lock bump) both merged on
+2026-10-11. No feature branch is outstanding.
 
 Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`. The cached
 tokens had aged out after six weeks and were re-bootstrapped on 2026-10-11; **both mobile
@@ -1327,24 +1406,25 @@ login paths took a 429 and a fallback carried it**, so the login path is IP-rate
    `body_battery_events`, `morning_readiness`, `heart_rate_zones`, `stats_and_body`. Seven
    requests. `max_metrics_range` is the one that settles a question rather than opening one:
    if the range variant answers where the single date returns `list(0)`, that endpoint is a
-   call-shape bug of the `race_predictions` family. v1.4's finding 10.a adds a reason to run
-   it: the range endpoints are how trends get answered in one request instead of 28.
+   call-shape bug of the `race_predictions` family. v1.4's finding 10.a adds a second reason:
+   the range endpoints are how a trend gets answered in one request instead of 28.
 
 2. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
-   `schema_version`. `capabilities.json` currently holds August verdicts, and two of them are
-   wrong in opposite directions — `sleep` understated, `spo2` a false positive the old counter
-   would have written as `has_data`. 33 candidates with empty ones retried across three dates;
-   budget for it in one sitting. An aborted run must report what it got to, never look like a
-   clean run that found less.
+   `schema_version`. `capabilities.json` still holds August verdicts, two of them wrong in
+   opposite directions — `sleep` understated, `spo2` a false positive the old counter would
+   have written as `has_data`. 33 candidates, empty ones retried across three dates; budget it
+   in one sitting. An aborted run must report what it got to, never look like a clean run that
+   found less.
 
 3. **Give `capabilities.json` a consumer.** v1.4 specifies the four-value vocabulary, the
    `schema_version`, an unknown version falling back to the default read-only tool set, and a
-   regressed verdict keeping the previous date. None of it is implemented, and nothing reads
-   the file at all. The metric→source map and the tool-selection UI are the intended readers.
+   regressed verdict keeping the previous verdict's date. None of it is implemented, and
+   nothing reads the file at all — one producer, zero consumers. The metric→source map and the
+   tool-selection UI are the intended readers.
 
 4. **Then `garmin_health(metric, date)`**, built on the sourcing map in the 5b entry, not on
-   the obvious endpoint names. Four of nine metrics come from somewhere other than their
-   own endpoint. Hard requirements collected so far:
+   the obvious endpoint names. Four of nine metrics come from somewhere other than their own
+   endpoint. Hard requirements collected so far:
    - descriptor-driven decoding for positional arrays (`floorValuesArray` is 96x4 with
      mixed-type columns; `bodyBatteryValuesArray` is width 4 in `stress` and width 2 in
      `body_battery`)
@@ -1361,14 +1441,23 @@ login paths took a 429 and a fallback carried it**, so the login path is IP-rate
    - the accumulation flag lives in the map beside the source, or `not_matured` can never be
      emitted
    - never return raw series: sleep alone carries ~1,700 elements across ten lists
-   - §6's short-TTL cache ships alongside it, as its first real consumer, keyed on the
-     fetched payload plus the map version
+   - §6's short-TTL cache ships alongside it, as its first real consumer, keyed on the fetched
+     payload plus the map version
+
+**Two decisions owed before they bite again:**
+
+- **The ratelimit per-gap assertion** (this entry). It passes on a quiet runner and fails on a
+  busy one, and the run it failed on was compliant. Fix it to assert the aggregate invariant,
+  or accept the flake knowingly.
+- **A scheduled audit run.** The gate found six weeks of advisories the moment someone opened
+  a PR. A weekly cron on `main` would have found them on the day.
 
 **Open items:** **SCOPE v1.5** owes §7 (Connectors-not-Developer, per-user Docker path), §7a
 (the bind-address correction, knowingly stale meanwhile), §9 (location exposure via activity
-detail) and §6 (the cache key) — one session, with its own ten dimensions plus passes A and B.
-An **open v1.3 commitment** is still unmet: §5 requires `garmin_auth_status` to report the tool
-set actually in force, and `server.py:63-83` returns token state and `server_version` only.
-Phase 4b tool selection and `tools.json` still unstarted. Write/workout tools still need
-structure validation before anything is uploaded to a real calendar. The "coach" wording in
-§13's prose is looser than §1's purpose line; left as-is by decision, not oversight.
+detail — `get_activity_details` returns polylines) and §6 (the cache key) — one session, with
+its own ten dimensions plus passes A and B. An **open v1.3 commitment** is still unmet: §5
+requires `garmin_auth_status` to report the tool set actually in force, and `server.py:63-83`
+returns token state and `server_version` only. Phase 4b tool selection and `tools.json` still
+unstarted. Write/workout tools still need structure validation before anything is uploaded to
+a real calendar. The "coach" wording in §13's prose is looser than §1's purpose line; left
+as-is by decision, not oversight.
