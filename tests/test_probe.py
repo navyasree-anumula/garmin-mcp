@@ -57,6 +57,40 @@ class TestEmptinessHeuristic:
         assert count_populated({"steps": 0}) == 1
         assert count_populated({"worn": False}) == 1
 
+    def test_window_timestamps_do_not_count_as_data(self):
+        """The real spo2 response for 2026-10-09, key names verbatim.
+
+        Every reading is null and the watch measured no SpO2, but eight window
+        timestamps counted as data and the verdict read HAS DATA. The ignore
+        list named `startTimestampGMT` literally, so every prefixed sibling
+        slipped through.
+        """
+        spo2_with_no_readings = {
+            "userProfilePK": 12345,
+            "calendarDate": "2026-10-09",
+            "startTimestampGMT": "2026-10-09T00:00:00.0",
+            "endTimestampGMT": "2026-10-10T00:00:00.0",
+            "sleepStartTimestampGMT": "2026-10-08T21:30:00.0",
+            "sleepEndTimestampGMT": "2026-10-09T05:00:00.0",
+            "sleepStartTimestampLocal": "2026-10-09T03:00:00.0",
+            "sleepEndTimestampLocal": "2026-10-09T10:30:00.0",
+            "tomorrowSleepStartTimestampGMT": "2026-10-09T21:30:00.0",
+            "tomorrowSleepEndTimestampLocal": "2026-10-10T10:30:00.0",
+            "averageSpO2": None,
+            "lowestSpO2": None,
+            "latestSpO2TimestampGMT": None,
+            "spO2SingleValues": None,
+        }
+
+        assert count_populated(spo2_with_no_readings) == 0
+
+    def test_a_readings_own_timestamp_still_counts(self):
+        """The suffix rule must not swallow per-reading times. `readingTimeGMT`
+        inside hrvReadings is part of a measurement, not the envelope."""
+        hrv_reading = {"hrvValue": 41, "readingTimeGMT": "2026-10-09T01:12:00.0"}
+
+        assert count_populated(hrv_reading) == 2
+
     def test_recursion_is_bounded(self):
         """A self-referential payload must not hang the probe."""
         deep = current = {}
@@ -208,6 +242,19 @@ def test_every_candidate_has_a_known_call_shape():
     requests had already been spent."""
     assert {c.kind for c in CANDIDATES} <= {"date", "range", "none", "activities"}
     assert len({c.key for c in CANDIDATES}) == len(CANDIDATES)
+
+
+def test_every_candidate_method_exists_on_the_client():
+    """A candidate naming a method the library does not have would spend the
+    whole probe before failing. It also keeps the list honest about what can be
+    asked for at all: skin temperature has no endpoint in garminconnect 0.3.11,
+    which is why it is read off the sleep payload instead of probed.
+    """
+    from garminconnect import Garmin
+
+    missing = [c.method for c in CANDIDATES if not hasattr(Garmin, c.method)]
+
+    assert not missing, f"no such method on Garmin: {missing}"
 
 
 def test_activities_never_uses_the_paginating_helper():
