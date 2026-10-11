@@ -51,16 +51,30 @@ _IGNORED_KEYS = frozenset(
         "date",
         "startdate",
         "enddate",
-        "starttimestamplocal",
-        "starttimestampgmt",
-        "endtimestamplocal",
-        "endtimestampgmt",
         "statisticsstartdate",
         "statisticsenddate",
         "uuid",
         "devicedid",
     }
 )
+
+# Window timestamps describe the envelope, not a measurement, and they are
+# matched by suffix because matching by name did not hold.
+#
+# The list above named `starttimestampgmt` and `endtimestampgmt` literally, so
+# the prefixed siblings walked straight past it. The real spo2 response for
+# 2026-10-09 carried `sleepStartTimestampGMT`, `tomorrowSleepEndTimestampLocal`
+# and six more like them beside `averageSpO2: null` and every other reading
+# null -- eight populated fields, verdict HAS DATA, for a watch that measured
+# no SpO2 at all. A probe run would have written that into capabilities.json
+# and a tool would have been built on it.
+_IGNORED_KEY_SUFFIXES = ("timestampgmt", "timestamplocal")
+
+
+def _is_envelope_key(key: Any) -> bool:
+    """True for a key that is request echo or window metadata, not a reading."""
+    lowered = str(key).lower()
+    return lowered in _IGNORED_KEYS or lowered.endswith(_IGNORED_KEY_SUFFIXES)
 
 DATE = "date"
 RANGE = "range"
@@ -110,6 +124,30 @@ CANDIDATES: tuple[Candidate, ...] = (
     Candidate("personal_records", "activity", "get_personal_record", NONE),
     Candidate("devices", "device", "get_devices", NONE),
     Candidate("primary_device", "device", "get_primary_training_device", NONE),
+    # Added 2026-10-11, after --explain resolved the original eight. The list
+    # above is a guess about what to ask for, and the 5a run found skin
+    # temperature inside the sleep payload that no candidate asked about. These
+    # six are the health-relevant endpoints the library exposes and this list
+    # never named -- daily heart rate most glaringly, which had no candidate at
+    # all while resting_hr had two sources.
+    #
+    # Skin temperature is deliberately absent: garminconnect 0.3.11 has no
+    # endpoint for it, so it can only ever be read off the sleep payload.
+    # Nutrition, golf, badges and gear are out of a health probe's scope, and
+    # the menstrual and pregnancy endpoints are left alone on purpose -- §8 is
+    # about not putting health data where it does not belong, and their schema
+    # is not worth printing to satisfy curiosity.
+    Candidate("heart_rates", "health", "get_heart_rates", DATE, "daily HR series"),
+    Candidate("hydration", "health", "get_hydration_data", DATE, "manually logged"),
+    Candidate("body_battery_events", "health", "get_body_battery_events", DATE),
+    Candidate("morning_readiness", "training", "get_morning_training_readiness", DATE),
+    Candidate("heart_rate_zones", "training", "get_heart_rate_zones", NONE),
+    Candidate("stats_and_body", "daily", "get_stats_and_body", DATE),
+    # `get_max_metrics` answers a single date with `list(0)` while VO2 max is
+    # demonstrably present inside training_status. That makes the call shape the
+    # suspect rather than the data -- which is exactly how race_predictions
+    # failed for a month. The range variant is one request to settle it.
+    Candidate("max_metrics_range", "training", "get_max_metrics_range", RANGE),
 )
 
 HAS_DATA = "has_data"
@@ -137,7 +175,7 @@ def count_populated(value: Any, _depth: int = 0) -> int:
         return sum(
             count_populated(v, _depth + 1)
             for k, v in value.items()
-            if str(k).lower() not in _IGNORED_KEYS
+            if not _is_envelope_key(k)
         )
     if isinstance(value, (list, tuple)):
         return sum(count_populated(v, _depth + 1) for v in value)

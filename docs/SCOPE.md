@@ -1,10 +1,16 @@
 # garmin-mcp — Scope
 
 **Status:** pass 1 shipped and proven live on the target laptop. Pass 2 in progress.
-**Version:** 1.3.2 · 2026-08-30
+**Version:** 1.4 · 2026-10-11
 **Ratification:** this document is the artifact to approve before any code is written.
 **v1.3** stress-tested across all 10 dimensions of `sop/stress-test-10-dimensions.md`;
-audit trail in the final section.
+audit trail in §12. **v1.4** walked the same ten plus adversarial passes A and B; §13.
+
+**v1.4 is a partial amendment, deliberately.** It covers §1 and §5 — the sections that block
+phase 5c. §7's client-wiring corrections (Connectors not Developer, the per-user Docker path)
+and §7a's bind-address correction are still owed and ride in **v1.5**, which has its own
+stress-test pass. Splitting was chosen over one large version so that the end-of-session
+review stays inside the time a review can actually be given.
 
 ---
 
@@ -25,6 +31,9 @@ audit trail in the final section.
 | Web UI lifecycle | **On demand**, loopback-bound, **no Docker socket** | v1.3 |
 | Tool surface | **User-selected** from what the capability probe finds | v1.3 |
 | Multi-tenancy | **Still no.** Re-confirmed at v1.3 | v1.3 |
+| What it is for | **Planning and adjusting running training** | v1.4 |
+| Capability verdicts | **Dated, three-valued, reversible** — never a one-time gate | v1.4 |
+| Unit of exposure | **The metric, not the endpoint** | v1.4 |
 
 ---
 
@@ -33,6 +42,22 @@ audit trail in the final section.
 An MCP server that lets an MCP client read Mahi's own Garmin Connect data and create,
 update and schedule structured workouts on his own training calendar.
 
+**What it is for, stated at v1.4: planning and adjusting running training.** Not "exposing
+Garmin data" in the abstract. The distinction is not cosmetic and it has already changed two
+decisions:
+
+- **It sets the priority order of the tool surface** (§5). Load, readiness and per-run detail
+  outrank weight and body composition, and the table is ordered to say so.
+- **It makes a missing measurement a real cost rather than a tidy answer.** A capability
+  probe that cuts a metric is not being economical; it is removing something a coach needs.
+  §5's verdict rules exist because of this.
+
+The measurements that serve it are load (acute, chronic, and the ratio between them),
+readiness and recovery, the aerobic/anaerobic balance against Garmin's own targets, VO2 max
+and race predictions, threshold and zones, and what happened inside each run. Sleep, HRV,
+resting HR and stress are in scope as *inputs to training decisions*, which is also the limit
+of how far they are interpreted — see the non-goal below.
+
 **Non-goals, explicitly:**
 
 - Multi-tenancy. There is one account and the design assumes it everywhere.
@@ -40,6 +65,12 @@ update and schedule structured workouts on his own training calendar.
 - A product, a service, or anything charged against WhatsScale product time.
 - A public or network-reachable endpoint.
 - Redistribution of Garmin data to anyone.
+- **Medical or clinical interpretation (v1.4).** The coach framing invites "is this HRV a
+  problem", "should I be worried about this resting heart rate", and the data is
+  special-category health data that looks clinical enough to answer. The server reports
+  measurements, the units they are in, and Garmin's own phrasing where Garmin provides it. It
+  does not diagnose, and no tool description should imply it can. This is a boundary worth
+  writing down before a tool is built that quietly crosses it.
 
 This is a personal tool. It has no relationship to the WhatsScale "AI business assistant
 on automation data" vision and should never be mistaken for product work. The one mild
@@ -166,14 +197,35 @@ not exist is worse than the imperfect instruction it replaces.
 Roughly 12–18 parameterized tools, not 110 narrow ones. A large flat tool list is itself a
 failure mode: it burns context and gives the agent more ways to pick the wrong call.
 
+**Ordered by what §1 is for (v1.4).** The first three are the coaching surface; the rest
+support it. An earlier version listed these alphabetically-by-accident, which put body
+composition above per-run detail.
+
 | Tool | Shape |
 |---|---|
-| `garmin_activities` | list / get detail, date-windowed |
-| `garmin_health(metric, range)` | sleep, HRV, body battery, resting HR, stress, SpO2 |
-| `garmin_training` | training status, readiness, acute load |
-| `garmin_body` | weight, composition |
+| `garmin_training` | training status and its phrase, acute/chronic load and ratio, aerobic–anaerobic balance against Garmin's targets, VO2 max, race predictions, threshold, zones |
+| `garmin_activities` | list, **and per-run detail: splits, pace, cadence, HR through the run** — date-windowed |
+| `garmin_health(metric, range)` | sleep, HRV, resting HR, stress, body battery, respiration, skin temperature |
 | `garmin_workouts` | list / get / create / update / schedule / unschedule |
-| `garmin_auth_status` | token state and expiry |
+| `garmin_body` | weight, composition |
+| `garmin_auth_status` | token state and expiry, and the tool set actually in force |
+
+Three notes on that table, each from measurement rather than preference:
+
+- **`garmin_activities` per-run detail is unverified as of v1.4.** The probe has only ever
+  called the activity *list*. Every per-run endpoint — detail, splits, typed splits, HR in
+  zones — is unprobed, which means the single most coach-relevant surface in this document is
+  also the least evidenced. Phase 5c probes it before the tool is designed.
+- **`garmin_training` is one tool over two endpoints.** Status, load balance and VO2 max come
+  from `training_status`; readiness and recovery time from `training_readiness`. Splitting
+  them per endpoint would decode the same payload twice and leak the source layout into the
+  tool names.
+- **SpO2 is deliberately absent from `garmin_health`'s metric list, and the tool still
+  answers about it.** This watch measures none — `get_spo2_data` returns a full envelope of
+  window timestamps with every reading null, confirmed 2026-10-09. "This watch does not
+  measure SpO2" is a better answer to a user who asks than a tool that has no opinion, so it
+  is a *reported-unsupported* metric, not a removed one. §5's verdict rules below make that a
+  general mechanism rather than a special case.
 
 **Permanently excluded, no override:** `delete_activity`, `delete_weigh_in`,
 `delete_weigh_ins`, `delete_blood_pressure`. Destructive calls against years of personal
@@ -185,14 +237,66 @@ The watch is a **Forerunner 570**. Body Battery, HRV status and Training Readine
 device-tier dependent, and the spec sheet is not evidence of what the *API* returns for
 this account.
 
-**Before the tool surface is finalised, a capability probe runs once:** call every
-candidate metric endpoint for a recent date and record which return data. The surface is
-trimmed to that result. Tools for metrics this device never produces are dead weight and
-get cut.
+**A capability probe calls every candidate metric endpoint for a recent date and records
+which return data.** The surface is informed by that result.
 
-**Built in v1.3.2** as `garmin-mcp probe` over `source/probe.py` — 26 candidate endpoints.
-A CLI command, never a tool: at the shipped budget it takes about a minute, far past any MCP
-client's patience, and it is run once rather than per conversation.
+**Built in v1.3.2** as `garmin-mcp probe` over `source/probe.py` — 33 candidate endpoints as
+of v1.4. A CLI command, never a tool: at the shipped budget it takes about a minute, far past
+any MCP client's patience, and it is run deliberately rather than per conversation.
+
+#### A verdict is a measurement with a date on it, not a fact about the device (v1.4)
+
+v1.3 said the probe "runs once", that the surface is "trimmed to that result", and that
+"tools for metrics this device never produces are dead weight and get cut". **All three are
+withdrawn.** Following them in August would have cut four working tools:
+
+| Metric | August verdict | October reality |
+|---|---|---|
+| HRV | empty across three spread dates | `get_hrv_data` returns a full summary |
+| Resting HR | empty | returns the reading, nested in a statistics window |
+| VO2 max | `get_max_metrics` returns `list(0)` | present in `training_status` |
+| Race predictions | ERROR | returns all four distances — the error was our own call shape |
+
+Two mechanisms failed at once, and the amendment addresses both.
+
+**1. An empty answer has three meanings, not two.** v1.3 distinguished "no data" from
+"unsupported". There is a third: **not yet matured.** HRV status needs roughly three weeks of
+consistent overnight wear before Garmin computes a baseline; endurance and hill scores need
+accumulated qualifying activity. Those read identically to "this device cannot" on any single
+day. So:
+
+- **`unsupported`** — a 404, and nothing else. It remains the only reliable signal.
+- **`no_data`** — a well-formed envelope with no readings. **Says nothing about capability.**
+- **`not_matured`** — `no_data` for a metric with a known accumulation requirement. Which
+  metrics have one is recorded in the metric map, beside the source.
+- **`error`** — **our call failed.** Four values, not three: `race_predictions` sat on this
+  one for a month because the probe passed two arguments to a method that takes nought or
+  three. Folding that into "Garmin has no data" would have blamed the account for our bug.
+- A verdict carries **when it was measured** — `generated_utc`, `dates_probed` and a
+  per-endpoint `observed_on` are already written; what was missing is a reader that uses them.
+- **A regressed verdict keeps the previous verdict's date.** A re-probe overwrites in place,
+  so a metric that answered in August and is empty today would lose the evidence that it ever
+  worked — which is the exact signal `not_matured` depends on.
+- **`capabilities.json` carries a `schema_version`.** A reader that does not recognise it
+  falls back to the default read-only tool set, never to no tools — the same rule that already
+  governs an absent `tools.json`. A file with no `schema_version` is pre-v1.4 and means
+  "re-probe needed", not "corrupt".
+- **An aborted probe says so.** A 429 ends the run; a partial result must never be written in
+  a shape that reads like a clean run which found less.
+
+**2. Trimming is reversible, and a verdict never deletes a tool.** A metric that is not
+answering is *reported as not answering*, with which of the three reasons applies. The tool
+continues to exist and continues to be asked. A probe run may change a verdict in either
+direction and must never be able to permanently remove a capability — the August run would
+have done exactly that, and nothing downstream would have questioned it again.
+
+**3. A count greater than zero is not evidence of data.** `spo2` scored 8 populated fields on
+2026-10-09 with every reading null: all eight were window timestamps that the emptiness
+heuristic was counting. Fixed in code by matching envelope keys on suffix, but the general
+rule belongs here — **the count is a heuristic, the verdict is a judgement, and both get
+recorded so they can disagree.** That disagreement is what exposed the sleep false negative
+in phase 5a and the spo2 false positive in 5b; a design that recorded only one of them would
+have shipped both errors.
 
 Three properties it needs, none of them obvious:
 
@@ -207,10 +311,43 @@ Three properties it needs, none of them obvious:
   watch sat on a dresser. Only the empties are retried, which keeps the request count down.
 - **A 404 is the only reliable "unsupported" signal**, and it is reported distinctly.
 
+#### The metric is the unit of exposure; the endpoint is an implementation detail (v1.4)
+
+**`capabilities.json` is keyed per endpoint. `tools.json` and the UI offer metrics. In four
+of nine known cases those two disagree**, so a UI derived from the probe's output as-is would
+offer SpO2 (which this watch never measures) and hide HRV (which works). The mapping between
+them is therefore a **first-class artifact in `source/`, with a test**, not an inference
+anyone makes at the call site:
+
+| Metric | Source | Not from |
+|---|---|---|
+| HRV | `get_hrv_data` — `hrvSummary.lastNightAvg` | the sleep payload |
+| Resting HR | `get_rhr_day`, matched on the nested `calendarDate` | the sleep payload |
+| VO2 max | `training_status` — `mostRecentVO2Max.generic.vo2MaxValue` | `get_max_metrics` |
+| Race predictions | `get_race_predictions`, **no arguments** | — |
+| Training status | `training_status`, device-keyed, phrase not code | — |
+| Skin temperature | the sleep payload — `avgSkinTempDeviationC/F` | no endpoint exists |
+| SpO2 | nowhere — reported unsupported | `get_spo2_data` |
+
+Three rules follow:
+
+- **A metric names its source; a source never names the metric.** The map is the only place
+  that knows `vo2_max` comes out of `training_status`.
+- **One metric may have several sources, and the map says which wins.** HRV is available from
+  its own endpoint, from the sleep payload, and from `training_readiness`. A response states
+  which it used (§5 response contracts), because two sources can disagree and silence about
+  which was read makes the number unauditable. **Fallback is explicit or absent — never
+  silent:** resting HR is a `float` from `get_rhr_day` and an `int` in the sleep payload, so a
+  quiet substitution changes both the value's provenance and its type.
+- **A metric with no source is still a metric.** Skin temperature has no endpoint in
+  `garminconnect 0.3.11` at all — it exists only inside the sleep payload. The map records
+  that rather than the candidate list pretending to ask for it.
+
 **Availability and exposure are two different things (v1.3).** The probe determines what the
 account and watch *can* return, and writes `capabilities.json`. The web UI then lets Mahi
 choose which of those are actually *exposed* to the agent, writing `tools.json`. The MCP
-server reads that at startup.
+server reads that at startup. **The UI offers metrics, which means it reads the map, not the
+probe output directly (v1.4).**
 
 Three rules on that config, each earned:
 
@@ -238,6 +375,38 @@ These are requirements on our layer, not things the library gives us:
   returns thousands and destroys the context window. Paging must be a deliberate act.
 - **Distinguishable `AUTH_EXPIRED`.** When tokens expire mid-conversation every tool fails
   at once; the failure must name its cause and point at `garmin_auth_status`.
+**Four contracts added at v1.4, each from a payload we have now actually seen:**
+
+- **An enum code is returned as its phrase, never as a number, and never as a guess.**
+  `trainingStatus`, `fitnessTrend`, `maxMetCategory` and `recordedDevices[].category` are
+  `int`. Garmin ships the human-readable text in a sibling field —
+  `trainingStatusFeedbackPhrase`, `trainingBalanceFeedbackPhrase`, `acwrStatusFeedback`. We
+  have no mapping from code to meaning and inventing one would be guessing at Garmin's
+  internal enum, so the phrase is what we return and the code stays opaque unless a mapping
+  can be sourced.
+- **Dynamic map keys are selected, never hardcoded.** `training_status` keys its DTOs by
+  device id — `mostRecentTrainingStatus.latestTrainingStatusData.<deviceId>` — so the
+  extractor walks the map and selects on `primaryTrainingDevice: bool`, which both DTOs
+  carry. A hardcoded key works on this account only, and breaks on this one the day the watch
+  is replaced.
+- **Positional arrays are decoded through their descriptor list.** `floorValuesArray` is 96
+  rows of width 4 with mixed-type columns, and `floorsValueDescriptorDTOList` names them.
+  `bodyBatteryValuesArray` is width 4 inside `stress` and width 2 inside `body_battery` —
+  same name, same account, same day. Reading index 0 as "the timestamp" would work today and
+  break silently later.
+- **Units are decided per field, not read off the name.** v1.3's rule — `…Seconds`, `…Mins`,
+  `…InMilliseconds` carry their unit — holds for most fields and fails for the ones a coach
+  needs most: `time5K`, `time10K`, `timeHalfMarathon`, `timeMarathon` are bare `int`, and
+  `timestamp: int` sits in the same payload as `…TimestampGMT` strings. Any field whose name
+  does not carry a unit gets an explicit decision recorded where the map lives.
+
+- **A trend comes from a range endpoint, not from N day-calls (v1.4).** §1's purpose makes
+  trends the common question — a four-week HRV slope, not one night — and answering that by
+  looping 28 single-date requests against §6's two-second budget is both slow and the
+  behaviour most likely to draw a 429. `get_hrv_data_range`, `get_rhr_daily`,
+  `get_sleep_daily` and the `get_weekly_*` family exist for this; phase 5c probes them because
+  of this contract, not for completeness.
+
 - **We validate workout structure before upload.** The library's `workout.py` is Pydantic
   models and `create_*_step` helpers with **zero semantic validation** — grepped for
   `raise|validate|assert`, no hits. A repeat group with no steps, or an inverted target
@@ -458,9 +627,12 @@ All four items below were carried from v1.2. Three are now closed by measurement
 - ~~**`mcp` SDK decorator API shape.**~~ **CLOSED.** `FastMCP` was *removed* in mcp 2.x; the
   entry class is `MCPServer` from `mcp.server`. The negotiated protocol revision is
   **`2025-11-25`**, not the `2026-07-28` this document previously claimed.
-- **Device capability probe** (§5) — **built, not yet run.** `garmin-mcp probe` ships in
-  v1.3.2. The surface stays unfixed until it has run once against the real account and the
-  FR570.
+- **Device capability probe** (§5) — **built and run; no longer a gate.** `garmin-mcp probe`
+  shipped in v1.3.2 and ran against the real account on 2026-08-30, with `--explain` passes on
+  2026-08-30 and 2026-10-11. v1.4 withdraws the idea that the surface waits on a single run:
+  verdicts are dated and reversible, and the surface is informed by them rather than fixed by
+  them. **What is still owed is a re-probe with the corrected counter**, because the stored
+  `capabilities.json` holds August verdicts now known to be wrong in both directions.
 - ~~**Laptop toolchain**~~ **CLOSED.** Verified on the laptop 2026-08-30 — see §7.
 - **Rate limit number** (§6) — **partially closed.** First real observation: Garmin 429s this
   IP on the mobile *credential login* paths, on a first attempt, while the *token load and
@@ -581,3 +753,224 @@ in §12.2 is the disposition trail.
 | 6.a | §11 | `server.py` and `web/` are peer adapters |
 | 9.a, 9.b | §7 | Pin tags, report `server_version`, document MSIX wiring |
 | 10.a, 10.b | §9 | Health data reaching the provider stated plainly; browser risk accepted |
+
+---
+
+## §13 v1.4 10-dimension stress-test absorption notes
+
+Walked all 10 dimensions of `sop/stress-test-10-dimensions.md`, **plus adversarial passes A
+and B**. Findings were checked against real code and against two live `--explain` runs, not
+reasoned about abstractly — and two of them changed what this amendment says.
+
+### §13.1 Coverage gap rationale
+
+**v1.3 ran the ten dimensions but not passes A and B**, which did not exist until 2026-10-06.
+v1.4 runs both. They were not skippable here: this amendment changes the meaning of an
+existing state (`capabilities.json` verdicts) and adds two consumers of it (the metric→source
+map, and a UI that offers metrics rather than endpoints).
+
+### §13.2 #1 Edge cases — 5 findings, 4 actionable
+
+- **1.a:** `not_matured` requires knowing which metrics have an accumulation requirement, and
+  the amendment named no home for that knowledge. Without one the verdict can never be
+  emitted. — **ACTIONABLE §5**: the accumulation flag lives in the metric map, beside the
+  source.
+- **1.b:** HRV has three sources. The map says which wins, but the plan was silent on whether
+  a `no_data` winner **falls back** to another. Silent fallback would answer the same question
+  from different sources on different days — and for resting HR the types differ (`float` from
+  `get_rhr_day`, `int` from the sleep payload). — **ACTIONABLE §5**: fallback is explicit, and
+  the response names the source it used.
+- **1.c:** `get_rhr_day` answers with a statistics *window*, so the requested date may not be
+  in it. — **ACTIONABLE §5**: match the nested `calendarDate`; "no data for this date" rather
+  than the nearest available value, which would be a silently wrong answer.
+- **1.d:** a re-probe that hits a 429 mid-run aborts and writes nothing (`RateLimited` ends
+  the run; `write_capabilities` is called once at the end, `cli.py:318`). The stale file
+  survives with nothing recording that an attempt failed. — **ACTIONABLE §5**: an aborted
+  probe reports what it got to; it must not look like a successful run that found less.
+- **1.e:** SpO2 could become available on a future watch. — **(no action)**: dated, reversible
+  verdicts cover exactly this; it is the mechanism the amendment adds.
+
+### §13.3 #2 Unverified assumptions — 4 findings, 1 actionable
+
+- **2.a:** the entire top of the v1.4 tool table — per-run detail, splits, threshold, zones —
+  is **unprobed**. The most coach-relevant surface is the least evidenced. — **ACTIONABLE
+  phase 5c**, and stated in §5 rather than left implicit.
+- **2.b:** "HRV status needs ~3 weeks of wear" is domain knowledge, not something we measured.
+  The August→October change is *consistent* with it; firmware, wear pattern or an account
+  setting would fit the same evidence. — **[Mahi-verify]**, recorded as an inference. The
+  amendment does not depend on the reason being right: it depends only on verdicts changing
+  over time, which is measured.
+- **2.c:** "four of nine metrics come from elsewhere" rests on 11 requests, one account, two
+  days. Sound as evidence that the mechanism is needed; weak as a statistic. — **(no action)**,
+  cited as the former only.
+- **2.d:** the rule "the UI reads the map, not the probe output" constrains code that does not
+  exist — the tool-selection page is unbuilt (`web/` holds only `app.py`, `pages.py`). —
+  **(no action)**: constraining it before it is written is the cheap moment.
+
+### §13.4 #3 Actual code checks — 3 findings, 2 actionable
+
+This dimension changed the amendment twice.
+
+- **3.a:** the plan proposed a three-valued vocabulary. The code has **four** verdicts —
+  `HAS_DATA`, `EMPTY`, `NOT_FOUND`, `ERROR` (`source/probe.py:115-118`) — and `ERROR` is not
+  redundant: `race_predictions` sat on it for a month because of a call-shape bug of *ours*. A
+  three-valued scheme would have folded our own bug into "Garmin has no data". — **ACTIONABLE
+  §5**: the vocabulary is four, and `error` means our call failed, never that the metric is
+  absent.
+- **3.b:** the dating requirement is **already satisfied**: `write_capabilities` writes
+  `generated_utc`, `dates_probed` and a per-endpoint `observed_on`
+  (`source/probe.py`, `write_capabilities`). What is missing is a *consumer* that reads them.
+  — **✓ VERIFIED**; narrows the work to the reader.
+- **3.c:** `capabilities.json` carries **no schema version**, which §13.10 needs. —
+  **ACTIONABLE §5**.
+
+### §13.5 #4 Security — 4 findings, 1 actionable (deferred)
+
+- **4.a:** the §5 tables name field paths, never values, and this repository is public. —
+  **✓ VERIFIED**, consistent with §8.
+- **4.b:** skin temperature is read from a payload already fetched for sleep; no new request,
+  no new exposure. — **(no action)**.
+- **4.c:** §1's new clinical non-goal reduces a real risk the coach framing creates — an agent
+  asked "is this HRV a problem" about special-category data. — **✓ ALIGNED**.
+- **4.d:** **per-run detail carries GPS.** `get_activity_details` returns polylines; a run
+  history is a precise record of where Mahi lives and when he is out. §9 treats exposure as
+  credentials and health data and says nothing about location, and this is the first amendment
+  that makes activity detail a priority. — **ACTIONABLE §9, deferred to v1.5** with the split.
+  Recorded here so the split cannot lose it.
+
+### §13.6 #5 Vision alignment — 1 finding, 0 actionable
+
+- **5.a:** "running coach" sharpens §1's purpose without touching its non-goals: still one
+  account, still not product work, still no WhatsScale relationship. The framing could drift
+  toward "a product"; the non-goals already forbid it explicitly. — **✓ ALIGNED**.
+
+### §13.7 #6 Architecture consistency — 2 findings, 0 actionable
+
+- **6.a:** the map names `garminconnect` methods, so §11 requires it live in `source/`. —
+  **(no action)**, §11 already binding and the amendment says `source/`.
+- **6.b:** the map must stay metric→source and **not** grow into tool→metric knowledge, or the
+  tool layer leaks downward and §11's one-package-swap property is lost. — **(no action)**,
+  recorded as a boundary.
+
+### §13.8 #7 Impact on other features — 2 findings, 1 actionable. **State sub-analysis triggered.**
+
+The verdict state changes meaning, so the sub-analysis applies; its tabulation is §13.12.
+
+- **7.a:** **nothing reads `capabilities.json`.** Grepped `garmin_mcp/` — the only references
+  are the writer and a comment (`cli.py:263`, `cli.py:318`). `write_capabilities`'s own
+  docstring says "the web UI reads this to build the tool-selection list", and the web UI does
+  not. Changing the vocabulary is therefore **free today and expensive later**, and it is also
+  why August's wrong verdicts never did any damage. — **ACTIONABLE §5**, and the reason v1.4
+  is worth doing before 5c rather than after.
+- **7.b:** v1.4's tool table says `garmin_auth_status` reports "the tool set actually in
+  force". §5 has required that since v1.3 (finding 7.a) and **it is not implemented** —
+  `server.py:63-83` returns token state and `server_version` only. — **(no action)** for v1.4,
+  which is a plan doc; flagged as a v1.3 commitment still outstanding.
+
+### §13.9 #8 Test coverage — 2 findings, 2 actionable
+
+- **8.a:** the map needs a test that every metric resolves to a real library method **or** an
+  explicit "no source" record. Skin temperature is the case that proves the second half: a
+  test asserting every metric has a source would have to call it a failure. — **ACTIONABLE
+  §8**.
+- **8.b:** the four-valued vocabulary and the schema version need tests at the writer, since
+  the reader does not exist yet to fail against them. — **ACTIONABLE §8**.
+
+### §13.10 #9 Deployment & rollback — 2 findings, 1 actionable
+
+- **9.a:** **a new `capabilities.json` meeting an old image.** A re-probe writes the new
+  vocabulary; a rollback to a previous image tag (§7's rollback path) leaves an older reader
+  against a newer file. Nothing reads it today, so the window is open rather than currently
+  broken. — **ACTIONABLE §5**: `schema_version` in the file, and an unrecognised one falls
+  back to the default read-only tool set — consistent with the existing rule that an absent
+  `tools.json` must never mean "no tools".
+- **9.b:** rollback itself is unchanged: the file lives on the token volume, independent of the
+  image, so a rollback costs no re-authentication and no re-probe. — **✓ VERIFIED**.
+
+### §13.11 #10 Risks — 3 findings, 1 actionable
+
+- **10.a:** the coach framing pushes every question toward *trends* — a four-week HRV slope,
+  not one night. Answered naively that is 28 day-calls against §6's two-second budget and
+  §5's hard cap. — **ACTIONABLE §5/§6**: trends come from the range endpoints
+  (`get_hrv_data_range`, `get_rhr_daily`, `get_sleep_daily`, `get_weekly_*`) in one request,
+  and phase 5c probes them *because* of this finding rather than for completeness.
+- **10.b:** location exposure via activity detail — duplicate of 4.d, same disposition.
+- **10.c:** splitting v1.4/v1.5 leaves §7a saying "bind `127.0.0.1`, never `0.0.0.0`" while
+  the shipped container does the opposite for a reason already understood. The doc is
+  knowingly wrong for one more version. — **Accepted**, recorded here and in the journal so it
+  is not rediscovered as a bug.
+
+### §13.12 Pass A — states, producers and consumers
+
+**Surfaces that exist here**, as the checklist adapted to this repo: the MCP tool list, the
+CLI, the web UI, persistence, and logging. **There is no HTTP API, no chat/turn path and no
+eval or lab surface** — stated rather than answered with invented findings.
+
+| State | Producer | MCP tools | CLI | Web UI | Persistence | Logging |
+|---|---|---|---|---|---|---|
+| verdict (4 values) | `probe.py:115-118`, `run_probe` | **none** | `probe` prints it | **none** (claimed, absent) | `capabilities.json` | at INFO |
+| `populated_fields` | `count_populated` | none | printed beside verdict | none | `capabilities.json` | — |
+| `generated_utc` / `observed_on` | `write_capabilities` | none | none | none | `capabilities.json` | — |
+| `schema_version` | **does not exist yet** | — | — | — | — | — |
+| metric→source map | **does not exist yet** | will be the main consumer | — | will be the list source | none (code, not data) | — |
+| exposure set (`tools.json`) | web UI (**unbuilt**) | read at startup (**unbuilt**) | — | writes it (unbuilt) | `tools.json` | — |
+| tool set in force | — | **required since v1.3, absent** (`server.py:63-83`) | — | — | — | — |
+
+Findings:
+
+- **A.1:** the verdict state has **one producer and zero consumers**. A state that never
+  leaves the function that computes it is not yet a mechanism — Pass A's characteristic
+  finding, and it lands on the probe's entire output. — **ACTIONABLE §5** (same as 7.a).
+- **A.2:** `write_capabilities`'s docstring names a consumer that does not exist. A comment
+  asserting a mechanism is how the next reader concludes the wiring is done. — **ACTIONABLE**:
+  code comment corrected when the reader ships.
+- **A.3:** two states are **produced in two places that can disagree**: resting HR
+  (`get_rhr_day` as `float`, sleep payload as `int`) and HRV (three sources). The map declares
+  a winner; finding 1.b makes fallback explicit. — **ACTIONABLE §5**, absorbed.
+- **A.4:** `tool set in force` is **consumed by a requirement and produced by nothing** —
+  §5 has promised it since v1.3 and `garmin_auth_status` does not return it. — **ACTIONABLE**,
+  carried as an open v1.3 commitment.
+- **A.5:** the §6 cache is a future consumer of none of this, but it *will* key on
+  metric+date. If it keys on endpoint+date instead, two metrics from one payload fetch twice.
+  — **ACTIONABLE §6, v1.5**: the cache keys on the fetched payload, not the metric asked for.
+
+### §13.13 Pass B — the lifecycles
+
+- **B.1 (tool-call lifecycle):** metric asked → map resolves source → cache → `source/` →
+  response. The response must name *the source it used* (A.3) and *the date basis* (§5). Order
+  is sound; the failure mode is a cached payload answering a metric the map has since
+  re-pointed. — **ACTIONABLE §6, v1.5**: a map change invalidates the cache, or the cache key
+  includes the map version.
+- **B.2 (probe lifecycle):** a re-probe **overwrites** verdicts in place. A metric that was
+  `has_data` in August and `no_data` today loses its evidence of ever having worked, which is
+  precisely the signal the maturity category depends on. — **ACTIONABLE §5**: a verdict that
+  regresses records the previous verdict's date rather than silently replacing it. **This is
+  the finding of the pass** — the amendment's own mechanism would have erased its own
+  evidence.
+- **B.3 (session lifecycle):** `tools.json` changes mid-session are a no-op until the client
+  restarts (§5, v1.3). Unchanged by v1.4; a metric-keyed set does not alter the caching
+  behaviour of MCP clients. — **✓ VERIFIED**.
+- **B.4 (deployment lifecycle):** old reader, new file — §13.10's 9.a. New reader, old file:
+  an August `capabilities.json` has no `schema_version`, which the reader must treat as
+  "pre-v1.4, re-probe needed" rather than as corrupt. — **ACTIONABLE §5**, absorbed with 9.a.
+
+### §13.14 Net v1.4 changes
+
+| Finding | Section | Change |
+|---|---|---|
+| 1.a | §5 | Accumulation flag lives in the metric map |
+| 1.b, A.3 | §5 | One winning source per metric; fallback explicit; response names the source |
+| 1.c | §5 | `resting_hr` matched on nested `calendarDate`; no nearest-value answers |
+| 1.d | §5 | An aborted probe reports partial results, never looks like a clean run |
+| 2.a | §5 | Per-run detail recorded as unverified; 5c probes before the tool is designed |
+| 2.b | §13 | Maturity reason recorded as inference, `[Mahi-verify]` |
+| 3.a | §5 | Four verdicts, not three; `error` means our call failed |
+| 3.c, 9.a, B.4 | §5 | `schema_version` on `capabilities.json`; unknown → default read-only set |
+| 4.d, 10.b | §9 | **Deferred to v1.5:** GPS/location exposure via activity detail |
+| 7.a, A.1, A.2 | §5 | The probe's output has no consumer; the map and the UI become it |
+| 7.b, A.4 | — | Open v1.3 commitment: `garmin_auth_status` must report the live tool set |
+| 8.a, 8.b | §8 | Tests: map resolution incl. "no source"; vocabulary and schema at the writer |
+| 10.a | §5/§6 | Trends come from range endpoints, one request; 5c probes them |
+| 10.c | §7a | Knowingly stale for one version; recorded, not forgotten |
+| A.5, B.1 | §6 | **Deferred to v1.5:** cache keys on payload + map version, not metric |
+| B.2 | §5 | A regressed verdict keeps the previous verdict's date |

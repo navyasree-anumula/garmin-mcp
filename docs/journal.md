@@ -1066,34 +1066,309 @@ Sleep's series hold roughly 1,700 elements across ten lists (`sleepMovement` 701
 Stress carries 480 samples, respiration 720. Returning any of that raw is exactly the
 context-window destruction §5's hard cap exists to prevent.
 
+## 2026-10-11 (phase 5b results) — Five of eight had data, and one of the five was lying
+
+Six weeks after the 5a run. `--explain` against the eight unresolved endpoints, one date
+(`--days 2`, 2026-10-09), eight requests. Schema only.
+
+The gap matters to the reading: the cached tokens had aged out and needed a fresh `login`,
+which took a 429 on both mobile paths before a fallback succeeded. The login path is
+IP-rate-limited; the data path was not, and the probe ran clean.
+
+### `hrv` and `resting_hr` work on their own endpoints. The 5a conclusion was wrong.
+
+`get_hrv_data` returned 320 populated fields — `hrvSummary.lastNightAvg`, `weeklyAvg`,
+`lastNight5MinHigh`, `baseline.{lowUpper,balancedLow,balancedUpper,markerValue}`, `status`,
+`feedbackPhrase`, plus `hrvReadings: list(102)` of `{hrvValue, readingTimeGMT,
+readingTimeLocal}`. `get_rhr_day` returned the reading at
+`allMetrics.metricsMap.WELLNESS_RESTING_HEART_RATE[0].value`.
+
+**5a said to source both from the sleep payload** "because that is where this account's data
+measurably is". That instruction is now withdrawn: a 24-field summary beats mining the same
+number out of sleep's 4589, and `lastNightAvg` is already the scalar the tool wants.
+
+### The third category: empty can mean *not yet established*
+
+HRV status needs roughly three weeks of consistent overnight wear before Garmin computes a
+baseline. August-empty and October-populated is almost certainly that, not a device limit.
+
+So an empty response has three meanings, not two: the watch was not worn, the device cannot
+produce it, **or the metric has not matured yet.** A single probe run cannot tell them apart.
+`endurance_score` and `hill_score` are the same shape of answer — full envelopes,
+`enduranceScoreDTO: null`, `hillScoreDTOList: list(0)`, both accumulation-based. `max_metrics`
+returned `list(0)`; VO2 max needs a qualifying activity, and `training_readiness` reporting
+`acuteLoad` says there is activity but nothing qualifying.
+
+**None of the three should be cut.** The tool must distinguish "endpoint answers, nothing
+earned yet" from "unsupported", and `capabilities.json` verdicts have a shelf life its
+current design does not acknowledge.
+
+### `spo2` read HAS DATA with nothing in it, and the count was our bug
+
+Verdict `HAS DATA`, 8 populated. Every reading was null — `averageSpO2`, `lowestSpO2`,
+`avgSleepSpO2`, `spO2SingleValues`, `continuousReadingDTOList`, all of them. Reproduced
+locally against `count_populated` from the pasted shape alone:
+
+    count today      : 8
+    counted keys     : sleepStartTimestampGMT, sleepEndTimestampGMT,
+                       sleepStartTimestampLocal, sleepEndTimestampLocal,
+                       tomorrowSleepStartTimestampGMT, tomorrowSleepEndTimestampGMT,
+                       tomorrowSleepStartTimestampLocal, tomorrowSleepEndTimestampLocal
+
+All eight are window timestamps. `_IGNORED_KEYS` named `starttimestampgmt` and
+`endtimestampgmt` as literal strings, so every prefixed sibling walked past it. A full probe
+run today would have written `spo2: has_data` into `capabilities.json`, and a tool would have
+been built for a metric this watch never measures.
+
+This is the 5a sleep false negative pointing the other way, and it is worse: the sleep
+disagreement was visible because the count was recorded beside the verdict, and nothing about
+`spo2` looked wrong at all.
+
+**Fixed by suffix, not by name** — any key ending `timestampgmt` or `timestamplocal` is
+envelope metadata. A per-reading time like `readingTimeGMT` inside `hrvReadings` does not
+match, and there is a test pinning that it still counts.
+
+### Two more constraints on the extractor
+
+**`resting_hr`'s date is not a date.** Alone among the `DATE` candidates it answers with a
+statistics window — `statisticsStartDate`/`statisticsEndDate`, and the reading nested under
+`allMetrics.metricsMap` carrying its own `calendarDate`. The value must be matched against
+the requested date rather than read from `[0]`. It is also a `float` here and an `int` in the
+sleep payload: two sources, two types, and §5 forces the tool to name which it used.
+
+**`training_readiness` root is `list(4)`** — four snapshots for one day, selected by
+`timestamp`, not by index. Same trap as the positional arrays. It carries `hrvFactorPercent`
+and `hrvWeeklyAverage`, making it a third HRV source after the endpoint and the sleep payload.
+
+**`floors` confirms the descriptor rule**: `floorsValueDescriptorDTOList: list(4)` beside
+`floorValuesArray: list(96)` of width 4, and `floorValuesArray[0][0]` is `str` while floor
+counts are numeric — mixed-type columns, 96 fifteen-minute buckets, 384 values raw.
+
+### Skin temperature cannot be probed, so the slot went elsewhere
+
+5a's next-step said to add skin temperature to `CANDIDATES`. It cannot be done:
+`garminconnect 0.3.11` exposes no skin-temperature endpoint across all 149 public methods. It
+exists only inside the sleep payload (`avgSkinTempDeviationC/F`, `skinTempDataExists`) and is
+a sleep-derived field, not a candidate.
+
+The same diff found **79 `get_*` methods `CANDIDATES` never asked for.** Six were added:
+`heart_rates` (daily HR — no candidate existed at all, while `resting_hr` had two sources),
+`hydration`, `body_battery_events`, `morning_readiness`, `heart_rate_zones`, `stats_and_body`.
+Nutrition, golf, badges and gear are out of a health probe's scope. The menstrual and
+pregnancy endpoints are left alone deliberately — §8 is about not putting health data where it
+does not belong, and their schema is not worth printing to satisfy curiosity.
+
+A new test asserts every candidate's method exists on `Garmin`, which would have caught the
+skin-temperature dead end without a session spent on it.
+
+### Then two more requests, and VO2 max turned out not to be missing either
+
+`--explain training_status,race_predictions`. Both answer. This is the 5a pattern for the
+third time in two sessions, and it is now the default suspicion rather than a surprise.
+
+**VO2 max is present.** `get_max_metrics` answers a single date with `list(0)`, and earlier
+today that was read as "not earned yet — needs a qualifying activity". Wrong.
+`training_status` carries `mostRecentVO2Max.generic.vo2MaxValue: float` and
+`vo2MaxPreciseValue: float`, plus `maxMetCategory: int`.
+
+**`race_predictions` confirms it independently** — `time5K`, `time10K`, `timeHalfMarathon`,
+`timeMarathon`, all `int`, all populated. Those are derived *from* VO2 max, so they could not
+exist without it. **And this is the first time that endpoint has ever returned anything:** the
+5a `RANGE` -> `NONE` reclassification is proven, a month after the `ValueError` was diagnosed
+as ours.
+
+`max_metrics_range` was added as a candidate on the strength of this. If the range variant
+answers where the single date does not, `max_metrics` is a call-shape bug of the same family
+as `race_predictions` rather than an absent metric. One request settles it.
+
+### `training_status` is rich, and shaped unlike anything probed so far
+
+61 populated fields, pre-fix count. Three nested DTOs — `mostRecentVO2Max`,
+`mostRecentTrainingLoadBalance`, `mostRecentTrainingStatus` — and two new classes of trap.
+
+**Dynamic dict keys, keyed by device id.** The status lives at
+
+    mostRecentTrainingStatus.latestTrainingStatusData.3612870660.trainingStatus
+    mostRecentTrainingLoadBalance.metricsTrainingLoadBalanceDTOMap.3612870660.monthlyLoadAerobicLow
+
+`3612870660` is a device id, not a field name. The extractor must walk the map and select on
+`primaryTrainingDevice: bool`, which both DTOs carry. Hardcoding the key would work on this
+account and no other, and would break on this one the day the watch is replaced. The
+positional-array rule has a sibling: **never hardcode a map key either.**
+
+**`trainingStatus` is an `int`, not a label.** So are `fitnessTrend`, `maxMetCategory` and
+`recordedDevices[].category`. The human-readable text is in a separate field —
+`trainingStatusFeedbackPhrase: str`, `trainingBalanceFeedbackPhrase: str`,
+`acwrStatusFeedback: str`. We have no mapping from those codes to meanings, and inventing one
+would be guessing at Garmin's enum. **The tool should return the phrase and treat the code as
+opaque** unless a mapping can be sourced.
+
+**5a's units claim needs narrowing.** It recorded that units are readable off the field names
+(`…Seconds`, `…Mins`, `…InMilliseconds`). `time5K: int` is a counterexample: a race prediction
+in unnamed units, almost certainly seconds but not stated. Likewise `timestamp: int` beside
+the `…TimestampGMT` strings elsewhere — one payload, two time encodings. §5 needs a per-field
+decision for these, not a naming convention.
+
+Also: `mostRecentVO2Max.cycling: null` — running only. `fitnessAge` is null inside this DTO
+while the `fitness_age` endpoint returned 11 fields in August, so that scalar has a source and
+it is not this one. `recordedDevices[].imageURL: str` is a CDN link; nothing should pass it
+through to a response.
+
+### The sourcing map, which is the real output of 5a and 5b
+
+Where each metric actually lives, after eleven requests across two sessions:
+
+| Metric | Source | Not from |
+|---|---|---|
+| HRV | `get_hrv_data` — `hrvSummary.lastNightAvg` | sleep payload (5a said this; withdrawn) |
+| Resting HR | `get_rhr_day`, matched on nested `calendarDate` | sleep payload's `restingHeartRate` |
+| VO2 max | `training_status` — `mostRecentVO2Max.generic.vo2MaxValue` | `get_max_metrics` (`list(0)`) |
+| Race predictions | `get_race_predictions`, no arguments | — |
+| Training status | `training_status`, device-keyed, phrase not code | — |
+| Skin temperature | sleep payload — `avgSkinTempDeviationC/F` | no endpoint exists |
+| Respiration, body battery | own endpoints, also inside sleep | — |
+| SpO2 | nowhere — this watch measures none | `get_spo2_data` (envelope only) |
+| Endurance, hill score | nowhere yet — not accumulated | — |
+
+Four of nine rows say the obvious endpoint is the wrong one. That ratio is the finding.
+
+Tests: 189 -> 192. Candidates: 26 -> 33.
+
+## 2026-10-11 (SCOPE v1.4) — A verdict is a measurement with a date on it
+
+### Why this is a partial amendment
+
+v1.4 covers §1 and §5 only — the sections that block phase 5c. §7's client-wiring corrections
+(Connectors not Developer, the per-user Docker path) and §7a's bind-address correction are
+still owed and ride in v1.5, which gets its own stress-test pass. Splitting was chosen over
+one large version so the end-of-session review stays inside the time a review can actually be
+given. The cost of the split is recorded below, not hidden.
+
+### Three findings changed the plan, not just its wording
+
+The ten dimensions ran against real code and two live `--explain` runs. Three came back with
+something the draft had wrong:
+
+- **The verdict vocabulary is four values, not three.** The draft proposed
+  `has_data`/`no_data`/`not_matured`. The code already has four (`source/probe.py:115-118`),
+  and `ERROR` is not redundant: `race_predictions` sat on it for a month because of a
+  call-shape bug of *ours*. A three-valued scheme would have filed our own bug under "Garmin
+  has no data" — the exact mistake 5a already made once.
+- **A re-probe would have erased the evidence the amendment depends on.** Verdicts are
+  overwritten in place, so a metric that read `has_data` in August and `no_data` today loses
+  any record of having worked — and that record is the whole signal behind `not_matured`. A
+  regressed verdict now keeps the previous verdict's date. This came out of pass B, walking
+  the probe lifecycle; the ten dimensions did not surface it.
+- **Nothing reads `capabilities.json`.** Grepped `garmin_mcp/`: a writer and a comment
+  (`cli.py:263`, `cli.py:318`), no reader. `write_capabilities`'s docstring claims the web UI
+  reads it to build the tool-selection list, and the web UI does not. One producer, zero
+  consumers — so changing the vocabulary is free today and expensive after 5c, which is the
+  argument for doing v1.4 now. It is also why August's wrong verdicts never did any damage.
+
+The dating requirement turned out to be **already satisfied** — `generated_utc`,
+`dates_probed` and per-endpoint `observed_on` are all written. Only the reader is missing,
+which narrows item 3 of the previous resume list from "add dating" to "add a consumer".
+
+### What §1 now says the thing is for
+
+**Planning and adjusting running training**, not "exposing Garmin data" in the abstract. That
+sets the §5 priority order — load, readiness and per-run detail outrank weight and body
+composition — and it makes a cut metric a cost rather than a tidy answer. With it comes a new
+non-goal: **no medical or clinical interpretation.** The framing invites "is this HRV a
+problem" about special-category health data that looks clinical enough to answer; the server
+reports measurements, their units, and Garmin's own phrasing where Garmin gives one.
+
+### Deferred on purpose, recorded so the split cannot lose it
+
+- **Per-run detail carries GPS.** `get_activity_details` returns polylines; a run history is a
+  precise record of where Mahi lives and when he is out. §9 treats exposure as credentials and
+  health data and says nothing about location, and v1.4 is the first amendment that makes
+  activity detail a priority. Owed to §9 in v1.5.
+- **The §6 cache must key on the fetched payload plus the map version**, not on metric+date, or
+  two metrics sourced from one payload fetch it twice and a re-pointed map keeps serving the
+  old source's answer.
+
+### §7a is knowingly wrong for one more version
+
+§7a still says bind `127.0.0.1`, never `0.0.0.0`, while the shipped container does the
+opposite for a reason understood since phase 4a. Accepted as the price of the split and
+written here so it is not rediscovered as a bug.
+
+### One inference, flagged rather than absorbed
+
+"HRV status needs ~3 weeks of wear" is domain knowledge, not something measured. The
+August→October change is consistent with it, but firmware, wear pattern or an account setting
+fit the same evidence. Marked `[Mahi-verify]` in §13. The amendment does not depend on the
+reason being right — only on verdicts changing over time, which is measured.
+
+### Also
+
+Fixed a cross-reference in §13.8 that pointed the state sub-analysis at §13.11 (Risks) instead
+of §13.12 (the pass A matrix). Noted for the next session: `pytest` lives at
+`.venv/bin/pytest` — neither `python` nor `python3` has it on this box.
+
+Tests: 192 -> 192 (documentation-only commit).
+
 ## RESUME HERE
 
-State: `main` = `76cb014`. 189 tests. Two branches pushed and **unmerged**, no open PRs:
+State: `main` = `9d7caae`. **192 tests.** Branch **`fix/probe-envelope-timestamps`** is two
+commits ahead and pushed: `c178318` (the envelope-timestamp suffix rule, seven new candidates
+26 -> 33, three tests) and `249799f` (SCOPE v1.4). **PR not yet opened** — both commits are
+sitting on the remote branch awaiting one.
 
-- `docs/client-wiring-findings` — journal + README only. The Connectors-not-Developer
-  finding and "redo the tray restart first".
-- `feature/probe-explain` — `--explain`, the `race_predictions` fix, and this entry.
-
-Laptop is fully working: tokens on the `garmin-tokens` volume, backed up at
-`C:\garmin-backup`, Claude Desktop connected and answering `garmin_auth_status` live. The
-source-mount debug loop is set up at `$HOME\pe\garmin-mcp-feature-probe-explain`.
+Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`. The cached
+tokens had aged out after six weeks and were re-bootstrapped on 2026-10-11; **both mobile
+login paths took a 429 and a fallback carried it**, so the login path is IP-rate-limited and a
+`login` should not be run casually. The data path was unaffected across eleven requests.
 
 **Next, in order:**
 
-1. **Open PRs for both branches and merge.** Neither is in `main`.
-2. **`--explain` the remaining unresolved eight** — `spo2`, `training_readiness`,
-   `max_metrics`, `endurance_score`, `hill_score`, `floors`, and re-check `hrv` and
-   `resting_hr` now that we know where they actually live. ~8 requests. Three of eight
-   turned out to be findable elsewhere; the rest deserve the same question before any of
-   them is cut.
-3. **Add skin temperature to `CANDIDATES`**, and consider what else the list never thought
-   to ask for.
-4. **Then `garmin_health(metric, date)`** — named scalars with explicit units, never raw
-   arrays. Sourcing `hrv` and `resting_hr` from the sleep endpoint rather than their own,
-   because that is where this account's data measurably is. Descriptor-driven decoding for
-   any positional array. §6's short-TTL cache ships alongside it, as its first real consumer.
+1. **`--explain max_metrics_range`, and the six new candidates** — `heart_rates`, `hydration`,
+   `body_battery_events`, `morning_readiness`, `heart_rate_zones`, `stats_and_body`. Seven
+   requests. `max_metrics_range` is the one that settles a question rather than opening one:
+   if the range variant answers where the single date returns `list(0)`, that endpoint is a
+   call-shape bug of the `race_predictions` family. v1.4's finding 10.a adds a reason to run
+   it: the range endpoints are how trends get answered in one request instead of 28.
 
-**Open items unchanged:** SCOPE §7 (Connectors-not-Developer, per-user Docker path) and §7a
-(the bind-address correction) both need amending and both owe the 10-dimension pass — one
-session, together. Phase 4b tool selection and `tools.json` still unstarted. Write/workout
-tools still need structure validation before anything is uploaded to a real calendar.
+2. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
+   `schema_version`. `capabilities.json` currently holds August verdicts, and two of them are
+   wrong in opposite directions — `sleep` understated, `spo2` a false positive the old counter
+   would have written as `has_data`. 33 candidates with empty ones retried across three dates;
+   budget for it in one sitting. An aborted run must report what it got to, never look like a
+   clean run that found less.
+
+3. **Give `capabilities.json` a consumer.** v1.4 specifies the four-value vocabulary, the
+   `schema_version`, an unknown version falling back to the default read-only tool set, and a
+   regressed verdict keeping the previous date. None of it is implemented, and nothing reads
+   the file at all. The metric→source map and the tool-selection UI are the intended readers.
+
+4. **Then `garmin_health(metric, date)`**, built on the sourcing map in the 5b entry, not on
+   the obvious endpoint names. Four of nine metrics come from somewhere other than their
+   own endpoint. Hard requirements collected so far:
+   - descriptor-driven decoding for positional arrays (`floorValuesArray` is 96x4 with
+     mixed-type columns; `bodyBatteryValuesArray` is width 4 in `stress` and width 2 in
+     `body_battery`)
+   - map keys selected by `primaryTrainingDevice`, never hardcoded — `training_status` keys
+     its DTOs by device id
+   - return `…FeedbackPhrase`, treat `trainingStatus`/`fitnessTrend`/`maxMetCategory` as
+     opaque codes until a mapping is sourced
+   - units decided per field: `time5K: int` and `timestamp: int` are unnamed, so 5a's
+     "units are readable off the field names" does not generalise
+   - `resting_hr` matched against the nested `calendarDate`, because its `DATE` argument
+     returns a statistics window; "no data for this date" rather than the nearest value
+   - one winning source per metric, fallback explicit, and the response names the source it
+     used — resting HR is `float` from `get_rhr_day` and `int` from the sleep payload
+   - the accumulation flag lives in the map beside the source, or `not_matured` can never be
+     emitted
+   - never return raw series: sleep alone carries ~1,700 elements across ten lists
+   - §6's short-TTL cache ships alongside it, as its first real consumer, keyed on the
+     fetched payload plus the map version
+
+**Open items:** **SCOPE v1.5** owes §7 (Connectors-not-Developer, per-user Docker path), §7a
+(the bind-address correction, knowingly stale meanwhile), §9 (location exposure via activity
+detail) and §6 (the cache key) — one session, with its own ten dimensions plus passes A and B.
+An **open v1.3 commitment** is still unmet: §5 requires `garmin_auth_status` to report the tool
+set actually in force, and `server.py:63-83` returns token state and `server_version` only.
+Phase 4b tool selection and `tools.json` still unstarted. Write/workout tools still need
+structure validation before anything is uploaded to a real calendar. The "coach" wording in
+§13's prose is looser than §1's purpose line; left as-is by decision, not oversight.
