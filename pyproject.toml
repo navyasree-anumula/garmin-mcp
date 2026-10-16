@@ -6,7 +6,13 @@ requires-python = ">=3.12"
 dependencies = [
     # Pinned exactly: FastMCP was removed in mcp 2.x and the entry class renamed,
     # so a minor drift here is not a cosmetic change.
-    "mcp==2.1.1",
+    #
+    # 2.1.1 -> 2.2.0 clears CVE-2026-59951 (GHSA-84m7-p3x7-pcfv): stateful
+    # Streamable HTTP servers retain session entries with no idle expiry and no
+    # aggregate cap, so a reachable endpoint grows memory until restart. 2.2.0 is
+    # the minimum fix version rather than the latest (2.3.0) precisely because of
+    # the line above -- this is the one pin this project treats as fragile.
+    "mcp==2.2.0",
     # Floor-and-ceiling, never '==' (docs/SCOPE.md §2). The [workout] extra is
     # required: without it the workout builder models are silently absent.
     "garminconnect[workout]>=0.3.11,<0.4",
