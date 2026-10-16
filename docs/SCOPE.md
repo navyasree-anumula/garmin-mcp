@@ -1,16 +1,23 @@
 # garmin-mcp — Scope
 
 **Status:** pass 1 shipped and proven live on the target laptop. Pass 2 in progress.
-**Version:** 1.4 · 2026-10-11
+**Version:** 1.5 · 2026-10-16
 **Ratification:** this document is the artifact to approve before any code is written.
 **v1.3** stress-tested across all 10 dimensions of `sop/stress-test-10-dimensions.md`;
 audit trail in §12. **v1.4** walked the same ten plus adversarial passes A and B; §13.
+**v1.5** the same ten plus A and B; §14.
 
-**v1.4 is a partial amendment, deliberately.** It covers §1 and §5 — the sections that block
-phase 5c. §7's client-wiring corrections (Connectors not Developer, the per-user Docker path)
-and §7a's bind-address correction are still owed and ride in **v1.5**, which has its own
-stress-test pass. Splitting was chosen over one large version so that the end-of-session
-review stays inside the time a review can actually be given.
+**v1.5 settles who does the thinking.** It covers the division of labour between the server
+and the conversation, where the athlete's own context lives, what ships of §6's cache, and the
+shape of the write path — the four things that block phase 5 and everything after it. Sections
+touched: the decision log, §1, §5, §6, §8, §9, §11.
+
+**The items v1.4 said would ride in v1.5 are carried again, to v1.6** — §7's client-wiring
+corrections (Connectors not Developer, the per-user Docker path), §7a's bind-address
+correction, and §9's GPS/location exposure via activity detail. That is a scope decision, not
+an oversight: they are deployment and privacy corrections with no bearing on the write path,
+and bundling them would push one review past the time a review can actually be given. §14.1
+records it. §7a's prose stays knowingly wrong for a second version.
 
 ---
 
@@ -34,6 +41,12 @@ review stays inside the time a review can actually be given.
 | What it is for | **Planning and adjusting running training** | v1.4 |
 | Capability verdicts | **Dated, three-valued, reversible** — never a one-time gate | v1.4 |
 | Unit of exposure | **The metric, not the endpoint** | v1.4 |
+| Coaching judgement | **In the conversation, never in the server** | v1.5 |
+| Athlete context — feel, time, injuries, cycle | **Claude Desktop chat only. No server-side store** | v1.5 |
+| Plan continuity between sessions | **Garmin's own calendar is the store** | v1.5 |
+| Cycle data | **Opt-in, read-only, never swept by the probe** | v1.5 |
+| §6 cache | **The seam now, the store with the second consumer** | v1.5 |
+| A write reaches Garmin | **Only after a preview the human approved** | v1.5 |
 
 ---
 
@@ -58,6 +71,19 @@ and race predictions, threshold and zones, and what happened inside each run. Sl
 resting HR and stress are in scope as *inputs to training decisions*, which is also the limit
 of how far they are interpreted — see the non-goal below.
 
+**Who does the thinking, stated at v1.5.** The server supplies **evidence** and executes
+**validated writes**. The coaching judgement happens in the conversation. This is not a
+modesty clause; it follows from where the inputs are. A decision about tomorrow's session
+needs how the legs feel, how much time there is, what hurts, and where in a cycle the day
+falls — and none of those four exist in any Garmin endpoint. They exist because they were
+typed into a chat. A recommender inside the server would have to either ignore all four or
+invent a channel to receive them, while the model already has them in front of it.
+
+So the loop is: the agent reads measurements → the human adds the context only they have →
+they argue it out → the agent composes a plan and shows it → the human approves → it is
+written to Garmin. The server is authoritative about what was measured and about what a
+workout structure may contain. It has no opinion about what anyone should run.
+
 **Non-goals, explicitly:**
 
 - Multi-tenancy. There is one account and the design assumes it everywhere.
@@ -71,6 +97,22 @@ of how far they are interpreted — see the non-goal below.
   measurements, the units they are in, and Garmin's own phrasing where Garmin provides it. It
   does not diagnose, and no tool description should imply it can. This is a boundary worth
   writing down before a tool is built that quietly crosses it.
+- **A recommendation engine (v1.5).** No training science in Python. No load-ratio threshold
+  that decides a week is too hard, no percentage-of-threshold pace table, no periodisation
+  template. Three reasons, each one of this document's own rules pointed at a new target: such
+  a constant cannot be falsified by anything Garmin returns, so no test can do more than
+  restate it; §5 already refuses to interpret `trainingStatus` because the `int` has no
+  sourced meaning, and an invented load threshold is that same interpretation in a field we
+  happen to have opinions about; and it would ship inside an image, so revising the advice
+  would mean a commit, a CI run and a `docker pull`. Arithmetic Garmin's own fields define —
+  dividing acute load by chronic load — is not science and stays. If a threshold ever must
+  live in code, it lives in data beside the metric map, with a cited source and a version.
+- **A store of the athlete's own context (v1.5).** Feel, available time, injuries and cycle
+  phase are not persisted by this server. They live in the Claude Desktop conversation. The
+  *plan* persists, on Garmin's calendar, which is also where next week reads it back from — so
+  what is lost between sessions is the subjective framing, not the work. The alternative was a
+  file of injury and cycle history sitting on the same volume as the credential, inside the
+  one backup copy that has none of that file's protections (§9). That trade was declined.
 
 This is a personal tool. It has no relationship to the WhatsScale "AI business assistant
 on automation data" vision and should never be mistaken for product work. The one mild
@@ -412,6 +454,87 @@ These are requirements on our layer, not things the library gives us:
   `raise|validate|assert`, no hits. A repeat group with no steps, or an inverted target
   range, uploads cleanly and produces a broken workout on the watch. That check is ours.
 
+### Evidence in, workouts out (v1.5)
+
+§1 says the server supplies evidence and the conversation supplies judgement. This section is
+what that means for the tool surface, end to end.
+
+#### The read sweep — how the agent gets the numbers
+
+A session opens with four tool calls, not forty. They cost about eight Garmin requests, which
+is roughly twelve seconds at §6's budget with the burst absorbed:
+
+| Call | Garmin requests | Why this shape |
+|---|---|---|
+| `garmin_training(metrics=[status, load_ratio, readiness, vo2_max, lactate_threshold], date=today)` | 2–3, coalesced | three metrics live in one `get_training_status` payload; the map dedupes the sources before any request is made |
+| `garmin_health(metrics=[sleep, hrv, resting_hr, body_battery], range=last_7_days)` | ~4, range endpoints | a trend in one request per metric, never 28 day-calls |
+| `garmin_activities(window=last_14_days)` | 1 | what was actually run, against what was prescribed |
+| `garmin_workouts(action=scheduled, window=next_7_days)` | 1–2 | what is already on the calendar |
+
+Three requirements follow, and none of them is cosmetic:
+
+- **Tools take a list of metrics, not one.** A singular `metric` argument turns the sweep into
+  eight tool calls; each round trip costs the agent context and the human latency. This is the
+  concrete form of §5's "12–18 parameterized tools, not 110 narrow ones".
+- **The `metrics` enum is the agent's vocabulary.** It is how the model learns what exists, so
+  each value carries a one-line meaning and its unit in the tool schema. The enum is built from
+  the metric map, filtered by `tools.json` — so a metric this watch cannot answer is not
+  offerable, and `capabilities.json` finally has a consumer (§13's finding 7.a).
+- **Every value self-describes.** Value, unit, source endpoint, date measured, and — when
+  there is nothing — which of `no_data` / `not_matured` / `unsupported` applies. Without that
+  last field the model cannot tell "you did not wear it" from "your watch cannot" from "three
+  more weeks of wear needed", and it will state one of them confidently.
+
+**Cycle data is opt-in and read-only.** `get_menstrual_calendar_data(startdate, enddate)`
+exists, and the probe deliberately never calls it or its siblings (`source/probe.py`). That
+stands: it is never swept, never arrives unasked, and is offered only as a metric the operator
+has enabled. The opt-in governs *collection*, not containment — once requested it travels to
+the model provider exactly like every other metric, per §9.
+
+#### The write path — preview, approve, then write
+
+**A write is never the first act.** `garmin_workouts` has a `preview` action that composes and
+validates a session and returns the structure, and composes nothing against Garmin: zero
+requests, no budget, no 429. It is therefore also the first write-path behaviour that is
+testable without a network (§8).
+
+- **Approval carries the previewed structure.** The create action takes the exact structure the
+  preview returned, not a re-composition from the same arguments. Otherwise the human approves
+  one thing and a second composition is what lands — the same value recorded against a
+  different event.
+- **Create and schedule are one action, or an orphan is reported.** `upload_*` returns a
+  `workoutId`; `schedule_workout(workout_id, date)` is a second request. Abandon the
+  conversation between them and a template exists on Garmin that appears on no calendar — and
+  next week's session reads the *calendar*, so it will never see it. Either both happen or the
+  response says what was left behind.
+- **Re-prescribing updates in place.** `update_workout` replaces the whole workout via PUT,
+  keeps the id, and therefore keeps every calendar schedule pointing at it valid
+  (`garminconnect/__init__.py:3168`). So "week 3 Thursday threshold" prescribed twice resolves
+  to an update, matched by a naming convention checked against `get_workouts` — not a second
+  upload. Upload is for a name that does not exist yet; update is for one that does; the plan
+  says which, rather than leaving two producers of the same id able to disagree.
+- **The response returns both ids.** Undo needs the `scheduledWorkoutId`, which is not the
+  `workoutId` — `unschedule_workout` takes the former (`__init__.py:3471`). Without keeping it,
+  rolling back costs a month-scoped re-read first.
+- **Reading the calendar is month-scoped, not window-scoped.** `get_scheduled_workouts(year,
+  month)` takes a calendar month and converts to Garmin's 0-indexed month internally
+  (`__init__.py:3426`). "The next seven days" across a month boundary is **two** requests, and
+  a single call silently returns a partial week.
+- **A partial write reports what it got to.** A plan write that 429s halfway must never read
+  like a smaller plan that succeeded — the rule v1.4 already gave the probe, applied to writes.
+- **Nothing is pushed to a device by default.** `push_workout_to_device` creates a third copy
+  of a session, on hardware, which a later edit cannot reach. Scheduling is enough; the watch
+  syncs the calendar.
+- **Tool annotations are honest.** `ToolAnnotations` carries `read_only_hint`,
+  `destructive_hint`, `idempotent_hint` and `open_world_hint` (verified by import). Reads keep
+  the current `read_only_hint=True`; `preview` is read-only and idempotent; create and schedule
+  are neither read-only nor idempotent, and are **not** destructive, because
+  `delete_workout`/`unschedule_workout` stay available and §5's four permanent deletion
+  exclusions are untouched.
+- **Composition lives in `source/`.** The workout builders are `garminconnect.workout`, so a
+  `from garminconnect.workout import RunningWorkout` in `server.py` would break §11. The
+  composer sits beside the metric map, imports nothing from `client.py`, and makes no requests.
+
 ---
 
 ## §6 Account safety
@@ -445,6 +568,48 @@ inventing TTLs before a single data endpoint has been seen. It ships in phase 5 
 first real consumer, with TTLs derived from what the endpoints actually return. §6's
 placement rule is unaffected and still binding: the cache lives in `source/`, and no tool
 implements its own.
+
+**v1.5: the seam ships with `garmin_training`; the store does not.** v1.4 said the cache
+arrives "alongside its first real consumer", and `garmin_training` is that consumer. It
+arrives half-built on purpose, and the arithmetic is why:
+
+- **A single call does not need it.** `garmin_training` answering one question costs two or
+  three requests, and the burst is four — so the wait is zero. A cache saves nothing there.
+- **The amplification v1.4 worried about is not a cache problem.** Three training metrics
+  arriving in one `get_training_status` payload is solved by resolving all requested metrics
+  *first* and fetching each source once per call. That is per-call coalescing: ordinary code,
+  no TTL, nothing to invalidate. The cache's real job is repeat calls across turns and across
+  the two containers, which is a later and smaller problem.
+- **Honest TTLs are still unmeasured.** Today's `training_status` changes during the day;
+  yesterday's does not. Which fields move intraday is exactly what phase 5c measures, and
+  setting TTLs before it would be the invention v1.3 refused.
+
+**What the seam is:** one function in `source/`, the only caller of `_garmin_access` on the
+data path, which coalesces repeated sources within a call. Two constraints on it:
+
+- **It sits above `_garmin_access` (`source/client.py:52`), never inside it.** A future cache
+  hit must skip both the lock and the budget; a hit that still waits two seconds for a token
+  it does not need saves nothing and holds the cross-process lock while doing it.
+- **The `garmin_auth_status` exemption is enforced at the seam, not remembered.** That tool's
+  whole job is proving the tokens work *now*; it must be structurally incapable of a cached
+  answer.
+
+**When the store lands**, it keys on the fetched payload plus the map version, never on metric
+and date (v1.4's A.5 / B.1 — the key is now settled, the store is what moves). Two things are
+owed before it ships, and neither is owed today: the TTLs from 5c, and a decision this
+document has not made — **a payload cache is health data at rest.** `capabilities.json` holds
+no readings by design; a cache of fetched payloads is readings on the volume, beside the
+credential, inside the one backup copy with none of the file's protections. What may be
+stored, under what mode, excluded from which backup, and for how long is a §8/§9 question to
+answer when the store is built, not while it is being used.
+
+**Writing a plan is budget-shaped, and that changes its tool.** Twelve weeks at four sessions
+is roughly 48 uploads plus 48 schedules: about 96 requests, or three minutes of wall clock at
+one request per two seconds. The limiter will not complain — each individual `acquire` waits
+about two seconds against a 30-second timeout (`ratelimit.py:45-47`) — but no MCP client waits
+three minutes for a tool result. So a plan is written **a week at a time**, or by a deliberate
+CLI command in the shape of `probe`. Deciding this here rather than discovering it at the first
+twelve-week plan.
 
 **Concurrency: `source/lock.py`.** garminconnect rewrites the token file whenever it refreshes
 (`_run_request` refreshes inline at the start of any request), guarded only by a
@@ -598,6 +763,31 @@ they were written — never their contents.
   health data. Nothing else stands in the way, so `_configure_logging` uses `force=True`
   (`basicConfig` is a silent no-op when root already has handlers) and the level has a
   regression test.
+
+**Added at v1.5, for the write path and the seam:**
+
+- **Preview is the testable half of the write path.** Composition and structure validation are
+  pure functions over the metric map and the `create_*_step` builders — no network, no tokens,
+  no budget. So the first write behaviour to ship is also the first one with real unit tests,
+  and the cases to cover are the ones upstream accepts and should not: a repeat group with no
+  steps, an inverted target range, zero reps, a duplicated `stepOrder`, a target referencing a
+  zone this account does not have.
+- **Idempotency has a test.** The same prescribed session composed twice must resolve to an
+  update in place, not a second upload — asserted against a fake `get_workouts`, no live call.
+- **The seam has two tests.** One: two metrics sharing a source produce exactly one fetch, and a
+  repeated metric produces one. Two: nothing on the data path calls `_garmin_access` directly —
+  an AST check in the shape of `test_layering.py`, because a seam is a call-site discipline and
+  erodes the first time someone bypasses it.
+- **The month boundary has a test.** A seven-day calendar window spanning two months issues two
+  `get_scheduled_workouts` reads, not one.
+- **The supervised live cycle is unchanged and now has a precondition.** One hand-run create →
+  verify → delete on a throwaway workout, documented — and it runs only once the preview tests
+  are green, so the live request is spent confirming Garmin's acceptance rather than finding our
+  own bugs.
+- **One thing is explicitly untestable here.** Whether Claude Desktop retained the athlete
+  context between sessions is a property of a client this repo does not own. It is recorded as
+  an assumption (§14.3), not as a coverage gap, and the design's answer to it being false is
+  that the plan still lives on Garmin's calendar.
 - **Baseline: 0 tests.** This repo starts empty. That is the reference point for every
   later count. **Pass 1: 10. v1.3 phase 1: 26.**
 
@@ -611,6 +801,9 @@ they were written — never their contents.
 | Captcha lockout | Medium | Cannot log in | No workaround by design. Token backup, gentle rates, never retry into it |
 | Terms-of-service violation | Certain | Own account, own data, single user | **Accepted.** This is the mild end of the spectrum, but it is a real violation and is recorded as one, not rationalised away |
 | Agent writes a junk workout | Low | Bad workout on the watch | Structure validation (§5) + delete exclusions |
+| Agent writes a *structurally valid but wrong* workout (v1.5) | Medium | A week of misdirected training — reversible, but it may be run before anyone notices | **Accepted. It is the price of §1's division of labour**, named rather than mitigated away: validation cannot catch training sense, and by decision nothing in the server tries to. Reduced by preview-then-approve, by writing a week at a time instead of a block, and by `unschedule_workout` / `delete_workout` staying available |
+| Cycle data reaching the model provider (v1.5) | Certain *if asked for* | Special-category data becomes conversation content | **Accepted, and the opt-in is not containment.** Opt-in means never swept by the probe and never arriving unasked. Once requested it travels exactly like every other metric — see the row above on health data reaching the provider |
+| Athlete context lost between sessions (v1.5) | Medium | Injuries and constraints re-stated by hand each session | **Accepted deliberately.** The alternative was injury and cycle history at rest on the volume that holds the credential, inside the one backup copy with none of that file's protections. The *plan* survives on Garmin's calendar; only the subjective framing is re-typed |
 | Health-data **network** exposure | Near-zero | High if it were a public HTTP endpoint | Mitigated by §7 / §7a: loopback only, on demand |
 | Health data **reaching the model provider** | **Certain, by design** | The data you ask for becomes conversation content | **Accepted and stated plainly.** A model cannot reason over data it cannot see. Tool results travel to the provider exactly like pasted text. Nothing is fetched unless asked for — there is no sync, no background job. "Tokens stay on the laptop" is true; "nothing leaves the laptop" is false, and conflating them is the actual risk |
 | Password enters a browser | Certain once §7a ships | Password managers, autofill, extensions and devtools see the field | **Accepted for UX.** A real regression against `getpass`; CLI bootstrap retained as the tighter path (§4) |
@@ -656,7 +849,15 @@ Also settled by the same live run:
 All `garminconnect` imports are confined to `garmin_mcp/source/`. **Every adapter above it
 is a peer**: `server.py` (MCP tools) and `web/` (the credential and configuration UI, v1.3)
 both talk to `source/` and neither imports the library directly. A second adapter is exactly
-the pressure this rule exists to survive. There are no sister modules to be consistent with in a new
+the pressure this rule exists to survive.
+
+**The workout builders are part of the library (v1.5).** `garminconnect.workout` — the typed
+models, the `create_*_step` helpers — and `garminconnect.exercises`, which carries the ~2,550
+exercise taxonomy with `resolve()` and `find()`, are both inside the boundary. So workout
+composition belongs in `source/`, not in the tool layer: a
+`from garminconnect.workout import RunningWorkout` in `server.py` would be the first breach of
+this rule, and it would look entirely innocent. The composer sits beside the metric map, makes
+no requests, and returns a structure the tool layer passes through. There are no sister modules to be consistent with in a new
 repo, so "consistency" here means one piece of internal discipline: a future source swap —
 official API, a fork, a different library — touches exactly one package.
 
@@ -974,3 +1175,257 @@ Findings:
 | 10.c | §7a | Knowingly stale for one version; recorded, not forgotten |
 | A.5, B.1 | §6 | **Deferred to v1.5:** cache keys on payload + map version, not metric |
 | B.2 | §5 | A regressed verdict keeps the previous verdict's date |
+
+---
+
+## §14 v1.5 10-dimension stress-test absorption notes
+
+Walked against `sop/stress-test-10-dimensions.md`: all ten dimensions, then passes A and B.
+A and B are **not** skippable here — the amendment introduces new state (a composed plan, a
+workout template, a schedule) and a new consumer of existing state (the metric map, read by
+the write path).
+
+### §14.1 Scope of this amendment, and what is carried again
+
+No dimension was missed in v1.4, so there is no coverage gap to explain. What this subsection
+records instead is the **deferral**: v1.4's header promised §7, §7a and §9's location finding
+in v1.5, and v1.5 does not deliver them. They are deployment and privacy corrections with no
+bearing on who does the coaching or on the write path, and folding them in would push the
+review past the twenty minutes a review can honestly be given. They move to **v1.6**. §7a's
+bind-address prose is therefore knowingly wrong for a second consecutive version — recorded
+here so it is not rediscovered as a bug, exactly as v1.4's 10.c asked.
+
+### §14.2 #1 Edge cases — 5 findings, 4 actionable
+
+- **1.a:** `get_scheduled_workouts(year, month)` takes a **calendar month**, not a date window,
+  and converts to Garmin's 0-indexed month internally (`garminconnect/__init__.py:3426`). "The
+  next seven days" across a month boundary needs two requests; one call returns a partial week
+  and looks complete. — **ACTIONABLE §5.**
+- **1.b:** `unschedule_workout` takes the **`scheduledWorkoutId`**, not the `workoutId`
+  (`__init__.py:3471`). The id required to undo is not the id the create returns, so rollback
+  without keeping it costs a month-scoped read first. — **ACTIONABLE §5.**
+- **1.c:** a plan write interrupted by a 429 leaves some sessions scheduled and some not. A
+  partial write that reads like a smaller successful plan is the probe's finding 1.d in a new
+  place. — **ACTIONABLE §5.**
+- **1.d:** `schedule_workout` validates the date *format* only. Two workouts on one date, or a
+  date in the past, are accepted. The agent must not be the only guard. — **ACTIONABLE §5**:
+  the preview states every date, and the create refuses a date already occupied unless the
+  action is explicitly a replacement.
+- **1.e:** with no athlete-context store, the context is empty on the first turn of every
+  session. If any tool *requires* feel or time, the first call fails. — **✓ by design**: every
+  subjective input is an optional argument to `preview`, never a precondition of a read.
+
+### §14.3 #2 Unverified assumptions — 4 findings, 2 `[Mahi-verify]`
+
+- **2.a:** "Claude Desktop remembers the athlete context between sessions" is **assumed, not
+  verified.** Desktop memory and project instructions are client features this repo does not
+  own; they may be off, chat-scoped, or pruned. — **`[Mahi-verify]`.** The design's answer if
+  false is already in place: the plan persists on Garmin's calendar, so the loss is the
+  subjective framing, not the work. Nothing in this document should promise more than that.
+- **2.b:** "cycle data is in Garmin at all" is unverified. The endpoint exists; whether this
+  account logs anything is unmeasured, and deliberately so — the probe has never called it. —
+  **`[Mahi-verify]`**, and the metric stays opt-in regardless of the answer.
+- **2.c:** "`update_workout` keeps existing schedules valid" — **✓ VERIFIED**: it PUTs the whole
+  structure, forces `workoutId` in the body to match, and the id is preserved
+  (`__init__.py:3168`), so calendar entries pointing at it survive.
+- **2.d:** "upstream validates nothing on upload" — **✓ VERIFIED**: `upload_workout` checks only
+  that the payload is a dict or list (`__init__.py:3148`). Consistent with v1.4's §5 contract,
+  which grepped `workout.py` for `raise|validate|assert` and found none.
+
+### §14.4 #3 Actual code checks — 4 findings, 3 actionable
+
+- **3.a:** `ToolAnnotations` really does expose `read_only_hint`, `destructive_hint`,
+  `idempotent_hint` and `open_world_hint` (checked by importing `mcp.types`), and
+  `garmin_auth_status` currently sets the first two (`server.py:58`). So honest annotations on
+  write tools are available rather than aspirational. — **ACTIONABLE §5.**
+- **3.b:** `_garmin_access` (`source/client.py:52`) takes the cross-process lock and *then* the
+  request budget. A cache seam placed inside it would make a future hit wait for a token it
+  does not need, while holding the lock. The seam must sit **above** it. — **ACTIONABLE §6.**
+- **3.c:** limiter constants read, not assumed: `DEFAULT_RATE_PER_SEC = 0.5`,
+  `DEFAULT_BURST = 4.0`, `DEFAULT_TIMEOUT_S = 30.0` (`ratelimit.py:45-47`). Each `acquire` waits
+  about two seconds, well inside its own timeout — so the limiter will not fail a plan write;
+  the MCP client's patience is what fails it. — **ACTIONABLE §6.**
+- **3.d:** `garminconnect.exercises` ships `EXERCISES` (~2,550 entries), `BY_NAME`,
+  `CATEGORIES`, `resolve()` and `find()`. Full-body strength composition is a lookup, and this
+  project writes no exercise taxonomy of its own. — **✓ VERIFIED.**
+
+### §14.5 #4 Security — 4 findings, 1 actionable
+
+- **4.a:** declining the athlete-context store removes a class of exposure rather than
+  mitigating it: no special-category data at rest beyond what Garmin already holds, nothing new
+  beside the credential on `/data`, nothing new in the unprotected `C:\garmin-backup` copy. —
+  **✓ ALIGNED**, and it is the principal security argument for the decision.
+- **4.b:** the cycle opt-in governs collection, not containment. Once requested, the data
+  reaches the model provider like every other metric. — **ACTIONABLE §9**, so the opt-in is
+  never mistaken for a privacy boundary it does not provide.
+- **4.c:** the write path is a new authenticated mutation surface but introduces no new
+  credential, secret or scope — same bearer token, same boundary. Its residual risk is a wrong
+  workout, which §9 now carries explicitly with reversibility named. — **✓ ALIGNED.**
+- **4.d:** no new dependency: `garminconnect[workout]` is already required and already pinned in
+  `requirements.lock`, so `pip-audit`'s surface is unchanged. — **✓ VERIFIED.**
+
+### §14.6 #5 Vision alignment — 2 findings, 0 actionable
+
+- **5.a:** the decision closes v1.4's knowingly-open wording drift — §13's "coach" prose against
+  §1's purpose line. The coach is the conversation; the server is evidence. An open item is
+  retired rather than another added. — **✓ ALIGNED.**
+- **5.b:** it strengthens §1's medical non-goal. A server that returns measurements, units and
+  Garmin's own phrasing cannot diagnose; a server that returned "back off this week" would be
+  one short step from doing so. — **✓ ALIGNED.**
+
+### §14.7 #6 Architecture consistency — 4 findings, 2 actionable
+
+- **6.a:** the seam lives in `source/`, below the tool layer, and no tool grows TTL logic —
+  §6's placement rule honoured in its weakened form. — **✓ ALIGNED.**
+- **6.b:** `garminconnect.workout` and `.exercises` are inside the §11 boundary, so composition
+  cannot live in the tool layer. A `from garminconnect.workout import …` in `server.py` would be
+  this rule's first breach and would look harmless. — **ACTIONABLE §11.**
+- **6.c:** metric-plural tool signatures are the concrete form of §5's "parameterized, not
+  narrow" rule, not a new convention. — **✓ ALIGNED.**
+- **6.d:** `preview` must reach Garmin not at all — otherwise a dry run costs budget and can
+  429, and the safest action in the flow becomes a rate-limit risk. — **ACTIONABLE §5.**
+
+### §14.8 #7 Impact on other features — 3 findings, 2 actionable. State sub-analysis → Pass A
+
+- **7.a:** `garmin_auth_status` must never be cached (§6). Nothing changes today because no
+  store ships, but the exemption must be structural at the seam rather than remembered when the
+  store lands. — **ACTIONABLE §6.**
+- **7.b:** the open v1.3 commitment — `garmin_auth_status` reporting the tool set actually in
+  force — becomes more load-bearing, not less: with write tools in `tools.json`, "are writes
+  enabled right now" is a question the agent must be able to ask. — **ACTIONABLE §5**, still
+  open, now with a second reason.
+- **7.c:** a `tools.json` change still needs an MCP client restart, since clients cache the tool
+  list at session start. Adding write tools does not change that. — **(no action)** — covered by
+  §5's existing rule.
+- The #7 state sub-analysis is **triggered** (a workout's existence and its scheduled-ness are
+  new state) and is walked in Pass A below, per the SOP's own routing.
+
+### §14.9 #8 Test coverage — 5 findings, 4 actionable
+
+- **8.a:** `preview` is the first write-path behaviour that is unit-testable — pure composition
+  and validation, no network. The cases are the ones upstream accepts and should not: empty
+  repeat group, inverted target range, zero reps, duplicated `stepOrder`, a target naming a zone
+  this account lacks. — **ACTIONABLE §8.**
+- **8.b:** idempotency needs its own test: the same session composed twice resolves to an update
+  in place, not a second upload, against a fake `get_workouts`. — **ACTIONABLE §8.**
+- **8.c:** the seam needs two tests — one fetch for two metrics sharing a source, and an AST
+  check that nothing on the data path calls `_garmin_access` directly, in the shape of
+  `test_layering.py`. A call-site discipline with no test is a convention, and conventions
+  erode. — **ACTIONABLE §8.**
+- **8.d:** the month boundary (1.a) needs a test: a seven-day window across two months issues
+  two reads. — **ACTIONABLE §8.**
+- **8.e:** whether Desktop retained the athlete context is untestable from this repo. Recorded as
+  an assumption (2.a), not as a gap, so it is not mistaken for missing coverage. — **✓
+  documented.**
+
+### §14.10 #9 Deployment & rollback — 3 findings, 1 actionable
+
+- **9.a:** no new file on the volume, no migration, no new env var. Rollback remains an image tag
+  change. — **✓ VERIFIED.**
+- **9.b:** the write path's rollback is **data, not code** — a plan already on the calendar
+  survives an image rollback, so undoing it means `unschedule_workout` then `delete_workout`,
+  which needs both ids from 1.b. — **ACTIONABLE §5.**
+- **9.c:** an older image meeting state written by a newer one: the only new persisted state is
+  in Garmin's own calendar, in Garmin's own format, so there is no version skew to survive. The
+  opposite of `capabilities.json`'s 9.a problem, and for the same reason — we are not the
+  schema's owner here. — **✓ VERIFIED.**
+
+### §14.11 #10 Risks — 4 findings, 3 actionable
+
+- **10.a:** a plan lands on a real calendar and, via sync, a real watch. Blast radius is a week
+  of misdirected training, reversible but possibly run before noticed. — **ACTIONABLE §9**, new
+  row, mitigated by preview-then-approve and week-at-a-time writes.
+- **10.b:** the agent becomes the only guard on training sense. A structurally valid session can
+  still be a stupid one — 10×1 km at VO2max pace passes every check this server will ever have.
+  By decision nothing in the server tries to catch it. — **ACTIONABLE §9**, stated as the price
+  of §1 rather than as an oversight.
+- **10.c:** plan-write wall clock (~190 s for twelve weeks) exceeds any MCP client's patience,
+  so the tool shape must be a week at a time or a CLI command. — **ACTIONABLE §6.**
+- **10.d:** carrying §7, §7a and §9's location finding a second time leaves shipped behaviour
+  and documented behaviour diverging for another version. — **Accepted**, recorded in §14.1 and
+  the journal.
+
+### §14.12 Pass A — states, producers and consumers (matrix + 6 findings)
+
+Surfaces, as the checklist adapts to this repo: the **MCP tool layer** (`server.py`), the
+**`source/` layer**, **Garmin** as the remote system of record, **disk** (`/data`), and **the
+conversation** — which is a consumer, and in this amendment the most important one.
+
+| State | Producer(s) | MCP tool layer | `source/` | Garmin | Disk | Conversation |
+|---|---|---|---|---|---|---|
+| Previewed plan (composed, unwritten) | `preview` | returns it | composes it | — | **not persisted** | reads and approves it |
+| `workoutId` (template) | `upload_*` **and** `update_workout` | returns it | calls both | stores it | — | sees the name, not the id |
+| Scheduled-ness (`scheduledWorkoutId` + date) | `schedule_workout` | returns it | calls it | stores it, syncs to watch | — | sees the dates |
+| Athlete context (feel, time, injury, cycle) | the human, in chat | **no surface** | **no surface** | — | **no surface** | the only holder |
+| Metric values in flight | the seam | returns them | fetches, coalesces | serves them | **no store (v1.5)** | reasons over them |
+| Exposure set (`tools.json`) | the web UI | reads at startup | — | — | `/data` | claimed via `garmin_auth_status`, **absent** |
+
+- **A.1:** the previewed plan is **persisted nowhere**, and the create action could recompose
+  from the same arguments instead of taking what was shown. Then the human approves one
+  structure and a second one lands — the right value against the wrong event. — **ACTIONABLE
+  §5**: approval carries the previewed structure itself.
+- **A.2:** `workoutId` has **two producers that can disagree** — `upload_*` mints a new id,
+  `update_workout` reuses one — and nothing said which wins for a re-prescription. —
+  **ACTIONABLE §5**: name match ⇒ update in place; no match ⇒ upload.
+- **A.3:** `scheduledWorkoutId` is **consumed by the only undo path and not kept by the
+  producer**. A mechanism whose input never leaves the call that produced it is not a mechanism.
+  — **ACTIONABLE §5** (with 1.b, 9.b).
+- **A.4:** the athlete context has **no producer, consumer or store anywhere in this system** —
+  its row is empty on every surface but one. That is the shape pass A exists to flag, and here
+  it is the intended design, so it must be written down as a **non-mechanism**: no tool may
+  require it, and no tool or description may imply the server remembers it. — **ACTIONABLE
+  §1/§5.**
+- **A.5:** the seam is one producer with zero consumers — structurally the same shape as
+  `capabilities.json`'s problem. Accepted knowingly, because a seam is a call-site discipline
+  rather than stored state, but it therefore depends on a test to exist at all. — **ACTIONABLE
+  §8** (8.c).
+- **A.6:** `tools.json` will now carry write tools, and its claimed consumer
+  (`garmin_auth_status` reporting the live set) still does not exist. — duplicate of 7.b, same
+  disposition.
+
+### §14.13 Pass B — the lifecycles (5 findings)
+
+- **B.1 (request lifecycle):** preview → approve → create → schedule is four steps with three
+  handoffs, and the composition can be redone at step three. Same defect as A.1, found from the
+  other direction, which is why it is the one to fix first.
+- **B.2 (chat lifecycle):** abandon the conversation between `create` and `schedule` and an
+  orphan template exists on Garmin that appears on no calendar — and next week's session reads
+  the *calendar*, so it will never see it. — **ACTIONABLE §5**: one action, or the response
+  names what was left behind.
+- **B.3 (chat lifecycle, resumption):** a template hand-edited in Garmin Connect between
+  sessions leaves the calendar and the previously-agreed plan disagreeing. **The calendar wins**,
+  by the same decision that made it the store. — **ACTIONABLE §5**, stated rather than assumed.
+- **B.4 (artifact lifecycle):** `push_workout_to_device` creates a third copy on hardware that a
+  later edit cannot reach, so a revised plan would leave a stale session on the watch. —
+  **ACTIONABLE §5**: nothing is pushed by default; scheduling is enough.
+- **B.5 (deployment lifecycle):** an old reader meeting new rows — not applicable, since the new
+  state lives in Garmin's format, not ours. — **✓ VERIFIED** (9.c).
+
+### §14.14 Net v1.5 changes
+
+| Finding | Section | Change |
+|---|---|---|
+| — (the decision itself) | log, §1 | Coaching lives in the conversation; non-goal added: no recommendation engine, no training science in Python |
+| — (the decision itself) | log, §1, §9 | Athlete context lives in Desktop chat only; non-goal added; the risk of re-typing it is accepted |
+| — (the decision itself) | log, §1 | Garmin's calendar is the store for plan continuity |
+| 2.b, 4.b | §5, §9 | Cycle data opt-in, never swept; the opt-in is collection, not containment |
+| 1.e, A.4 | §1, §5 | Subjective inputs are optional arguments and a declared non-mechanism |
+| A.1, B.1 | §5 | Approval carries the previewed structure, never a re-composition |
+| A.2 | §5 | Name match ⇒ `update_workout` in place; no match ⇒ upload |
+| 1.b, A.3, 9.b | §5 | Both ids returned, so undo needs no search |
+| B.2 | §5 | Create and schedule are one action, or the orphan is reported |
+| B.3 | §5 | The calendar wins over a remembered plan |
+| B.4 | §5 | No push to device by default |
+| 1.a, 8.d | §5, §8 | Calendar reads are month-scoped; a cross-month window is two requests, with a test |
+| 1.c | §5 | A partial plan write reports what it reached |
+| 1.d | §5 | Preview states every date; create refuses an occupied date unless replacing |
+| 3.a | §5 | Honest `ToolAnnotations` on every write tool |
+| 6.d | §5 | `preview` makes no Garmin request at all |
+| 6.b | §11 | The workout builders are inside the boundary; composition lives in `source/` |
+| 3.b, 7.a | §6 | The seam sits above `_garmin_access`; `garmin_auth_status` exempt structurally |
+| 3.c, 10.c | §6 | A plan is written a week at a time, or by a CLI command |
+| A.5, 8.a–8.c | §8 | Tests: preview validation, idempotency, seam coalescing, no direct `_garmin_access` |
+| — | §6 | Cache key settled (payload + map version); **store deferred**, and "a payload cache is health data at rest" is an open §8/§9 question |
+| 10.a, 10.b | §9 | Two new risk rows: a valid-but-wrong workout, and the agent as sole guard |
+| 2.a | §14.3 | `[Mahi-verify]`: Desktop context retention is assumed, not verified |
+| 10.d | §14.1 | §7, §7a and §9's location finding carried to v1.6; §7a knowingly stale |
