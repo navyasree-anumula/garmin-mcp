@@ -3,8 +3,13 @@
 An MCP server over one person's Garmin Connect account — reads, plus structured workout
 creation and calendar scheduling.
 
-**Status: pass 2, phase 4a.** One tool (`garmin_auth_status`) plus a local web UI for
-signing in and checking the machine's state. The data and workout tools come next.
+**Status: pass 2, phase 5.** Two tools — `garmin_auth_status` and `garmin_training` — plus
+a local web UI for signing in and checking the machine's state. `garmin_training` reads
+Garmin's own training measurements through the metric→source map, which exists because in
+four of nine known cases the endpoint named after a metric is not the one that answers it.
+It returns measurements and never advice: what they mean for a given week needs things no
+endpoint holds, so that judgement belongs in the conversation (`docs/SCOPE.md` §1).
+Health metrics and the workout write path come next.
 
 Read [`docs/SCOPE.md`](docs/SCOPE.md) before adding to it.
 
