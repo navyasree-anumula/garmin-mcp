@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Annotated, Literal
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -16,6 +17,8 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .source import client as source
+from .source import metrics as metric_map
+from .source import readings as source_readings
 from .source.errors import GarminSourceError
 
 logger = logging.getLogger(__name__)
@@ -81,4 +84,142 @@ def garmin_auth_status() -> AuthStatus:
         tokens_path=status.tokens_path,
         tokens_modified_utc=status.tokens_modified_utc,
         server_version=_server_version(),
+    )
+
+
+# --------------------------------------------------------------------------
+# Training metrics (docs/SCOPE.md §5, v1.5)
+# --------------------------------------------------------------------------
+
+#: The agent's vocabulary, derived from the map rather than restated here.
+#: Writing the keys out again would put the same list in two places, which is
+#: the drift pass A exists to find -- and the tool's JSON schema carries this as
+#: an enum, so a wrong key is refused by the client before a request is made.
+MetricKey = Literal[tuple(metric_map.keys_for_group("training"))]  # type: ignore[valid-type]
+
+
+def _metrics_help() -> str:
+    """Build the parameter description from the map, units included.
+
+    §5 (v1.5): the enum is how the model learns what exists, so each value
+    carries its unit. A phrase is Garmin's own wording for a code we have no
+    mapping for, and is marked as such rather than given a fake unit.
+    """
+    rows = [
+        f"{m.key} [{m.unit or 'phrase'}]"
+        for m in metric_map.METRICS
+        if m.group == "training"
+    ]
+    return (
+        "Which training metrics to read, as a list. " + ", ".join(rows) + ". "
+        "Ask for everything you need in ONE call: metrics that share a source "
+        "cost a single Garmin request together, and three of these come from "
+        "one payload."
+    )
+
+
+class MetricReading(BaseModel):
+    """One metric's answer, self-describing (docs/SCOPE.md §5).
+
+    Every field exists because a reader would otherwise have to guess: a bare
+    number has no unit, two sources for one metric can disagree, and "nothing
+    came back" has four different meanings that need four different responses.
+    """
+
+    metric: str = Field(description="The metric key that was asked for.")
+    value: float | int | str | None = Field(
+        description="The reading, or null when the verdict is not 'present'."
+    )
+    unit: str = Field(
+        description=(
+            "Unit of `value`. Empty for a phrase. Where a unit is inferred "
+            "rather than stated by Garmin, it says so."
+        )
+    )
+    verdict: str = Field(
+        description=(
+            "present = there is a reading. no_data = a well-formed empty answer, "
+            "which says nothing about capability (a day the watch was not worn "
+            "looks like this). not_matured = empty for a metric that needs "
+            "accumulated wear. unsupported = this account or device cannot "
+            "answer at all. error = OUR call failed, not Garmin's data."
+        )
+    )
+    source: str = Field(
+        description="The garminconnect method this value actually came from."
+    )
+    measured_on: str = Field(description="The date this reading is for.")
+    note: str = Field(
+        default="", description="Why there is no reading, or what is unconfirmed."
+    )
+
+
+class TrainingReadings(BaseModel):
+    date: str = Field(description="The date the readings are for.")
+    date_basis: str = Field(
+        description="What that date means, since Garmin's own dates are device-local."
+    )
+    readings: list[MetricReading]
+
+
+@mcp.tool(
+    title="Garmin training metrics",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True
+    ),
+)
+def garmin_training(
+    metrics: Annotated[list[MetricKey], Field(description=_metrics_help())],
+    date: Annotated[
+        str | None,
+        Field(description="YYYY-MM-DD. Defaults to today's UTC calendar date."),
+    ] = None,
+) -> TrainingReadings:
+    """Read Garmin's own training measurements for a date.
+
+    Returns measurements, not advice: Garmin's phrase where Garmin has one, the
+    number and its unit where it has that, and an explicit reason where it has
+    neither. What the numbers mean for a given week is a judgement that needs
+    things no endpoint holds -- how the legs feel, how much time there is, what
+    hurts -- so it belongs in the conversation, not here (docs/SCOPE.md §1).
+
+    Ask for several metrics at once. `training_status`, `load_balance` and
+    `vo2_max` all come out of one payload, so together they cost one request.
+    """
+    # Checked here rather than relying on the schema's enum. The enum stops a
+    # compliant client, and this stops everything else -- including a health
+    # metric asked of the training tool, which `metrics.BY_KEY` would happily
+    # resolve. Mirrors `probe --explain`: name the valid keys rather than just
+    # refusing, because a "no" that does not say what would work costs the
+    # agent another round trip to find out.
+    allowed = metric_map.keys_for_group("training")
+    unknown = [key for key in metrics if key not in allowed]
+    if unknown or not metrics:
+        raise ToolError(
+            f"unknown or empty metrics {unknown!r}. Valid metrics: {', '.join(allowed)}"
+        )
+
+    try:
+        measured_on, readings = source_readings.metrics_for(list(metrics), date)
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return TrainingReadings(
+        date=measured_on,
+        date_basis=(
+            "UTC calendar date. Garmin's dates are device-local, so a run near "
+            "midnight in another timezone can land on the adjacent day."
+        ),
+        readings=[
+            MetricReading(
+                metric=r.metric,
+                value=r.value,
+                unit=r.unit,
+                verdict=r.verdict,
+                source=r.source,
+                measured_on=r.measured_on,
+                note=r.note,
+            )
+            for r in readings
+        ],
     )
