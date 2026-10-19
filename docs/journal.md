@@ -1674,154 +1674,199 @@ current.**
 Tests: 192 -> **288 passed, 2 skipped** on PR #18; `main` stays at 192 until it merges. Much of
 the rise is parametrisation — the map's five per-row assertions run once per row.
 
+## 2026-10-19 (Option B plan) — The flake diagnosis was wrong, and reading the limiter is what caught it
+
+A planning session: no product code changed. It produced the Option B plan doc, an architecture
+reference page, and one correction that matters more than either.
+
+### The stale-ref trap re-armed within three days
+
+Local `main` sat at `6a87f5d` while `origin/main` was at `76e62aa` — two merges behind, PRs **#18**
+and **#22**. Branching from it would have dropped `garmin_training`, the map, the seam **and the
+`mcp` 2.2.0 bump**, reintroducing the vulnerable lockfile on a branch that looked clean and would
+have reported mergeable.
+
+The 16 October rule caught it: fetch before branching. What that rule did *not* prevent is the
+second half of the same trap — **both branches merged on 16 October were still present**, local and
+remote, three days later. That is the exact condition the last entry deleted thirty-two branches
+over. Worse, `feature/metric-map-and-training-tool` had a **local tip behind its own remote tip**
+(`83e7963` vs `91000b2`, the `update-branch` merge), so the same branch name meant two different
+commits on one box. Both tips verified ancestors of `origin/main` before any delete was proposed.
+
+The previous `RESUME HERE` also claimed "#18 open, awaiting Mahi's merge" and "192 tests on `main`".
+Both were true when written and stale within the hour, because #18 merged at 19:48Z and the entry
+describing it was committed on a branch that merged at 20:16Z. **A resume block written before the
+last merge of its own session is stale on arrival.**
+
+### The ratelimit diagnosis was inference, and it was wrong
+
+First telling: an idle stretch on a loaded runner refills the bucket, producing a *second* free gap
+that the test's `sorted(gaps)[1:]` does not account for. Confident, plausible, and wrong.
+
+`ratelimit.py:123` is why:
+
+```python
+tokens = min(budget.burst, tokens + elapsed * budget.rate_per_sec)
+```
+
+Tokens cap at `burst` and `acquire` spends exactly one (`:126`), so after any grant the bucket holds
+zero and **every** consecutive grant must wait `1/rate`. With the test's `burst=1, rate=10` all five
+gaps should be ≥ 0.1s. There is no second free gap available to find.
+
+The flake is in the **measurement**. The child records its stamp *after* `acquire` returns
+(`test_ratelimit.py:36-37`), so a stamp is grant time plus however long the process was preempted
+before appending it. Sorting merges that delay into the gaps: two grants a real 0.1s apart read as
+0.01s apart if the earlier stamp was delayed 0.09s more than the later one. On a two-core shared
+runner that is ordinary.
+
+**And the fix I had proposed would not have worked.** A sub-window invariant
+`(j - i + 1) <= burst + rate × (s_j - s_i)` reduces, for adjacent stamps with `burst = 1`, to
+`s_{i+1} - s_i >= 0.1` — the assertion that flakes, restated. It would have been no improvement
+wearing the costume of one.
+
+What the plan specifies instead: assert only the **widest** window, with the bound derived rather
+than guessed — `(N - burst) / rate` = `(6 - 1) / 10` = 0.5s — and slack named for what it absorbs
+(delay on the *first* stamp, which shrinks the measured window). Today's `>= 0.35` has no stated
+derivation; the replacement is both tighter and explained, with a pure-function negative control so
+the comparison itself can be shown to fail.
+
+This is dimension #3 earning its place. The first two tellings were read off the test; only reading
+the limiter settled it.
+
+### What Pass A found, and it is the house failure mode again
+
+The scheduled audit cron is a **new producer of CI state whose only consumer is a notification** —
+it gates nothing, by design, so a red cron run cannot stop an image publishing. But nobody has
+verified who receives a *scheduled* run's failure mail. If the answer is nobody, the cron is one
+producer and zero consumers: **precisely `capabilities.json`'s problem**, shipped a second time as
+the fix for an unrelated one. Flagged as the step that decides whether the cron counts as a fix.
+
+Pass A also caught that removing `serve --http` **flips the SCOPE disagreement rather than closing
+it**: today the code offers a transport §7 says it does not have; afterwards §7a's prose will cite a
+flag that no longer exists. Carrying that silently would make §7a more stale, not less — so it is
+recorded as a v1.6 input in as many words. And `--port` on the `serve` subparser is referenced only
+by the branch being deleted (`cli.py:93`), so it is an orphan the moment the flag goes.
+
+Pass B's finding is this session's own output: the architecture page now exists in two places and
+they can disagree in either direction.
+
+### The architecture page
+
+`docs/architecture.html` — the §11 import boundary, the single doorway with the lock and budget
+nested in order, the nine-metrics-to-three-requests collapse, the above-vs-inside placement
+argument, the five verdicts, all ten map rows with per-row provenance, the four guard tests, and
+what is deliberately unbuilt. Three hand-authored SVG figures, each with one claim.
+
+It is **the source file**, published to the artifact URL rather than the other way round, and its
+header says so — plus the commit it describes, because nothing tests a diagram against the code.
+A dated snapshot, on the same principle as a capability verdict or a map field path.
+
+Tests: 288 -> 288, 2 skipped (documentation only; no product code touched).
+
 ## RESUME HERE
 
-State: `main` = `6a87f5d`, **green**, image published (`latest` and `sha-6a87f5d`) — the first
-`main` run to reach `Build and publish` since 11 October. **192 tests on `main`.** Merged
-2026-10-16: **#19** (the `mcp` bump), **#20** (journal), **#21** (SCOPE v1.5).
+State: `main` = **`76e62aa`**, green, image published (`latest` and `sha-76e62aa`).
+**288 passed, 2 skipped on `main`** — the #18 count is now the `main` count.
+**No open PRs.** Everything merged 2026-10-16: **#18** (map, seam, `garmin_training`), **#19** (the
+`mcp` 2.2.0 bump), **#20** and **#22** (journal), **#21** (SCOPE v1.5). Runs `4abc620` and `9ca9b9e`
+are permanently red in history and published no image; `6a87f5d` is where the bump made it green
+again. *Corrects the previous resume block, which said #18 was open and `main` had 192 tests.*
 
-**One PR open: #18**, `feature/metric-map-and-training-tool` — the map, the seam and
-`garmin_training`. **Fully green**: tests, audit and the multi-arch build. 288 tests. It was
-updated from `main` with
-`gh api --method PUT /repos/.../pulls/18/update-branch` after #19 merged, because its branch
-carried the old lock and its audit stayed red until the bump was in its history. Awaiting
-Mahi's merge.
+**This session's branch: `docs/option-b-plan-and-architecture`** — three commits, documentation only,
+**pushed? no. PR? no.** Local `main` has been fast-forwarded to `76e62aa`; this branch has no
+upstream set, deliberately, so a bare `git push` cannot target `main`.
 
-**SCOPE v1.5 is merged but not fully settled.** Two `[Mahi-verify]` items are still open: that
-Claude Desktop retains the athlete context between sessions (a property of a client this repo
-does not own), and whether this account logs cycle data at all.
+**Two decisions block executing the Option B plan.** Both are `[Mahi-verify]` in
+`docs/plan-2026-10-19-option-b.md` §10.1:
 
-Refs are clean as of this entry: local `main`, `origin/main` and the remote all agree, and the
-repo is down to two branches. Keep it that way — and **fetch before branching**.
+1. **Remove `serve --http`, or keep it deliberately?** The case for removing is §5 of the plan: the
+   only thing HTTP would buy is reach from Claude web or a phone, and the README already documents
+   that as unobtainable — Claude connects to remote MCP servers from Anthropic's cloud, not from the
+   device. Third session this has been carried.
+2. **Daily or weekly audit cron?** The plan specifies **daily**, which is a deliberate deviation from
+   the 16 October entry's "weekly"; both October episodes had multi-day windows and a runner minute
+   is free at this scale.
 
-Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`. The cached
-tokens had aged out after six weeks and were re-bootstrapped on 2026-10-11; **both mobile
-login paths took a 429 and a fallback carried it**, so the login path is IP-rate-limited and a
-`login` should not be run casually. The data path was unaffected across eleven requests.
+Also unverified and needed before the cron counts as a fix: **who receives a scheduled run's failure
+notification.** If nobody, it is one producer and zero consumers.
+
+**Two merged branches still need deleting** — tips recorded so the delete is reversible:
+`docs/journal-2026-10-16-map-and-advisory` (`6e60622`, merged by #22) and
+`feature/metric-map-and-training-tool` (remote `91000b2`, local `83e7963`, merged by #18). Both
+confirmed ancestors of `origin/main`. **Fetch, then branch — and delete a branch the day it merges.**
+
+**The architecture page:** `docs/architecture.html` is the source, published at
+<https://claude.ai/artifact/ThFxyUzfBKKBPinyQi4AyA>. Edit the file and republish to that URL; do not
+edit the published page separately. Describes `76e62aa`; nothing tests it against the code.
+
+Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`. Re-bootstrapped
+2026-10-11 after six weeks; **both mobile login paths took a 429 and a fallback carried it**, so the
+login path is IP-rate-limited and a `login` should not be run casually. The data path was unaffected
+across eleven requests.
 
 **Next, in order:**
 
-1. **`--explain max_metrics_range`, and the six new candidates** — `heart_rates`, `hydration`,
-   `body_battery_events`, `morning_readiness`, `heart_rate_zones`, `stats_and_body`. Seven
-   requests. `max_metrics_range` is the one that settles a question rather than opening one:
-   if the range variant answers where the single date returns `list(0)`, that endpoint is a
-   call-shape bug of the `race_predictions` family. v1.4's finding 10.a adds a second reason:
-   the range endpoints are how a trend gets answered in one request instead of 28.
+0. **Execute Option B** — `docs/plan-2026-10-19-option-b.md`, once the two decisions above are made.
+   Its own branch, `fix/ci-cadence-and-transport-surface`, cut from `origin/main`. Scheduled audit
+   workflow, the ratelimit window assertion, optionally the `--http` removal, and the two branch
+   deletions. Expected 292 tests (290 if `--http` is kept). The plan carries its own 10-dimension
+   stress test plus passes A and B; §7 is the ordered command list.
 
-   **v1.5 widens this list.** `get_lactate_threshold` is not among the 33 candidates at all,
-   and it is the number that sets every running target — note it costs **two** requests on
-   `latest=True` (`/latestLactateThreshold` plus power-to-weight) and works around a Garmin
-   field typo, `hearRate`. Also unprobed and now needed: **activity detail and splits**, which
-   §5 already admits is "the most coach-relevant surface in this document and the least
-   evidenced" (and which carries the §9 location exposure v1.6 owes), plus a read-only look at
-   `get_workouts` and `get_scheduled_workouts` to see the shape the write path must match.
-   Roughly 12 requests in total.
+1. **`--explain max_metrics_range`, and the six new candidates** — `heart_rates`, `hydration`,
+   `body_battery_events`, `morning_readiness`, `heart_rate_zones`, `stats_and_body`. Plus
+   `get_lactate_threshold` (two requests on `latest=True`, and it works around Garmin's `hearRate`
+   typo), activity detail and splits, and a read-only look at `get_workouts` /
+   `get_scheduled_workouts` to see the shape the write path must match. Roughly 12 requests.
+   **This is also what settles five unverified map rows and one unknown shape** — where
+   `trainingStatusFeedbackPhrase` and `trainingBalanceFeedbackPhrase` sit inside their device DTOs,
+   the field names and units for `readiness` and `recovery_time`, and whether `get_race_predictions`
+   returns a dict or a list. Full detail in the 2026-10-11 (5b) and 2026-10-16 entries.
 
 2. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
-   `schema_version`. `capabilities.json` still holds August verdicts, two of them wrong in
-   opposite directions — `sleep` understated, `spo2` a false positive the old counter would
-   have written as `has_data`. 33 candidates, empty ones retried across three dates; budget it
-   in one sitting. An aborted run must report what it got to, never look like a clean run that
-   found less.
+   `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
+   directions — `sleep` understated, `spo2` a false positive. 33 candidates, empty ones retried
+   across three dates, one sitting. An aborted run must report where it got to, never look like a
+   clean run that found less.
 
-3. **Give `capabilities.json` a consumer.** v1.4 specifies the four-value vocabulary, the
-   `schema_version`, an unknown version falling back to the default read-only tool set, and a
-   regressed verdict keeping the previous verdict's date. None of it is implemented, and
-   nothing reads the file at all — one producer, zero consumers. The metric→source map and the
-   tool-selection UI are the intended readers.
+3. **Give `capabilities.json` a consumer.** Still one producer, zero consumers. `source/metrics.py`
+   is half the intended reader — `garmin_training`'s enum derives from the map, but from the *group*,
+   not from `capabilities.json` or `tools.json`. The missing piece is filtering that enum by
+   `tools.json`.
 
-   **Half of that reader now exists (2026-10-16).** `source/metrics.py` is the map, and
-   `garmin_training`'s enum is already derived from it — but from the *group*, not from
-   `capabilities.json` or `tools.json`. So the probe's output still has zero consumers; what
-   changed is that the thing meant to filter on it is now a real artifact instead of a table
-   in this file.
+4. **`garmin_health(metrics=[...], date)`** — mostly map rows and tests now, because
+   `garmin_training` built the decoders, the seam, the verdicts and the self-describing response.
+   What remains: the health half of the map (sleep, HRV, resting HR, stress, body battery,
+   respiration, skin temperature) and the two decoders training did not need — descriptor-driven
+   decoding for positional arrays (`floorValuesArray` is 96x4 with mixed-type columns;
+   `bodyBatteryValuesArray` is width 4 in `stress` and width 2 in `body_battery`), and `resting_hr`
+   matched against the nested `calendarDate` because its `DATE` argument returns a statistics
+   window. Never return raw series: sleep alone carries ~1,700 elements across ten lists.
+   `garmin_health` is also the second consumer whose arrival decides whether the payload **store** is
+   worth building — keyed on payload plus map version, TTLs from 5c, and the health-data-at-rest
+   question answered first.
 
-4. **Then `garmin_health(metrics=[...], date)`** — and it is now mostly map rows and tests,
-   because `garmin_training` built the machinery: the decoders, the seam, the verdicts, the
-   self-describing response. What remains is the health half of the map (sleep, HRV, resting
-   HR, stress, body battery, respiration, skin temperature) and the two decoders it needs that
-   training did not. Built on the sourcing map in the 5b entry, not on the obvious endpoint
-   names — four of nine metrics come from somewhere other than their own endpoint. Hard
-   requirements collected so far, with the ones now implemented marked:
-   - descriptor-driven decoding for positional arrays (`floorValuesArray` is 96x4 with
-     mixed-type columns; `bodyBatteryValuesArray` is width 4 in `stress` and width 2 in
-     `body_battery`) — **still owed; training needed no positional arrays**
-   - map keys selected by `primaryTrainingDevice`, never hardcoded — **done**,
-     `extract.select_primary_device`, which returns MISSING on zero or two matches rather than
-     guessing
-   - return `…FeedbackPhrase`, treat `trainingStatus`/`fitnessTrend`/`maxMetCategory` as
-     opaque codes until a mapping is sourced — **done**; the map points at the phrase field and
-     the int is never read at all
-   - units decided per field: `time5K: int` and `timestamp: int` are unnamed, so 5a's
-     "units are readable off the field names" does not generalise
-   - `resting_hr` matched against the nested `calendarDate`, because its `DATE` argument
-     returns a statistics window; "no data for this date" rather than the nearest value
-   - one winning source per metric, fallback explicit, and the response names the source it
-     used — resting HR is `float` from `get_rhr_day` and `int` from the sleep payload
-   - the accumulation flag lives in the map beside the source, or `not_matured` can never be
-     emitted
-   - never return raw series: sleep alone carries ~1,700 elements across ten lists
-   - the **seam is built** (`source/fetch.py`): above `_garmin_access`, the only data-path
-     caller of it, coalescing repeated sources within a call. The store still waits — keyed on
-     payload plus map version, with TTLs from 5c and the health-data-at-rest question answered
-     first. `garmin_health` is the second consumer whose arrival decides whether it is worth
-     building at all.
-   - **metric-plural signatures** — **done** for training: the enum is derived from the map so
-     the two cannot drift, and each value carries its unit in the parameter description. Still
-     owed: filtering that enum by `tools.json`, which is what would finally give
-     `capabilities.json` a consumer.
+5. **The write path, preview first.** Upstream supplies the builders, the uploads, the calendar and a
+   ~2,550-entry exercise taxonomy. Ours is structure validation, idempotency by name against
+   `get_workouts`, both ids returned so an undo needs no search, create-and-schedule as one action,
+   and a `preview` that composes and validates with **zero** Garmin requests. Preview lands first
+   because it is the only write behaviour that is unit-testable. A plan is written a week at a time.
 
-5. **Then the write path, preview first.** Upstream supplies the builders, the uploads, the
-   calendar and the exercise taxonomy (see the v1.5 entry), so what we build is the part it
-   does not have: structure validation, idempotency by name against `get_workouts`, both ids
-   returned so an undo needs no search, create-and-schedule as one action, and a `preview`
-   action that composes and validates with **zero** Garmin requests. Preview lands first
-   because it is the only write behaviour that is unit-testable, and §8's one supervised live
-   create → verify → delete runs only once its tests are green. A plan is written **a week at
-   a time** — twelve weeks is ~96 requests, about three minutes at the shipped budget, and no
-   MCP client waits that long.
+**Open items:** **SCOPE v1.6** owes §7 (Connectors-not-Developer, per-user Docker path), §7a (the
+bind-address correction, knowingly stale for a second version — **and which Option B would leave
+citing a flag that no longer exists**), and §9 (location exposure via activity detail;
+`get_activity_details` returns polylines and 5c is about to call it). One session, with its own ten
+dimensions plus passes A and B. §6's cache **key** is settled; the store is what moved, and it
+carries the open question that a payload cache is health data at rest on the credential volume.
 
-**Three decisions owed before they bite again:**
+An **open v1.3 commitment** is still unmet: §5 requires `garmin_auth_status` to report the tool set
+actually in force, and `server.py:66-87` returns token state and `server_version` only. Phase 4b
+tool selection and `tools.json` are unstarted.
 
-- **The ratelimit per-gap assertion.** It passes on a quiet runner and fails on a busy one, and
-  the run it failed on was compliant. Fix it to assert the aggregate invariant, or accept the
-  flake knowingly.
-- **A scheduled audit run — now evidenced twice.** On 11 October the gate found six weeks of
-  advisories the moment someone opened a PR. On 16 October it found a five-day-old one the same
-  way, and `main` sat red through two merges with no image published. A weekly cron on `main`
-  would have caught both on the day. This is no longer a preference.
-- **Whether `serve --http` should exist at all (new, 2026-10-16).** It is the only reason
-  CVE-2026-59951 applied to this project: the transport is wired up at `cli.py:93`, has no
-  authentication, and nothing uses it — §7 chose stdio at v1.2. Removing it shrinks the surface
-  permanently instead of once per advisory. Keeping it is also defensible; what is not
-  defensible is never deciding.
+**Two token-file cases are unclaimed**: the unconditional bootstrap `dump()` that would write three
+nulls on the `JWT_WEB` fallback, and a corrupt token file surfacing as `SourceUnavailable` instead of
+"re-run the bootstrap" — neither observed, neither tested.
 
-**Open items:** **SCOPE v1.6** now owes what v1.5 carried rather than closed — §7
-(Connectors-not-Developer, per-user Docker path), §7a (the bind-address correction, knowingly
-stale for a second version) and §9 (location exposure via activity detail —
-`get_activity_details` returns polylines, and 5c is about to call it) — one session, with its
-own ten dimensions plus passes A and B. §6's cache **key** is settled by v1.5; the store is
-what moved, and it carries a new open question with it: a payload cache is health data at rest,
-and nothing yet says what may be stored, under what mode, or excluded from which backup.
-
-An **open v1.3 commitment** is still unmet and now has a second reason: §5 requires
-`garmin_auth_status` to report the tool set actually in force, and `server.py:63-83` returns
-token state and `server_version` only — with write tools in `tools.json`, "are writes enabled
-right now" becomes a question the agent must be able to ask. Phase 4b tool selection and
-`tools.json` still unstarted.
-
-**Two token-file cases are unclaimed**: the unconditional bootstrap `dump()` that would write
-three nulls on the `JWT_WEB` fallback, and a corrupt token file surfacing as
-`SourceUnavailable` instead of "re-run the bootstrap" — neither observed, neither tested.
-
-**Five map rows are unverified and one shape is unknown**, all settled by a single 5c request:
-where `trainingStatusFeedbackPhrase` and `trainingBalanceFeedbackPhrase` sit inside their
-device DTOs, the field names and units for `readiness` and `recovery_time`, and whether
-`get_race_predictions` returns a dict or a list. Each says so in its own note, and a test
-asserts none of them is silent about it.
-
-**Closed on 2026-10-16:** the "coach" wording drift between §13's prose and §1's purpose line
-(v1.5 decides the coach is the conversation); the metric→source map, which existed only as a
-table in this file and is now a tested artifact with a consumer; and §6's cache *seam*, which
-is built — the store is what remains. Workout structure validation is specified in §5 with its
-test cases in §8, and unbuilt.
+**Closed 2026-10-19:** the ratelimit flake's *diagnosis* (wrong twice before the limiter was read —
+the fix is specified, not applied); the three carried decisions now written down with a
+recommendation each instead of being re-derived every session; and the architecture, which existed
+only as prose across five journal entries and is now one page with the commit it describes on it.
