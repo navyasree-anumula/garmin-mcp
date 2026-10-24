@@ -1,0 +1,740 @@
+<!--
+  Source of the published architecture page.
+
+  Published at: https://claude.ai/artifact/ThFxyUzfBKKBPinyQi4AyA
+  Describes:    main @ 76e62aa (288 passed, 2 skipped)
+
+  THIS FILE IS THE SOURCE. To change the page, edit this file and republish it to
+  the URL above; do not edit the published page separately, or the two disagree
+  (plan-2026-10-19-option-b.md, finding B.4).
+
+  It is a DATED SNAPSHOT, not a contract. No test checks it against the code, so
+  read the commit above as its as-of date -- the same way a capability verdict or
+  a map field path is a measurement with a date on it, not a fact.
+
+  No <!doctype>, <html>, <head> or <body> here on purpose: the Artifact publisher
+  supplies that skeleton. Opening this file directly in a browser works but is
+  not what it is for.
+-->
+<title>Garmin MCP Architecture</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  /* Layout: one reading column at 68ch, figures breaking wider; flat hairline
+     panels, square corners, role-based emphasis rather than uniform cards. */
+  :root {
+    --bg: #eff0f3;
+    --panel: #fbfbfc;
+    --recess: #e5e7eb;
+    --line: #c4c8d0;
+    --hair: #d9dce2;
+    --fg: #191c23;
+    --dim: #565d6b;
+    --faint: #79808d;
+    --accent: #2c3c86;
+    --accent-wash: #e2e6f3;
+    --ok: #1c6547;
+    --warn: #845204;
+    --bad: #99292b;
+    --slate: #4b5563;
+
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161b;
+      --panel: #1b1e25;
+      --recess: #22262e;
+      --line: #363c46;
+      --hair: #292e36;
+      --fg: #e7e9ee;
+      --dim: #9ba2ae;
+      --faint: #848b98;
+      --accent: #97a7ef;
+      --accent-wash: #222841;
+      --ok: #5ec294;
+      --warn: #d8a44d;
+      --bad: #e58585;
+      --slate: #98a1af;
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #14161b;
+    --panel: #1b1e25;
+    --recess: #22262e;
+    --line: #363c46;
+    --hair: #292e36;
+    --fg: #e7e9ee;
+    --dim: #9ba2ae;
+    --faint: #848b98;
+    --accent: #97a7ef;
+    --accent-wash: #222841;
+    --ok: #5ec294;
+    --warn: #d8a44d;
+    --bad: #e58585;
+    --slate: #98a1af;
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--body);
+    font-size: 1.0625rem;
+    line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 0 4rem;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  .col { max-width: 40rem; }
+
+  /* ---- header ---------------------------------------------------------- */
+
+  header { padding-block: 3rem 2rem; border-bottom: 1px solid var(--line); }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 1rem;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(2rem, 6vw, 3rem);
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0 0 1rem;
+  }
+
+  .lede { font-size: 1.1875rem; color: var(--dim); margin: 0; max-width: 36rem; }
+
+  /* ---- state strip ----------------------------------------------------- */
+
+  .state {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin-block: 2.5rem;
+  }
+
+  .state div { background: var(--panel); padding: 0.875rem 1rem; min-width: 0; }
+
+  .state dt {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 0.3rem;
+  }
+
+  .state dd {
+    margin: 0;
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.0625rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- sections -------------------------------------------------------- */
+
+  section { padding-block: 2.75rem 0; }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.5rem;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 0.25rem;
+  }
+
+  .kicker {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.75rem;
+  }
+
+  p { margin: 0 0 1rem; }
+  .col > p:last-child { margin-bottom: 0; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.875em;
+    background: var(--recess);
+    padding: 0.08em 0.3em;
+    color: var(--fg);
+  }
+
+  strong { font-weight: 600; }
+
+  /* ---- figures --------------------------------------------------------- */
+
+  figure { margin: 2rem 0 0; }
+
+  .scroll { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
+
+  .scroll svg { display: block; max-width: 100%; height: auto; min-width: 560px; }
+
+  figcaption {
+    font-size: 0.9375rem;
+    color: var(--dim);
+    margin-top: 0.75rem;
+    max-width: 40rem;
+  }
+
+  /* SVG primitives */
+  .box { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+  .band { fill: none; stroke: var(--hair); stroke-width: 1; }
+  .bandfill { fill: var(--recess); stroke: none; }
+  .hot { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.5; }
+  .nest { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+  .flow { stroke: var(--fg); stroke-width: 1.4; fill: none; }
+  .flow-dash { stroke: var(--faint); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .rule { stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 7 4; }
+
+  text { font-family: var(--display); fill: var(--fg); }
+  .t-mod { font-family: var(--mono); font-size: 12px; font-weight: 500; }
+  .t-sub { font-size: 11px; fill: var(--dim); }
+  .t-lab { font-family: var(--mono); font-size: 10.5px; fill: var(--faint); }
+  .t-band {
+    font-family: var(--mono); font-size: 10px; fill: var(--faint);
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .t-rule { font-family: var(--mono); font-size: 11px; fill: var(--accent); font-weight: 500; }
+  .t-big { font-family: var(--display); font-weight: 700; font-size: 26px; }
+  .t-num { font-family: var(--mono); font-size: 11px; font-weight: 500; fill: var(--accent); }
+
+  /* ---- tables ---------------------------------------------------------- */
+
+  .tbl { margin-top: 1.75rem; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 540px;
+    font-size: 0.9375rem;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid var(--hair);
+    vertical-align: top;
+  }
+
+  thead th {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-weight: 500;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+  td.m, th.m { font-family: var(--mono); font-size: 0.8125rem; white-space: nowrap; }
+  td.note { color: var(--dim); font-size: 0.875rem; }
+
+  .pill {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.14em 0.45em;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+
+  .p-ok { color: var(--ok); }
+  .p-warn { color: var(--warn); }
+  .p-bad { color: var(--bad); }
+  .p-mute { color: var(--slate); }
+
+  /* ---- gap list -------------------------------------------------------- */
+
+  .gaps { list-style: none; padding: 0; margin: 1.5rem 0 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .gaps li { background: var(--panel); padding: 0.9rem 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: baseline; min-width: 0; }
+  .gaps .what { font-family: var(--mono); font-size: 0.8125rem; font-weight: 500; }
+  .gaps .why { color: var(--dim); font-size: 0.9375rem; flex: 1 1 18rem; min-width: 0; }
+
+  footer {
+    margin-top: 3.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.875rem;
+    color: var(--faint);
+    max-width: 40rem;
+  }
+
+  @media (max-width: 640px) {
+    body { font-size: 1rem; }
+    header { padding-block: 2rem 1.5rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">garmin-mcp &middot; main @ 76e62aa</p>
+    <h1>Garmin MCP Architecture</h1>
+    <p class="lede">A read-only MCP server that turns a Garmin Connect account into measurements an agent can ask for &mdash; and keeps every Garmin round trip behind one function.</p>
+  </header>
+
+  <dl class="state">
+    <div><dt>Transport</dt><dd>stdio</dd></div>
+    <div><dt>Tools exposed</dt><dd>2</dd></div>
+    <div><dt>Tests</dt><dd>288 + 2 skipped</dd></div>
+    <div><dt>Request budget</dt><dd>0.5/s, burst 4</dd></div>
+  </dl>
+
+  <section>
+    <div class="col">
+      <p class="kicker">The spine</p>
+      <h2>One package imports Garmin</h2>
+      <p>Every adapter &mdash; the MCP tool layer, the credential web UI, the CLI &mdash; is forbidden from importing <code>garminconnect</code>. Only <code>garmin_mcp/source/</code> may. What it buys is a source swap: moving to the official API or a fork touches one package instead of every call site that found it convenient to reach past the boundary.</p>
+      <p>The rule existed from day one with nothing enforcing it. <code>tests/test_layering.py</code> now walks the AST of each adapter rather than grepping for import lines, because <code>cli.py</code> and <code>web/app.py</code> both import lazily inside functions &mdash; a grep would give a clean bill of health to a file that crosses the boundary in every handler.</p>
+    </div>
+
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 880 596" role="img" aria-label="Layered diagram: three adapter modules above a dashed boundary line, the source package below it containing readings, the metric map, the seam and the single doorway wrapping a file lock and a token budget, then garminconnect and Garmin Connect at the bottom, with the Docker volume to the right.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+            </marker>
+            <marker id="arf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+
+          <!-- MCP client -->
+          <rect class="box" x="40" y="20" width="250" height="44"></rect>
+          <text class="t-mod" x="54" y="41">Claude Desktop</text>
+          <text class="t-sub" x="54" y="56">the MCP client, spawns the container</text>
+
+          <g color="var(--fg)">
+            <line class="flow" x1="165" y1="64" x2="165" y2="106" marker-end="url(#ar)"></line>
+          </g>
+          <text class="t-lab" x="176" y="90">stdio &middot; stdout is JSON-RPC only</text>
+
+          <!-- adapters band -->
+          <rect class="bandfill" x="24" y="112" width="612" height="92"></rect>
+          <rect class="band" x="24" y="112" width="612" height="92"></rect>
+          <text class="t-band" x="36" y="130">adapters &mdash; may not import garminconnect</text>
+
+          <rect class="box" x="40" y="140" width="180" height="50"></rect>
+          <text class="t-mod" x="52" y="160">server.py</text>
+          <text class="t-sub" x="52" y="177">2 MCP tools</text>
+
+          <rect class="box" x="232" y="140" width="180" height="50"></rect>
+          <text class="t-mod" x="244" y="160">web/app.py</text>
+          <text class="t-sub" x="244" y="177">credential UI, on demand</text>
+
+          <rect class="box" x="424" y="140" width="196" height="50"></rect>
+          <text class="t-mod" x="436" y="160">cli.py</text>
+          <text class="t-sub" x="436" y="177">login &middot; serve &middot; probe &middot; selftest</text>
+
+          <!-- the boundary -->
+          <line class="rule" x1="24" y1="216" x2="856" y2="216"></line>
+          <text class="t-rule" x="24" y="234">&sect;11 boundary &mdash; enforced by tests/test_layering.py, walking each adapter's AST</text>
+
+          <!-- source band -->
+          <rect class="bandfill" x="24" y="246" width="612" height="196"></rect>
+          <rect class="band" x="24" y="246" width="612" height="196"></rect>
+          <text class="t-band" x="36" y="264">garmin_mcp/source/ &mdash; the only importer</text>
+
+          <rect class="box" x="40" y="274" width="166" height="44"></rect>
+          <text class="t-mod" x="52" y="292">readings.py</text>
+          <text class="t-sub" x="52" y="308">assemble + verdict</text>
+
+          <rect class="box" x="218" y="274" width="140" height="44"></rect>
+          <text class="t-mod" x="230" y="292">metrics.py</text>
+          <text class="t-sub" x="230" y="308">the map</text>
+
+          <rect class="box" x="370" y="274" width="124" height="44"></rect>
+          <text class="t-mod" x="382" y="292">extract.py</text>
+          <text class="t-sub" x="382" y="308">4 decoders</text>
+
+          <rect class="box" x="506" y="274" width="114" height="44"></rect>
+          <text class="t-mod" x="518" y="292">verdicts.py</text>
+          <text class="t-sub" x="518" y="308">5 words</text>
+
+          <rect class="box" x="40" y="336" width="166" height="40"></rect>
+          <text class="t-mod" x="52" y="361">fetch.py</text>
+          <text class="t-lab" x="112" y="361">the seam</text>
+
+          <rect class="box" x="40" y="390" width="166" height="38"></rect>
+          <text class="t-mod" x="52" y="414">probe.py</text>
+
+          <!-- the doorway -->
+          <rect class="hot" x="246" y="336" width="374" height="92"></rect>
+          <text class="t-mod" x="258" y="356">client._garmin_access</text>
+          <text class="t-lab" x="258" y="422">the wait for a token happens while holding the lock</text>
+
+          <rect class="nest" x="258" y="364" width="166" height="32"></rect>
+          <text class="t-num" x="268" y="384">1</text>
+          <text class="t-sub" x="280" y="384">flock on the volume</text>
+
+          <rect class="nest" x="442" y="364" width="166" height="32"></rect>
+          <text class="t-num" x="452" y="384">2</text>
+          <text class="t-sub" x="464" y="384">token, 0.5/s burst 4</text>
+
+          <g color="var(--fg)">
+            <line class="flow" x1="124" y1="190" x2="124" y2="272" marker-end="url(#ar)"></line>
+            <line class="flow" x1="206" y1="296" x2="214" y2="296" marker-end="url(#arf)"></line>
+            <line class="flow" x1="124" y1="318" x2="124" y2="334" marker-end="url(#ar)"></line>
+            <line class="flow" x1="206" y1="356" x2="242" y2="356" marker-end="url(#ar)"></line>
+            <line class="flow" x1="433" y1="428" x2="433" y2="464" marker-end="url(#ar)"></line>
+            <line class="flow" x1="433" y1="506" x2="433" y2="532" marker-end="url(#ar)"></line>
+          </g>
+
+          <g color="var(--faint)">
+            <polyline class="flow-dash" points="206,409 226,409 226,400 242,400" marker-end="url(#arf)"></polyline>
+          </g>
+          <text class="t-lab" x="52" y="426">documented exception &mdash; nothing to coalesce</text>
+
+          <!-- upstream -->
+          <rect class="box" x="246" y="464" width="374" height="42"></rect>
+          <text class="t-mod" x="258" y="490">garminconnect 0.3.11</text>
+          <text class="t-lab" x="430" y="490">pinned &gt;=0.3.11,&lt;0.4</text>
+
+          <rect class="box" x="246" y="532" width="374" height="44"></rect>
+          <text class="t-mod" x="258" y="552">Garmin Connect</text>
+          <text class="t-sub" x="258" y="568">429 on the login path &mdash; do not log in casually</text>
+
+          <!-- volume -->
+          <rect class="bandfill" x="660" y="246" width="196" height="196"></rect>
+          <rect class="band" x="660" y="246" width="196" height="196"></rect>
+          <text class="t-band" x="672" y="264">/data docker volume</text>
+
+          <rect class="box" x="672" y="276" width="172" height="30"></rect>
+          <text class="t-sub" x="682" y="295">garmin_tokens.json</text>
+
+          <rect class="box" x="672" y="312" width="172" height="30"></rect>
+          <text class="t-sub" x="682" y="331">.garmin.lock</text>
+
+          <rect class="box" x="672" y="348" width="172" height="30"></rect>
+          <text class="t-sub" x="682" y="367">.garmin.ratelimit.json</text>
+
+          <rect class="box" x="672" y="384" width="172" height="44"></rect>
+          <text class="t-sub" x="682" y="402">capabilities.json</text>
+          <text class="t-lab" x="682" y="418">1 producer, 0 consumers</text>
+
+          <g color="var(--faint)">
+            <line class="flow-dash" x1="620" y1="380" x2="668" y2="340" marker-end="url(#arf)"></line>
+          </g>
+        </svg>
+      </div>
+      <figcaption>Every Garmin round trip in the project passes through <code>client._garmin_access</code>, which takes the cross-process lock first and the request budget second. <code>probe.py</code> is the one documented caller that bypasses the seam: it probes a single candidate at a time, so it has no duplicate requests to collapse.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="col">
+      <p class="kicker">Coalescing</p>
+      <h2>Nine metrics, three requests</h2>
+      <p>The map is the only thing in the project that knows where a metric lives, and in four of nine known cases the endpoint named after a metric is not the endpoint that answers it &mdash; VO2 max sits inside <code>get_training_status</code> while <code>get_max_metrics</code> returns an empty list.</p>
+      <p>That map is also what removes duplicate work. <code>sources_for</code> resolves every requested metric to its distinct sources <em>before</em> anything is sent, so three metrics sharing one payload cost one request. The figure of three is asserted in a test, because it is the number the read-sweep arithmetic rests on.</p>
+      <p>This is why a cache turned out to be the wrong tool. The duplication lives <em>inside</em> a single call, where ordinary code removes it with no TTL and nothing to invalidate.</p>
+    </div>
+
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 880 332" role="img" aria-label="Nine metric keys on the left, bracketed into three groups, each group resolving to one Garmin request on the right: get_training_status carries three metrics, get_training_readiness two, get_race_predictions four.">
+          <defs>
+            <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+
+          <text class="t-band" x="24" y="24">metrics=[ &hellip; ] requested</text>
+          <text class="t-band" x="330" y="24">distinct sources fetched</text>
+
+          <rect class="box" x="24" y="36" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="54">training_status</text>
+          <rect class="box" x="24" y="66" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="84">load_balance</text>
+          <rect class="box" x="24" y="96" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="114">vo2_max</text>
+
+          <rect class="box" x="24" y="134" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="152">readiness</text>
+          <rect class="box" x="24" y="164" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="182">recovery_time</text>
+
+          <rect class="box" x="24" y="202" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="220">race_5k</text>
+          <rect class="box" x="24" y="232" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="250">race_10k</text>
+          <rect class="box" x="24" y="262" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="280">race_half</text>
+          <rect class="box" x="24" y="292" width="170" height="26"></rect>
+          <text class="t-sub" x="34" y="310">race_marathon</text>
+
+          <g color="var(--fg)">
+            <polyline class="flow" points="200,49 216,49 216,79 232,79"></polyline>
+            <polyline class="flow" points="200,79 216,79"></polyline>
+            <polyline class="flow" points="200,109 216,109 216,79"></polyline>
+            <line class="flow" x1="232" y1="79" x2="316" y2="79" marker-end="url(#ar2)"></line>
+
+            <polyline class="flow" points="200,147 216,147 216,162 232,162"></polyline>
+            <polyline class="flow" points="200,177 216,177 216,162"></polyline>
+            <line class="flow" x1="232" y1="162" x2="316" y2="162" marker-end="url(#ar2)"></line>
+
+            <polyline class="flow" points="200,215 216,215 216,260 232,260"></polyline>
+            <polyline class="flow" points="200,245 216,245"></polyline>
+            <polyline class="flow" points="200,275 216,275"></polyline>
+            <polyline class="flow" points="200,305 216,305 216,260"></polyline>
+            <line class="flow" x1="232" y1="260" x2="316" y2="260" marker-end="url(#ar2)"></line>
+          </g>
+
+          <rect class="hot" x="318" y="56" width="300" height="46"></rect>
+          <text class="t-mod" x="330" y="76">get_training_status(date)</text>
+          <text class="t-sub" x="330" y="92">one payload &rarr; three metrics</text>
+
+          <rect class="hot" x="318" y="139" width="300" height="46"></rect>
+          <text class="t-mod" x="330" y="159">get_training_readiness(date)</text>
+          <text class="t-sub" x="330" y="175">latest snapshot of the day</text>
+
+          <rect class="hot" x="318" y="237" width="300" height="46"></rect>
+          <text class="t-mod" x="330" y="257">get_race_predictions()</text>
+          <text class="t-sub" x="330" y="273">takes no date &mdash; passing one raises</text>
+
+          <g color="var(--fg)">
+            <line class="flow" x1="620" y1="79" x2="664" y2="150" marker-end="url(#ar2)"></line>
+            <line class="flow" x1="620" y1="162" x2="664" y2="160" marker-end="url(#ar2)"></line>
+            <line class="flow" x1="620" y1="260" x2="664" y2="172" marker-end="url(#ar2)"></line>
+          </g>
+
+          <text class="t-big" x="674" y="146">3 trips</text>
+          <text class="t-sub" x="674" y="168">through the doorway,</text>
+          <text class="t-sub" x="674" y="184">not nine</text>
+          <text class="t-lab" x="674" y="212">asserted in</text>
+          <text class="t-lab" x="674" y="226">test_fetch_seam.py</text>
+        </svg>
+      </div>
+      <figcaption>Asking for all nine training metrics costs three Garmin requests. The collapse happens in <code>metrics.sources_for</code>, before the first request is built &mdash; which is why the response is fast enough that a payload store would save nothing.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="col">
+      <p class="kicker">Placement</p>
+      <h2>Why the seam sits above the doorway</h2>
+      <p>The cache was split in two: the seam shipped, the store did not. When the store arrives it goes <em>above</em> <code>_garmin_access</code>, never inside it. The doorway takes the cross-process lock first and then waits for a token &mdash; at 0.5 requests a second, that wait is two seconds. A hit consulted inside would pay both costs for a request it was never going to make, while holding a lock another container is queued on.</p>
+      <p>A hit as slow as a miss is not a cache.</p>
+    </div>
+
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 880 286" role="img" aria-label="Two panels compared. On the left the planned store sits above the doorway, so a hit returns immediately without taking the lock or a token. On the right the store sits inside the doorway, so a hit has already waited for the lock and a two-second token.">
+          <defs>
+            <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+
+          <!-- panel A -->
+          <text class="t-band" x="24" y="22">above the doorway &mdash; planned</text>
+          <rect class="band" x="24" y="32" width="404" height="238"></rect>
+
+          <rect class="box" x="44" y="52" width="140" height="32"></rect>
+          <text class="t-mod" x="56" y="73">fetch.py</text>
+
+          <rect class="hot" x="44" y="104" width="140" height="36"></rect>
+          <text class="t-mod" x="56" y="127">store</text>
+
+          <rect class="box" x="236" y="104" width="172" height="36"></rect>
+          <text class="t-sub" x="248" y="120">return the payload</text>
+          <text class="t-lab" x="248" y="134">no lock, no token</text>
+
+          <rect class="box" x="44" y="186" width="364" height="64"></rect>
+          <text class="t-mod" x="56" y="206">_garmin_access</text>
+          <text class="t-sub" x="56" y="224">flock &rarr; token &rarr; Garmin</text>
+          <text class="t-lab" x="56" y="240">paid only on a miss</text>
+
+          <g color="var(--fg)">
+            <line class="flow" x1="114" y1="84" x2="114" y2="102" marker-end="url(#ar3)"></line>
+            <line class="flow" x1="184" y1="122" x2="232" y2="122" marker-end="url(#ar3)"></line>
+            <line class="flow" x1="114" y1="140" x2="114" y2="184" marker-end="url(#ar3)"></line>
+          </g>
+          <text class="t-lab" x="190" y="112">hit</text>
+          <text class="t-lab" x="122" y="166">miss</text>
+
+          <!-- panel B -->
+          <text class="t-band" x="452" y="22">inside the doorway &mdash; rejected</text>
+          <rect class="band" x="452" y="32" width="404" height="238"></rect>
+
+          <rect class="box" x="472" y="52" width="140" height="32"></rect>
+          <text class="t-mod" x="484" y="73">fetch.py</text>
+
+          <rect class="box" x="472" y="104" width="364" height="146"></rect>
+          <text class="t-mod" x="484" y="124">_garmin_access</text>
+
+          <rect class="nest" x="484" y="134" width="164" height="30"></rect>
+          <text class="t-sub" x="494" y="153">flock, held throughout</text>
+
+          <rect class="nest" x="660" y="134" width="164" height="30"></rect>
+          <text class="t-sub" x="670" y="153">token &mdash; waits 2s</text>
+
+          <rect class="hot" x="484" y="176" width="340" height="34"></rect>
+          <text class="t-mod" x="496" y="197">store</text>
+
+          <text class="t-lab" x="484" y="232">a hit has already paid both, for a request it never makes</text>
+          <text class="t-lab" x="484" y="246">&mdash; and another container is queued on that lock</text>
+
+          <g color="var(--fg)">
+            <line class="flow" x1="542" y1="84" x2="542" y2="102" marker-end="url(#ar3)"></line>
+            <line class="flow" x1="648" y1="149" x2="656" y2="149" marker-end="url(#ar3)"></line>
+            <line class="flow" x1="566" y1="164" x2="566" y2="174" marker-end="url(#ar3)"></line>
+          </g>
+        </svg>
+      </div>
+      <figcaption>The store is not built. Three things gate it: a second consumer to justify it, TTLs measured rather than invented, and an answer to the question it opens &mdash; a payload store is health data at rest, on the same volume as the credential, inside a backup with none of that file's protections.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="col">
+      <p class="kicker">Response contract</p>
+      <h2>Five words for an answer</h2>
+      <p>Every reading carries a verdict, because a nullable number invites a reader to ignore the reason. Four of the five describe absence, and they exist because &ldquo;nothing came back&rdquo; has four meanings that need four different responses.</p>
+      <p>The split that matters most is <code>error</code> against <code>no_data</code>. Half the map's rows were inferred rather than read off a real payload, so a path that lands on a string where a number belongs is <em>our</em> bug &mdash; and reporting it as <code>no_data</code> would make it indistinguishable from a day the watch sat on a dresser. One needs a one-line map fix; the other needs nothing at all.</p>
+    </div>
+
+    <div class="scroll tbl">
+      <table>
+        <thead>
+          <tr><th class="m">Verdict</th><th>Means</th><th>Producer</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="m"><span class="pill p-ok">present</span></td>
+            <td>There is a reading, and <code>value</code> carries it.</td>
+            <td class="note">readings.py</td>
+          </tr>
+          <tr>
+            <td class="m"><span class="pill p-mute">no_data</span></td>
+            <td>A well-formed envelope with nothing in it. Says nothing about capability.</td>
+            <td class="note">readings.py</td>
+          </tr>
+          <tr>
+            <td class="m"><span class="pill p-mute">unsupported</span></td>
+            <td>A 404, or a map row with no source. The only reliable &ldquo;this account cannot&rdquo; signal.</td>
+            <td class="note">fetch.py, readings.py</td>
+          </tr>
+          <tr>
+            <td class="m"><span class="pill p-warn">not_matured</span></td>
+            <td>Empty for a metric with a known accumulation requirement &mdash; not earned yet rather than absent.</td>
+            <td class="note">none yet. No row carries a <em>measured</em> accumulation requirement, so nothing emits it.</td>
+          </tr>
+          <tr>
+            <td class="m"><span class="pill p-bad">error</span></td>
+            <td>Our call or our map failed. Never Garmin's absence of data.</td>
+            <td class="note">fetch.py, readings.py</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <p class="kicker">The map</p>
+      <h2>Rows carry their own provenance</h2>
+      <p><code>Metric.verified</code> says the dotted path was read off a payload this project actually received. Five of the nine rows are inferred, and a test asserts that every unverified row states in its note what would confirm it. A map that looks authoritative while being half guesswork is the failure that flag exists to prevent: a field path is a measurement with a date on it, exactly like a verdict.</p>
+      <p>An opaque code is never interpreted. Where Garmin ships a feedback phrase, the map points at the phrase and the integer beside it is not read at all.</p>
+    </div>
+
+    <div class="scroll tbl">
+      <table>
+        <thead>
+          <tr><th class="m">Metric</th><th class="m">Source</th><th class="m">Path</th><th>Unit</th><th>Path provenance</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="m">training_status</td><td class="m">get_training_status</td><td class="m">&hellip;FeedbackPhrase</td><td class="note">phrase</td><td><span class="pill p-warn">inferred</span></td></tr>
+          <tr><td class="m">load_balance</td><td class="m">get_training_status</td><td class="m">&hellip;FeedbackPhrase</td><td class="note">phrase</td><td><span class="pill p-warn">inferred</span></td></tr>
+          <tr><td class="m">vo2_max</td><td class="m">get_training_status</td><td class="m">&hellip;vo2MaxValue</td><td class="note">mL/kg/min</td><td><span class="pill p-ok">verified</span></td></tr>
+          <tr><td class="m">readiness</td><td class="m">get_training_readiness</td><td class="m">score</td><td class="note">index, scale unconfirmed</td><td><span class="pill p-warn">inferred</span></td></tr>
+          <tr><td class="m">recovery_time</td><td class="m">get_training_readiness</td><td class="m">recoveryTime</td><td class="note">hours (inferred)</td><td><span class="pill p-warn">inferred</span></td></tr>
+          <tr><td class="m">race_5k</td><td class="m">get_race_predictions</td><td class="m">time5K</td><td class="note">s (inferred)</td><td><span class="pill p-ok">verified</span></td></tr>
+          <tr><td class="m">race_10k</td><td class="m">get_race_predictions</td><td class="m">time10K</td><td class="note">s (inferred)</td><td><span class="pill p-ok">verified</span></td></tr>
+          <tr><td class="m">race_half</td><td class="m">get_race_predictions</td><td class="m">timeHalfMarathon</td><td class="note">s (inferred)</td><td><span class="pill p-ok">verified</span></td></tr>
+          <tr><td class="m">race_marathon</td><td class="m">get_race_predictions</td><td class="m">timeMarathon</td><td class="note">s (inferred)</td><td><span class="pill p-ok">verified</span></td></tr>
+          <tr><td class="m">spo2</td><td class="m">&mdash;</td><td class="m">&mdash;</td><td class="note">phrase</td><td class="note">No source. Reported <code>unsupported</code> and never removed, so &ldquo;this watch does not measure it&rdquo; stays an answer rather than a silence.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col" style="margin-top:1.5rem">
+      <p>Three decoders exist because three payload shapes cannot be read the obvious way: <code>primary_device</code> picks the DTO for the watch actually being trained with and returns missing on zero or two matches rather than guessing; <code>latest_timestamp</code> picks the most recent of several snapshots for one day; <code>calendar_date</code> matches a row against the date that was asked for, because the argument returns a statistics window rather than a day.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <p class="kicker">Guards</p>
+      <h2>Each rule has a test, and each test has a negative control</h2>
+      <p>A call-site discipline with no test is a convention, and conventions erode the first time somebody is in a hurry. Four architectural rules are enforced by tests that walk the source rather than trusting it &mdash; and each of those tests has a companion that plants a violating file and asserts the check actually fails.</p>
+      <p>That convention earned its keep immediately. The seam's first doorway check walked only attribute and name nodes, so a file containing nothing but <code>from .client import _garmin_access</code> sailed through. Its own negative control caught it; it walks import aliases now.</p>
+    </div>
+
+    <div class="scroll tbl">
+      <table>
+        <thead>
+          <tr><th>Rule</th><th class="m">Enforced by</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>No adapter imports <code>garminconnect</code></td><td class="m">test_layering.py</td></tr>
+          <tr><td>Only <code>fetch.py</code> calls the doorway on the data path</td><td class="m">test_fetch_seam.py</td></tr>
+          <tr><td>Nothing but JSON-RPC reaches stdout</td><td class="m">test_stdio_purity.py</td></tr>
+          <tr><td>Logging stays on stderr, below the level that would print a response body</td><td class="m">test_logging_hygiene.py</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <p class="kicker">Honest gaps</p>
+      <h2>What is not built</h2>
+      <p>The shape above is real and tested. These are the places where it is deliberately unfinished, each with the reason it waits.</p>
+    </div>
+
+    <ul class="gaps">
+      <li><span class="what">capabilities.json</span><span class="why">One producer, zero consumers. The probe writes it; nothing reads it. Its August verdicts are also in the old two-valued vocabulary, and two of them are wrong in opposite directions.</span></li>
+      <li><span class="what">the payload store</span><span class="why">Needs a second consumer, measured TTLs, and a decision about health data at rest on the credential volume.</span></li>
+      <li><span class="what">garmin_health</span><span class="why">The machinery exists; what remains is the health half of the map and two decoders training never needed, including descriptor-driven decoding for positional arrays.</span></li>
+      <li><span class="what">tools.json</span><span class="why">Tool selection is unstarted, so <code>garmin_auth_status</code> still cannot report which tool set is in force &mdash; an open commitment that matters more once writes exist.</span></li>
+      <li><span class="what">the write path</span><span class="why">Upstream supplies the builders, the uploads, the calendar and a 2,550-entry exercise taxonomy. What is ours is structure validation, idempotency, reversibility, and a preview that composes with zero Garmin requests.</span></li>
+      <li><span class="what">serve --http</span><span class="why">Wired but unused, and the only reason a session-exhaustion advisory applied to this project. Pending a decision to remove it or keep it deliberately.</span></li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>The server supplies measurements and will execute validated writes. The coaching judgement happens in the conversation &mdash; a decision about tomorrow's session needs how the legs feel, how much time there is, what hurts and where in a cycle the day falls, and none of those four exists in any Garmin endpoint.</p>
+  </footer>
+
+</div>
