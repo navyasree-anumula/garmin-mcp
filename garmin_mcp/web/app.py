@@ -12,8 +12,8 @@ only, never 0.0.0.0", and that is right on a bare host and wrong in a container:
 a process bound to loopback inside the container's own network namespace is
 unreachable through a published port, so the UI would simply not work. In the
 container the process binds 0.0.0.0 and the guarantee comes from the publish
-spec -- `127.0.0.1:8765:8765` in `docker-compose.yml` -- exactly as the existing
-`serve --http` path already documents. That makes the Host allowlist below the
+spec -- `127.0.0.1:8765:8765` in `docker-compose.yml`, where that file's own
+comment records the same reasoning. That makes the Host allowlist below the
 real in-container backstop rather than only a rebinding defence, so it is not
 optional. The CLI still *defaults* to 127.0.0.1, because the safe case should be
 the one you get by typing nothing.

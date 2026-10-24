@@ -1,0 +1,53 @@
+name: Dependency audit
+
+# A separate workflow rather than a `schedule:` on docker.yml, for one deciding
+# reason: docker.yml's `build-and-push` declares `needs: [test, audit]`, so a
+# cron there would rebuild and republish `latest` from an unchanged SHA. Gating
+# that off with `if: github.event_name != 'schedule'` works, but it adds a
+# conditional to the publish path to serve a job that does not need it.
+#
+# The `audit` job below is a deliberate duplicate of docker.yml:32-48. Keeping
+# it duplicated is the point: a scheduled run must not be able to reach
+# `Build and publish`. A composite action is more machinery than the
+# duplication costs. If the audit step changes here, change it there too.
+
+on:
+  schedule:
+    # Weekly, Mondays 06:17 UTC. Off the hour deliberately -- the top of the
+    # hour is GitHub's most congested slot and delays scheduled runs.
+    #
+    # Weekly leaves a detection window of up to 7 days. Accepted: both October
+    # advisory episodes had multi-day windows, so weekly would have caught each
+    # one, later rather than sooner.
+    #
+    # Scheduled runs only ever use the default branch, so this fires only once
+    # merged to main -- never from a feature branch or a PR.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# Never `packages: write`. A scheduled run is then structurally incapable of
+# publishing an image, rather than merely guarded against it.
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # docs/SCOPE.md §8. curl_cffi is a binary wheel whose stated purpose is TLS
+      # impersonation, so the lockfile is audited rather than trusted. Audits the
+      # lock, not the resolved env, because the lock is exactly what ships.
+      #
+      # No `pip install -e .` -- this job needs pip-audit and the lockfile, nothing
+      # else, same as docker.yml's copy.
+      - name: Audit locked dependencies
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.lock --strict
