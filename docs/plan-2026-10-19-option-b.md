@@ -72,7 +72,7 @@ works, but it adds a conditional to the publish path to serve a job that does no
 name: Dependency audit
 on:
   schedule:
-    - cron: "17 6 * * *"      # daily; see §11.5 (#4.b) for why not weekly
+    - cron: "17 6 * * 1"      # WEEKLY, Mondays 06:17 UTC; ratified v1.1, see §12.6
   workflow_dispatch:
 permissions:
   contents: read              # no packages: write — this job never publishes
@@ -178,7 +178,8 @@ decision.**
 | `Dockerfile:40-41` | `-p 127.0.0.1:3001:3001` comment | delete |
 | `web/app.py:16` | cites `serve --http` as precedent for binding `0.0.0.0` | **reword, do not delete** — the reasoning stands, the citation goes |
 | `docs/journal.md:521` | historical record | leave untouched |
-| `docs/SCOPE.md` §7/§7a | the written decision | **v1.6** — see A.1 |
+| `docs/architecture.html:732` | lists the flag as "pending a decision" | **added v1.1** — record the removal, then republish the artifact (B.4) |
+| `docs/SCOPE.md` §7/§7a | the written decision | **no change needed** — v1.1 found A.1 was wrong; see §12.13 |
 
 `_cmd_serve` collapses to `mcp.run()`. No test exercises `--http`
 (`test_stdio_purity.py:47` runs bare `serve`), and `docker-compose.yml` deliberately defines no MCP
@@ -224,6 +225,13 @@ delete is proposed. The `RESUME HERE` block also still claims "#18 open, awaitin
 5. Full suite + journal entry. Commit: `docs: journal — …`.
 6. Push with an explicit refspec. Open PR. `workflow_dispatch` the new audit workflow and record the
    result **and who was notified** (#2.c).
+   **Corrected v1.1:** not executable here. Scheduled runs use the default branch only, and
+   `workflow_dispatch` requires the workflow file on the default branch before it can be triggered
+   at all, so steps 6b/6c below are post-merge. Push and open the PR here; stop.
+6b. *(post-merge)* `workflow_dispatch` the audit workflow, record the result **and who was
+   notified** (#2.c, A.3). Confirm the required-check set is unchanged (#7.d).
+6c. *(post-merge)* Republish `docs/architecture.html` to its artifact URL and bump the commit its
+   header names (B.4).
 7. Delete the two merged branches (§6).
 
 ---
@@ -259,14 +267,19 @@ No migration, no data, no `.env`, no prod. Nothing touches the laptop or the tok
 
 ## 10. Open decisions and risks
 
-### 10.1 Blocking — plan cannot be locked without these
+### 10.1 Blocking — RESOLVED 2026-10-24, plan locked
 
-- **`[Mahi-verify]` Remove `serve --http`, or keep it deliberately?** §5 is the case for removing.
-  Keeping is defensible; what is not is leaving it undecided for a third session. If kept, step 4
-  drops and the journal records the retention with its reason and a revisit trigger.
-- **`[Mahi-verify]` Daily or weekly audit cron?** The journal said weekly. §11.5 (#4.b) argues
-  daily: a GitHub-hosted runner minute is free at this scale, and both episodes had multi-day
-  windows. Recorded as a deviation from the journal's wording rather than slipped in.
+Both items were settled by Mahi in-session on 2026-10-24. Kept here rather than deleted, because
+what was decided matters less than the record that it *was* decided after three sessions of carry.
+
+- **~~Remove `serve --http`, or keep it deliberately?~~ → REMOVE.** Executed in step 4.
+- **~~Daily or weekly audit cron?~~ → WEEKLY.** This reverses §11.5 (#4.b), which argued daily.
+  Accepted cost: a detection window of up to 7 days. Both October episodes had multi-day windows,
+  so weekly would have caught each, later rather than sooner. Recorded as a ratified decision, not
+  a slip.
+
+A third `[Mahi-verify]`, **#2.a** (the laptop's Claude Desktop config must not pass `--http`), was
+also resolved — see §12.4, resolved from `docker ps` rather than the config file.
 
 ### 10.2 Risks
 
@@ -457,3 +470,194 @@ Recorded in §10.2 as 10.a–10.d with mitigations and acceptances.
 | 8.c | §7 step 3 | Ten runs, not one |
 | A.1 | §2 "Out" | The SCOPE disagreement recorded as a v1.6 input rather than left implicit |
 | B.4 | §11.13, §10.2 | Artifact URL in the journal; repo file is the source; header names the commit |
+
+---
+
+## 12. v1.1 10-dimension stress-test absorption notes
+
+Amendment of 2026-10-24: the two §10.1 decisions ratified, and the corrections execution forced.
+Passes A and B run rather than skipped — the amendment changes a delivery surface and adds a
+producer of CI state.
+
+### 12.1 Coverage gap rationale
+
+v1.0 walked all ten plus A and B, so there is no coverage debt. What v1.0 could not do is
+*execute*, and six of the findings below exist only because something was run rather than read.
+
+### 12.2 #1 Edge cases (3 findings, 0 actionable)
+
+- **1.1.a** `serve --http` after removal exits 2 with argparse's usage on stderr, naming the valid
+  subcommands. v1.0's #1.e predicted this; now observed by running it. ✓ VERIFIED
+- **1.1.b** Weekly cadence and the 60-day auto-disable do not interact the way one might assume:
+  deactivation is driven by repository *activity*, not by cron firings, so the cadence does not
+  change the deactivation risk. It does mean a dead gate goes unnoticed up to 7 days longer.
+  ✓ VERIFIED (docs), recorded.
+- **1.1.c** The ratelimit fix does not reduce the flake to zero: a first stamp delayed more than
+  `WINDOW_SLACK_S` beyond the last would still fail. One rare exposure instead of five likely ones,
+  and now derived so a failure is informative. Recorded in the commit. *(no action)*
+
+### 12.3 #2 Unverified assumptions (4 findings, 1 actionable)
+
+- **2.a RESOLVED.** The laptop does not pass `--http`. Established from
+  `docker ps --no-trunc`: both containers run `python -m garmin_mcp serve`. Stronger evidence than
+  the config file would have been, because it is the live invocation rather than a file that may
+  not be the one in use. See 12.4.
+- **2.b RESOLVED** from GitHub's docs at execution time: scheduled workflows in a public repository
+  are auto-disabled after 60 days with no repository activity, a cron-expression change by a user
+  with write access reactivates them, and **no notification on auto-disable is documented**.
+- **2.c STILL OPEN**, and correctly rescheduled. Who receives a *scheduled* run's failure
+  notification cannot be checked before merge (see B.1.2 / §7 step 6b).
+- **2.1.d NEW** `claude_desktop_config.json` does **not exist** at the documented path
+  (`%APPDATA%\Claude\`) on the laptop, yet the connector — named `garmin local dev`, not `garmin` —
+  is connected and running. README instructs editing that file. **ACTIONABLE** — a README/§7 defect,
+  deferred to its own item; it also blocks the laptop upgrade in 9.1.b, since changing the pin means
+  editing wherever the connector actually lives.
+
+### 12.4 #3 Actual code checks (4 findings, 1 actionable)
+
+Read, not inferred: `garmin_mcp/source/ratelimit.py:95-135`; `garmin_mcp/cli.py` serve paths;
+`docs/SCOPE.md:634-652, 700-710`; `docker-compose.yml`; `Dockerfile`; the installed
+`mcp/server/_otel.py`, `mcp/shared/_otel.py`, `mcp/server/lowlevel/server.py`; and
+`opentelemetry/trace/propagation/tracecontext.py` plus `trace/span.py` diffed across 1.44.0 and
+1.45.1 from the wheels.
+
+- **3.1.a** **v1.0's A.1 was WRONG.** It claimed removal would leave §7a citing a flag that no
+  longer exists. `docs/SCOPE.md` contains no occurrence of `--http` at all: §7 says "Transport:
+  stdio", which removal makes unambiguously true; §7's v1.3 supersession note attributes the
+  listening port to "the credential UI"; §7a's bind rule cites `127.0.0.1:8765:8765`, the web UI on
+  8765, never 3001. Removal closes the old disagreement and opens no new one.
+  **ACTIONABLE §5.2** — the SCOPE row changed from "v1.6" to "no change needed".
+- **3.1.b** `args.port` survives only in `_cmd_web`, against `p_web`'s own `--port` (default 8765).
+  Verified by grep *after* the removal, so #3.a is closed rather than assumed. ✓ VERIFIED
+- **3.1.c** `ratelimit.py:122-126` re-read on this branch; the v1.0 diagnosis correction holds —
+  refill caps at `burst`, `acquire` spends exactly one. ✓ VERIFIED
+- **3.1.d** `mcp` 2.2.0 installs `OpenTelemetryMiddleware` by default
+  (`lowlevel/server.py:434-440`) and calls `extract_trace_context(ctx.meta)` on every inbound
+  message (`server/_otel.py:39`). Read from the installed package rather than taken from an issue
+  tracker. ✓ VERIFIED — and it is what produced 4.1.a.
+
+### 12.5 #4 Security (3 findings, 2 actionable)
+
+- **4.1.a** **The finding worth the pass.** `opentelemetry-api` CVE-2026-114603 is reachable over
+  **stdio**, not only HTTP: `_meta` is a JSON-RPC body field, so the vulnerable `tracestate` parse
+  is on the shipped transport. **Removing `--http` does not close it.** This is the opposite shape
+  to CVE-2026-59951, which `--http` alone made reachable. **ACTIONABLE** — §5.1's argument stands on
+  its own merits but must not be read as a general shield; recorded in the journal in as many words.
+- **4.1.b** `audit.yml` grants `contents: read` and nothing else, confirmed against the parsed YAML
+  rather than a grep — the string "packages" appears only inside an explanatory comment, which a
+  substring search reports as a hit. ✓ VERIFIED (#4.d satisfied structurally: the file has one job,
+  so `build-and-push` is unreachable, not merely skipped)
+- **4.1.c** The laptop's August image pairs an intact `--http` with `mcp` 2.1.1 — the version
+  CVE-2026-59951 affects *through streamable HTTP specifically*. On that image `serve --http` would
+  start the actually-vulnerable endpoint. The combination is worse than either half and persists
+  until the laptop re-pins. **ACTIONABLE** — folded into 9.1.b.
+
+### 12.6 #5 Vision alignment (1 finding, 0 actionable)
+
+- **5.1.a** Removal makes §7's v1.2 transport decision true in code for the first time. Weekly
+  cadence is consistent with §8's posture that the lockfile is audited rather than trusted.
+  ✓ ALIGNED
+
+### 12.7 #6 Architecture consistency (3 findings, 0 actionable)
+
+- **6.1.a** `test_transport_surface.py` owns exactly one claim, matching `test_layering.py`
+  (imports) and `test_fetch_seam.py` (the doorway). ✓ ALIGNED
+- **6.1.b** The duplicated audit step is byte-identical to `docker.yml`'s, verified by comparing the
+  parsed `run` blocks, with a cross-reference comment in each file. ✓ VERIFIED
+- **6.1.c** `min_window_seconds` lives in the test file, not in `ratelimit.py`. Deliberate: it is a
+  test-side restatement of the limiter's contract, and importing it from product code would let the
+  test assert the implementation against itself. *(no action, recorded)*
+
+### 12.8 #7 Potential impact on other features (2 findings, 0 actionable)
+
+- **7.1.a** The web UI is untouched. `web/app.py:16`'s reasoning about the in-container `0.0.0.0`
+  bind is kept and its citation repointed at `docker-compose.yml`'s comment, verified to make the
+  identical argument. Deleting the passage would have discarded a correct explanation along with a
+  stale reference. ✓ VERIFIED
+- **7.1.b** An unplanned PR (#24, the certifi/opentelemetry bump) had to be inserted *ahead* of this
+  work: #23's audit was the first thing in eight days to re-run against `main`'s lockfile. The plan
+  did not anticipate its own premise being demonstrated mid-execution. *(no action, recorded)*
+
+### 12.9 #8 Test coverage (3 findings, 0 actionable)
+
+- **8.1.a** 288 → **292**, matching §8's projection for the `--http`-removed branch exactly. Never
+  lower at any commit. ✓ VERIFIED
+- **8.1.b** §7 step 3 asked for ten runs. Done — and **ten more under eight busy loops on four
+  cores**, because an idle box cannot exercise the scheduling-delay condition the flake needed.
+  Run times rose ~1.2s → ~1.8s, so the contention was real. 0 failures in 20 runs.
+- **8.1.c** Both new guards carry negative controls that check *both* directions — the forbidden
+  shape is rejected and the permitted shape is not, so neither guard can forbid the thing it is
+  protecting and still look green (#6.c honoured).
+
+### 12.10 #9 Deployment & rollback (2 findings, 1 actionable)
+
+- **9.1.a** **B.1 is fully neutralised, not merely mitigated.** The laptop is pinned to
+  `sha-21829cc`, not `latest`, and `docker run` never re-pulls a moving tag (stated in
+  `docker-compose.yml` and the `Dockerfile`). B.1 required *both* a `latest` config that re-pulls
+  *and* `--http` in the args; neither holds. ✓ VERIFIED
+- **9.1.b NEW** The laptop runs a **2026-08-30 build, 36 commits behind `main`**. Missing:
+  `garmin_training` and the metric map, all three dependency bumps, the wrong-password/expired-token
+  fix, and — with some irony — `1934bfc`, the serverInfo build stamp that would have made this
+  checkable from the server instead of from `docker ps`. **ACTIONABLE** — its own task, gated on
+  2.1.d; not folded into this plan.
+
+### 12.11 #10 Risks (2 findings)
+
+- **10.1.a** The cron's failure mode is **silence**: auto-disable after 60 days with no documented
+  notification, on a repo that has already gone six weeks between sessions. That is the same failure
+  mode the cron is introduced to fix. *Not solved here* — a loud-failure consumer is a new mechanism
+  the plan does not specify, and adding it would be scope expansion. Carried as its own item.
+- **10.1.b** `docs/architecture.html` is edited on this branch but the published artifact still says
+  `serve --http` is "pending a decision". The two-places problem is live *right now*, not
+  hypothetically. Closed by §7 step 6c.
+
+### 12.12 Pass A — states, producers and consumers (3 findings, 1 actionable)
+
+| State / surface | Producers | Consumers | Finding |
+|---|---|---|---|
+| `serve --http` flag | **removed** | all updated except `journal.md` (historical, deliberate) | **A.1.1** |
+| `--port` on `p_serve` | **removed** | none — closed | *(closed)* |
+| CI audit conclusion on `main` | PR runs; `main` push runs; **new:** weekly scheduled run | `build-and-push` `needs:` (docker.yml only); GitHub notification; checks UI | **A.1.2** |
+| running image tag on the laptop | CI `type=sha` tag | the Desktop connector config — **location unknown** | **A.1.3** |
+| ratelimit stamps | two child processes, `time.time()` | the parent's widest-window assertion | 0 findings |
+
+- **A.1.1** v1.0's A.1 is withdrawn, not carried — see 3.1.a. The state is gone and every live
+  consumer was updated in one commit.
+- **A.1.2** Unchanged in shape by the amendment: still one producer whose only consumer is a
+  notification, gating nothing by design. The recipient remains unverified and is now correctly
+  scheduled post-merge rather than at PR time.
+- **A.1.3 NEW** The running image tag is a state whose only consumer is a config file that cannot be
+  found at its documented path (2.1.d). A producer with an unlocatable consumer is the same class of
+  break as `capabilities.json`, on the deployment surface instead of the data surface — and it was
+  found by `docker ps`, not by reading the repo, which is the point of this pass.
+
+### 12.13 Pass B — lifecycles (4 findings, 1 actionable)
+
+- **B.1.1** *Deployment lifecycle.* Resolved — the pinned tag makes the removal unreachable from the
+  laptop until a deliberate re-pin (9.1.a).
+- **B.1.2** *Audit lifecycle.* v1.0's B.2 predicted that a red run stays red in history permanently.
+  It happened on **#23**, a documentation-only PR, before the cron existed. "Is `main` healthy?"
+  genuinely cannot be answered from the newest run without asking which commit it ran against.
+  ✓ VERIFIED by occurrence.
+- **B.1.3 NEW** *Request lifecycle.* `ctx.meta` is read by middleware on **every** inbound message,
+  before any handler runs. v1.0's pass B declared the request lifecycle "untouched, 0 findings" —
+  it missed this read entirely, and that read is exactly what makes 4.1.a stdio-reachable.
+  **ACTIONABLE** — the lesson is that "no product code path changes" is not the same as "no value is
+  read on the request path".
+- **B.1.4** *Artifact lifecycle.* Live now: the repo file is edited and the artifact is not yet
+  republished. Closed by §7 step 6c.
+
+### 12.14 Net v1.1 changes
+
+| Finding | Section updated | Change |
+|---|---|---|
+| §10.1 decisions | §3, §10.1 | Cron ratified **weekly** (`17 6 * * 1`); `--http` removal ratified; both struck from blocking |
+| 2.a | §10.1 | Resolved from `docker ps`, not the config file |
+| 2.b | §12.3, §3 | 60-day auto-disable confirmed from docs; no notification documented |
+| 2.c, A.1.2, B.1.2 | §7 steps 6/6b | Dispatch and recipient verification moved **post-merge** — not executable at PR time |
+| 2.1.d, 9.1.b, A.1.3 | §12.3, §12.10 | Config file absent at documented path; laptop 36 commits behind — both new items, neither folded in |
+| 3.1.a, A.1.1 | §5.2 | SCOPE row changed from "v1.6" to "no change needed"; v1.0's A.1 withdrawn |
+| 4.1.a, B.1.3 | §5.1 framing | `--http` removal does **not** close the opentelemetry advisory; surface reduction is not a general shield |
+| 8th call site | §5.2 | `docs/architecture.html:732` added, with the artifact republish as part of the action |
+| 10.1.b, B.1.4 | §7 step 6c | Artifact republish made an explicit post-merge step |
+| 8.1.b | §7 step 3 | Ten runs **plus** ten under deliberate CPU oversubscription |
