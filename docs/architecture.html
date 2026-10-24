@@ -2,7 +2,7 @@
   Source of the published architecture page.
 
   Published at: https://claude.ai/artifact/ThFxyUzfBKKBPinyQi4AyA
-  Describes:    main @ 76e62aa (288 passed, 2 skipped)
+  Describes:    main @ 0d30eda (292 passed, 2 skipped)
 
   THIS FILE IS THE SOURCE. To change the page, edit this file and republish it to
   the URL above; do not edit the published page separately, or the two disagree
@@ -297,7 +297,7 @@
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">garmin-mcp &middot; main @ 76e62aa</p>
+    <p class="eyebrow">garmin-mcp &middot; main @ 0d30eda</p>
     <h1>Garmin MCP Architecture</h1>
     <p class="lede">A read-only MCP server that turns a Garmin Connect account into measurements an agent can ask for &mdash; and keeps every Garmin round trip behind one function.</p>
   </header>
@@ -305,7 +305,7 @@
   <dl class="state">
     <div><dt>Transport</dt><dd>stdio</dd></div>
     <div><dt>Tools exposed</dt><dd>2</dd></div>
-    <div><dt>Tests</dt><dd>288 + 2 skipped</dd></div>
+    <div><dt>Tests</dt><dd>292 + 2 skipped</dd></div>
     <div><dt>Request budget</dt><dd>0.5/s, burst 4</dd></div>
   </dl>
 
@@ -697,7 +697,7 @@
     <div class="col">
       <p class="kicker">Guards</p>
       <h2>Each rule has a test, and each test has a negative control</h2>
-      <p>A call-site discipline with no test is a convention, and conventions erode the first time somebody is in a hurry. Four architectural rules are enforced by tests that walk the source rather than trusting it &mdash; and each of those tests has a companion that plants a violating file and asserts the check actually fails.</p>
+      <p>A call-site discipline with no test is a convention, and conventions erode the first time somebody is in a hurry. Five architectural rules are enforced by tests that walk the source rather than trusting it &mdash; and each of those tests has a companion that plants a violating file and asserts the check actually fails.</p>
       <p>That convention earned its keep immediately. The seam's first doorway check walked only attribute and name nodes, so a file containing nothing but <code>from .client import _garmin_access</code> sailed through. Its own negative control caught it; it walks import aliases now.</p>
     </div>
 
@@ -711,6 +711,7 @@
           <tr><td>Only <code>fetch.py</code> calls the doorway on the data path</td><td class="m">test_fetch_seam.py</td></tr>
           <tr><td>Nothing but JSON-RPC reaches stdout</td><td class="m">test_stdio_purity.py</td></tr>
           <tr><td>Logging stays on stderr, below the level that would print a response body</td><td class="m">test_logging_hygiene.py</td></tr>
+          <tr><td>No module asks <code>mcp.run</code> for a transport &mdash; the server speaks stdio, and only stdio</td><td class="m">test_transport_surface.py</td></tr>
         </tbody>
       </table>
     </div>
