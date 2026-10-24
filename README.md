@@ -111,10 +111,6 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
   origin check. Hence the `Host` allowlist, same-origin enforcement, a per-form CSRF token,
   and no CORS headers anywhere. `tests/test_web_security.py` covers each one, and each was
   observed to fail with its guard removed.
-- **The HTTP transport must be published to loopback only.** `serve --http` binds
-  `0.0.0.0` inside the container on purpose — exposure is controlled by Docker:
-  `-p 127.0.0.1:3001:3001` is correct, `-p 3001:3001` serves your health data to every
-  network the machine joins, with no authentication.
 - **Deletes are permanently excluded** from the tool surface.
 - **The dependency is pinned floor-and-ceiling** (`>=0.3.11,<0.4`), never exactly — an
   exact pin is what stranded the most popular existing server on a stale release.

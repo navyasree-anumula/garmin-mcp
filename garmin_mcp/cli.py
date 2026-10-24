@@ -83,16 +83,12 @@ def _cmd_login(_args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
+    # stdio only, and not configurable: docs/SCOPE.md §7 has recorded that as the
+    # transport decision since v1.2, and tests/test_transport_surface.py is what
+    # keeps the code agreeing with it.
     from .server import mcp
 
-    if args.http:
-        # Binding 0.0.0.0 INSIDE the container is correct; exposure is controlled
-        # at the Docker layer with `-p 127.0.0.1:3001:3001`. Publishing this as
-        # `-p 3001:3001` would serve health data to every network the host joins,
-        # with no authentication (docs/SCOPE.md §7).
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=args.port)  # noqa: S104
-    else:
-        mcp.run()
+    mcp.run()
     return 0
 
 
@@ -342,13 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     p_login = sub.add_parser("login", help="One-time interactive bootstrap. Needs a TTY.")
     p_login.set_defaults(func=_cmd_login)
 
-    p_serve = sub.add_parser("serve", help="Run the MCP server. Defaults to stdio.")
-    p_serve.add_argument(
-        "--http",
-        action="store_true",
-        help="Serve Streamable HTTP instead of stdio. Publish to loopback only.",
-    )
-    p_serve.add_argument("--port", type=int, default=3001)
+    p_serve = sub.add_parser("serve", help="Run the MCP server over stdio.")
     p_serve.set_defaults(func=_cmd_serve)
 
     p_selftest = sub.add_parser(

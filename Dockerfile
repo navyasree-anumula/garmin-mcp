@@ -35,9 +35,8 @@ VOLUME ["/data"]
 ARG BUILD_REF=""
 ENV GARMIN_MCP_BUILD=${BUILD_REF}
 
-# No EXPOSE, deliberately. The HTTP transport binds 0.0.0.0 inside the container;
-# exposure is controlled at the Docker layer and must be loopback-scoped:
-#   -p 127.0.0.1:3001:3001    correct
-#   -p 3001:3001              serves health data to every network the host joins
+# No EXPOSE, deliberately: the server speaks stdio only (docs/SCOPE.md §7) and
+# opens no listening socket at all. The credential UI is a separate on-demand
+# service, and its loopback publish lives in docker-compose.yml.
 ENTRYPOINT ["python", "-m", "garmin_mcp"]
 CMD ["serve"]
