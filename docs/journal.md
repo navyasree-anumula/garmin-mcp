@@ -1874,44 +1874,42 @@ ratelimit +2 (the derivation and its negative control).
 
 ## RESUME HERE
 
-**Written mid-session, deliberately: the work branch is NOT pushed and has no PR.** The 19 October
-block was stale on arrival because it described merges that happened after it was written. This one
-states what is pending rather than predicting it.
+**Written after the last merge, which is the only time this block can be true.** The 19 October
+block was stale on arrival for describing merges that happened after it was written. The first draft
+of *this* block was stale within the hour for the same reason — it said the work branch was unpushed
+and four branches were pending. This is its correction, written once `main` was final.
 
-State: `main` = **`c73f5ef`**. Two PRs merged today: **#24** (`badd6b0`, the certifi +
-opentelemetry-api bump) and **#23** (plan, architecture page, journal). **292 passed, 2 skipped** on
-the work branch; `main` itself is at 288 + 2 until the work branch lands.
+State: `main` = **`c904152`**. **292 passed, 2 skipped.** **No open PRs, and no branch but `main`**
+either locally or on the remote — the first time this repo has had none.
 
-**This session's branch: `fix/ci-cadence-and-transport-surface`**, cut from `c73f5ef`, upstream
-unset deliberately so a bare `git push` cannot target `main`. Four commits:
+Four PRs merged 2026-10-24, in this order:
 
-- `3126d32` `ci:` weekly `audit.yml` (`17 6 * * 1`, `contents: read` only) + cross-ref on docker.yml
-- `4fdebb0` `test(ratelimit):` widest-window bound, derived; 20/20 runs green incl. under load
-- `f5728ca` `fix(cli):` `--http` and `--port` removed across 8 sites + `test_transport_surface.py`
-- *(this entry)* `docs:` journal + plan v1.1 amendment
+- **#24** → `badd6b0`. `certifi` 2026.7.22 → 2026.10.23, `opentelemetry-api` 1.44.0 → 1.45.1.
+  **Unplanned:** #23's audit caught both, eight days after `main` last ran one.
+- **#23** → `c73f5ef`. The 19 October documentation: plan, architecture page, journal.
+- **#25** → `0d30eda`. **Option B itself**: weekly `audit.yml` (`17 6 * * 1`, `contents: read`
+  only), the derived ratelimit bound, `--http` and `--port` removed across eight sites,
+  `test_transport_surface.py`, and the plan's v1.1 amendment.
+- **#26** → `c904152`. Architecture snapshot re-dated to `0d30eda`, and the fifth guard recorded.
 
-**Pushed? no. PR? no.** Both §10.1 decisions are ratified (weekly; remove `--http`) and `#2.a` is
-cleared, so nothing blocks the push.
+**Option B is closed.** Every §10.1 decision ratified, every `[Mahi-verify]` resolved, both
+post-merge steps executed:
 
-**Post-merge, and only possible post-merge** — §7 steps 6b/6c:
-
-1. `workflow_dispatch` the audit workflow and **record who was notified** (#2.c, A.3). Scheduled
-   runs and `workflow_dispatch` both require the file on the default branch, so this cannot be done
-   from a PR. If failures reach nobody, the cron is one producer and zero consumers.
-2. Republish `docs/architecture.html` to <https://claude.ai/artifact/ThFxyUzfBKKBPinyQi4AyA> and bump
-   the commit its header names (currently `76e62aa`, and the published page still calls `serve
-   --http` "pending a decision"). The repo file is the source; edit it and republish, never the
-   reverse.
-3. Confirm the required-check set is unchanged (#7.d).
-
-**Four merged branches to delete, tips recorded so each delete is reversible** — all four verified
-ancestors of `origin/main` with `git merge-base --is-ancestor`:
-`docs/journal-2026-10-16-map-and-advisory` (`6e60622`), `feature/metric-map-and-training-tool`
-(remote `91000b2`, local `83e7963` — still two commits for one name on this box),
-`docs/option-b-plan-and-architecture` (`724a020`), `fix/deps-certifi-opentelemetry` (`badd6b0`).
-The backlog went from two to four in one session. **`delete_branch_on_merge` is `false` on this
-repo**; turning it on makes the rule structural instead of remembered. `allow_update_branch` was
-turned on today, which is how #23 got its clean re-run.
+- **§7 step 6b — done.** `workflow_dispatch` run `40100380617` succeeded, so the workflow runs end
+  to end. **#2.c and A.3 are CLOSED:** scheduled-run failure notifications go to whoever last
+  modified the cron syntax — `navyasree-anumula`, by `git blame` on the cron line — and Mahi
+  confirmed Actions email is enabled in Settings. **The cron has a consumer.** Two documented ways
+  the recipient moves: re-enabling a disabled scheduled workflow reassigns it to whoever re-enabled
+  it, and changing the default branch reassigns the actor.
+- **§7 step 6c — done.** `docs/architecture.html` republished to
+  <https://claude.ai/artifact/ThFxyUzfBKKBPinyQi4AyA> (version 3), now describing `0d30eda`. The
+  repo file is the source; edit it and republish, never the reverse.
+- **#7.d — done.** `main` carries no branch protection, so there is no required-check set to change.
+- **§7 step 7 — done.** All six merged branches deleted, local and remote, each tip verified an
+  ancestor of `origin/main` first. **`delete_branch_on_merge` is still `false`**, so that was six
+  manual deletions — and note the setting would only ever handle the *remote* half: the local branch
+  and the cached `origin/` ref always need `git fetch origin --prune` plus `git branch -d`.
+  `allow_update_branch` was turned on today, which is how #23 got its clean re-run.
 
 **New items this session, none folded into Option B:**
 
@@ -1930,6 +1928,11 @@ turned on today, which is how #23 got its clean re-run.
 - **Surface reduction is not a general shield.** `opentelemetry-api` CVE-2026-114603 is reachable
   over stdio through JSON-RPC `_meta`, so removing `--http` did not close it. Worth remembering the
   next time a transport removal is offered as mitigation.
+- **B.4's check is "read the page against the code", not "diff the two copies".** Running it for the
+  first time, the published page matched the repo file exactly — no divergence — yet the read still
+  caught a stale test count in the state strip that *both* copies carried. Comparing the copies
+  would have shown nothing, because they were equally wrong. Step 6c expected two edits; there were
+  five.
 
 **Still open from before, unchanged:** SCOPE **v1.6** owes §7 (Connectors-not-Developer, per-user
 Docker path), §7a (the bind-address correction for the *web UI*, knowingly stale for a second
@@ -1937,7 +1940,7 @@ version — **and not, it turns out, affected by the `--http` removal; v1.0's A.
 (location exposure via activity detail). §6's cache key is settled; the store is what moved, carrying
 the open question that a payload cache is health data at rest on the credential volume.
 
-**Next, in order, after this branch merges:**
+**Next, in order:**
 
 1. **`--explain max_metrics_range`, and the six new candidates** — `heart_rates`, `hydration`,
    `body_battery_events`, `morning_readiness`, `heart_rate_zones`, `stats_and_body`, plus
