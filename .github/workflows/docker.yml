@@ -30,6 +30,10 @@ jobs:
         run: pytest -q
 
   audit:
+    # Deliberately duplicated in .github/workflows/audit.yml, which runs this same
+    # step weekly on a schedule. Kept as two copies rather than a composite action
+    # so a scheduled run cannot reach `build-and-push` below, which declares
+    # `needs: [test, audit]`. If this step changes, change it there too.
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
