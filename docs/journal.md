@@ -1991,8 +1991,15 @@ containers, which is the only proof that was ever available: causation, not file
 
 So the README defect is now definite rather than suspected. It says to add the server to
 `claude_desktop_config.json` and shows the classic `%APPDATA%\Claude\` location, which on an
-MSIX/Store install does not exist. **Not fixed in this entry** — it is a README change, not a
-journal one, and it wants its own commit.
+MSIX/Store install does not exist. Fixed in its own commit on
+`docs/client-wiring-msix-and-stamp`, together with the README example's other defect — it
+pinned `:latest`, which SCOPE §7 has forbidden since v1.2 and which is how a laptop runs 36
+commits behind.
+
+**And SCOPE §7 did not owe the path.** It has carried the MSIX path since v1.3, correctly,
+including that the folder does not exist until first launch. The first draft of this entry
+said §7 owed the same correction; it did not, and the claim is withdrawn. What §7 *did* have
+wrong is below, and it is this session's finding rather than an inherited one.
 
 ### Both containers came back on the new tag
 
@@ -2016,6 +2023,12 @@ inside a conversation instead of from `docker ps`. On its first real use the ans
 on the wire and did not survive to the reader. **A field a summarising client can drop is not
 a verification mechanism** — it is one only when something asks for it by name. `docker ps`
 answered the question again, from outside.
+
+SCOPE §7 said the running build was "**always** identifiable" from `server_version`. That is
+the sentence this disproves, and it is corrected in place on
+`docs/client-wiring-msix-and-stamp` — identifiable from the payload, with the capability
+probe named as the check that cannot be summarised away. Pinning is unaffected: the reason
+for pinning is the 36-commit drift, which stands.
 
 What made the verification hold anyway was asking for something that cannot exist on the old
 image. `garmin_health` is not in `sha-21829cc` at all, so a successful call proves the build
@@ -2062,12 +2075,18 @@ it. No code changed in this session; tests stay at 352 passed, 2 skipped.
 
 ## RESUME HERE
 
-**Written with this entry's own PR open, which is the one thing the last three blocks got
-wrong.** The 19 October block described merges that happened after it was written; the first
-draft of the 24 October block said four branches were pending within an hour of them being
-merged. So: `main` = **`8154e24`** (#28, `garmin_health`). **352 passed, 2 skipped.** The only
-pending item is the branch carrying *this* entry — `docs/journal-2026-10-26-step-0b` — and
-when it merges, `main` moves and nothing else here changes.
+**Rewritten a third time, because the second draft went stale the way the first two did.**
+The 19 October block described merges that happened after it was written; the first draft of
+the 24 October block said four branches were pending within an hour of them being merged; the
+first draft of *this* block named its own PR #29 as pending, and #29 merged while the next
+commit was being written. The lesson is narrower than "write it after the last merge" — it is
+that **a resume block must not name a pending item it is itself inside of.** Pending items
+belong in the PR, which closes on its own; the block states only what has landed.
+
+**Landed:** `main` = **`75f05b4`** (the #29 merge, carrying this entry). **352 passed, 2
+skipped.** Two docs-only corrections are in review and neither changes anything described
+above: the withdrawal below, and `docs/client-wiring-msix-and-stamp` (the README's Store path
+and `:latest` example, §7's "always identifiable" claim).
 
 **Step 0 is closed, both halves.** The laptop runs `sha-8154e24`, re-pinned 2026-10-26 20:14
 local from `sha-21829cc`. Config lives at
@@ -2090,8 +2109,12 @@ acceptance criterion for reads.
 
 **Still open, unchanged:**
 
-- **The README tells Store-install users to edit a file they do not have.** Now a confirmed
-  defect, not a suspicion. Wants its own commit, and §7 of SCOPE owes the same correction.
+- **SCOPE v1.6's §7 debt is unchanged**, and it is *not* the MSIX path — §7 has had that
+  right since v1.3. It owes Connectors-not-Developer and the per-user Docker path. The
+  README's missing Store caveat and `:latest` example, and §7's "always identifiable" claim
+  about `server_version`, are fixed on `docs/client-wiring-msix-and-stamp` as single-line
+  factual corrections — no version bump, so v1.6 stays a reviewable amendment rather than
+  something quietly half-spent.
 - **The cron's failure mode is silence.** Public-repo scheduled workflows auto-disable after
   60 days of repository inactivity with no documented notification. Needs a consumer that
   cannot be ignored before the gate is trustworthy.
