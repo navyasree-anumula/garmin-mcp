@@ -19,6 +19,7 @@ came back from a conversation rather than from the composer.
 
 import ast
 import copy
+import json
 import math
 from pathlib import Path
 
@@ -365,6 +366,112 @@ def test_the_distance_count_in_the_basis_counts_every_iteration():
 
 def test_the_estimate_lands_in_the_structure():
     assert compose.compose("Thu threshold", SESSION)["estimatedDurationInSecs"] == 1380
+
+
+# --------------------------------------------------------------------------
+# The approval marker, and the transport it has to survive
+# --------------------------------------------------------------------------
+
+
+def through_a_javascript_client(value):
+    """What a JS client does to our numbers, and nothing else.
+
+    JavaScript has one number type, so `JSON.stringify(600.0)` emits `600`.
+    Python's own `json` round trip preserves `600.0`, which is why every test in
+    this repo passed while the real handoff was broken: the structures were
+    passed in-process as objects and the transport was never exercised.
+
+    Written as a helper rather than a `json.dumps`/`loads` pair precisely
+    because the Python pair does NOT reproduce the bug.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: through_a_javascript_client(v) for key, v in value.items()}
+    if isinstance(value, list):
+        return [through_a_javascript_client(v) for v in value]
+    return value
+
+
+def test_the_marker_survives_a_javascript_client():
+    """The 2026-10-27 bug. Claude Desktop refused its own preview: the structure
+    was numerically identical and textually different, so every workout with a
+    whole-number duration -- which is nearly all of them -- was unwritable."""
+    structure = compose.compose("throwaway test", SESSION)
+
+    assert compose.approval_for(
+        through_a_javascript_client(structure)
+    ) == compose.approval_for(structure)
+
+
+def test_the_marker_is_stable_across_calls():
+    structure = compose.compose("Thu threshold", SESSION)
+
+    assert compose.approval_for(structure) == compose.approval_for(structure)
+
+
+def test_the_marker_ignores_key_order():
+    """A client that round-trips through its own serialiser may reorder keys it
+    never looked at. That must not invalidate an approval."""
+    structure = compose.compose("Thu threshold", SESSION)
+    reordered = json.loads(json.dumps(structure, sort_keys=True))
+
+    assert compose.approval_for(reordered) == compose.approval_for(structure)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"workoutName": "something else"},
+        {"estimatedDurationInSecs": 99},
+        {"description": "snuck in"},
+    ],
+    ids=["name", "duration", "description"],
+)
+def test_an_edited_structure_gets_a_different_marker(edit):
+    """The failure direction that matters. Too strict costs a round trip; too
+    loose puts a session the human did not approve on their watch."""
+    structure = compose.compose("Thu threshold", SESSION)
+    edited = dict(structure) | edit
+
+    assert compose.approval_for(edited) != compose.approval_for(structure)
+
+
+def test_an_edited_step_deep_in_the_tree_gets_a_different_marker():
+    """The edit that would matter most and is hardest to see: one rep's
+    distance, four levels down inside a repeat group."""
+    structure = compose.compose("Thu threshold", SESSION)
+    edited = json.loads(json.dumps(structure))
+    group = edited["workoutSegments"][0]["workoutSteps"][1]
+    group["workoutSteps"][0]["endConditionValue"] = 1200.0
+
+    assert compose.approval_for(edited) != compose.approval_for(structure)
+
+
+def test_a_fractional_value_is_not_rounded_into_a_collision():
+    """Normalisation must only collapse float/int spellings of the SAME number.
+    If 600.5 and 600 hashed alike, a half-minute edit would pass as approved."""
+    whole = compose.compose("x", (Step("interval", duration_secs=600.0),))
+    fraction = compose.compose("x", (Step("interval", duration_secs=600.5),))
+
+    assert compose.approval_for(whole) != compose.approval_for(fraction)
+
+
+def test_a_boolean_is_not_normalised_into_a_number():
+    """`True` is an `int` subclass, so a careless normaliser turns it into 1 --
+    and then `{"displayable": true}` and `{"displayable": 1}` would hash alike
+    while meaning different things to whoever reads the payload."""
+    assert compose.approval_for({"flag": True}) != compose.approval_for({"flag": 1})
+
+
+def test_two_different_sessions_do_not_share_a_marker():
+    """The stale-structure case: two previews in one conversation and the wrong
+    pair sent on."""
+    assert compose.approval_for(
+        compose.compose("Easy 40", EASY_RUN)
+    ) != compose.approval_for(compose.compose("Thu threshold", SESSION))
 
 
 # --------------------------------------------------------------------------
