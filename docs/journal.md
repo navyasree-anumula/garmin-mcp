@@ -1872,6 +1872,103 @@ failure means something.
 Tests: 288 -> 292, 2 skipped. `--http` removal +2 (the transport guard and its negative control),
 ratelimit +2 (the derivation and its negative control).
 
+## 2026-10-26 (v0 arc, session 1) — `garmin_health`, and a config that was never missing
+
+The direction changed before any code was written. Five phases of measurement had produced one
+usable tool, so the goal is now a loop used daily — **read what the body says, write a session
+to the watch, check it got done** — and everything else waits. The probe mechanism work planned
+the day before was dropped mid-plan, unstarted.
+
+### The order had to be reversed before it could be built
+
+The acceptance criterion was "something I can call from Claude Desktop". The laptop runs
+`sha-21829cc`, which does not contain `garmin_training` at all, so **nothing built in this arc
+is reachable from Desktop until the pin moves** — which put the laptop work at step 0 rather
+than at the end, where the proposed order had it.
+
+Two other things were blocking and were found by reading rather than by trying:
+
+**Sleep and stress had no measured field paths.** 5b recorded that sleep returned 4589
+populated fields and never recorded a path out of it; stress had only a shape note. HRV and
+resting HR did have paths. So the health tool split: three HRV rows and resting HR could be
+written immediately, and sleep and stress could not be written at all without one probe call.
+
+**Pace and HR targets need zone data that has never been fetched.** `TargetType` offers only
+zone-based targets and `get_heart_rate_zones` has never been run. Absolute ranges are
+expressible — `ExecutableStep` is `extra="allow"`, so `targetValueOne`/`targetValueTwo` pass
+through — but unverified against Garmin's acceptance. v0 run workouts are therefore time and
+distance with `NO_TARGET`, so the one supervised live cycle is spent confirming our structure
+rather than debugging two unknowns at once.
+
+### The laptop config was redirected, not absent
+
+`claude_desktop_config.json` does not exist at the documented path, and the reason is that this
+is the **MSIX/Store** build of Claude Desktop, whose `%APPDATA%` writes are virtualised:
+
+    C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json
+
+So the README is not wrong about the logical path; it is wrong for a Store install, which is
+the install that exists. **Found by filename, not by content** — the content grep covered
+`%APPDATA%\Claude`, `%LOCALAPPDATA%\Claude` and `.claude`, and `Packages\` was in none of
+them. That it holds the `garmin local dev` connector is still an inference.
+
+`latest` pulled clean and reported `0.2.0+5db7c477e3d70d6a0d7b067e129e72d9b65510be`, so the
+image side is current and the 36-commit gap is confirmed as a pin rather than a pull failure.
+
+### Two requests settled nine rows, and found two things nobody asked for
+
+`--explain sleep,stress` on 2026-10-25. Both HAS DATA: sleep 3584 populated, stress 2896.
+
+**Sleep answers for HRV and resting heart rate at its own root.** `avgOvernightHrv`,
+`hrvStatus` and `restingHeartRate` all sit there, which makes sleep a genuine second source
+for two metrics this map answers from dedicated endpoints. 5a said to read them off sleep; 5b
+withdrew that. **The withdrawal stands** — `get_hrv_data` carries the weekly average and the
+baseline that sleep does not — but it is now a decision with two live options rather than one,
+so it is asserted in a test instead of left as a comment. `avgSkinTempDeviationC` is there
+too, confirming 5a's note that skin temperature is readable only off this payload.
+
+**The descriptor-driven positional arrays v1.4 predicted are real.**
+`stressValueDescriptorsDTOList` of `{index, key}` against `stressValuesArray: list(480)` of
+`list(2)`, and the same shape with four descriptors for body battery. Reading those needs a
+decoder that resolves a descriptor key to a position — so **body battery is measured and
+deliberately unmapped**, guarded by a test in the shape of the one that keeps
+`lactate_threshold` out. What made stress shippable anyway is that `avgStressLevel` and
+`maxStressLevel` are plain ints at the root and need no decoder at all.
+
+One near-miss worth recording: four of the eight `sleepScores` sub-objects carry **no `value`
+at all**, only a qualifier and an optimal range. Mapping `totalDuration.value` would have
+looked entirely reasonable and returned `no_data` forever.
+
+### What execution corrected
+
+**A present reading from an inferred path said nothing about being inferred.** Writing the
+`hrv_status` test exposed that `readings.read` attached a row's note only on the paths where
+there is no reading. So `training_status`, `load_balance`, `readiness` and `recovery_time` have
+been returning confident values from guessed field paths in silence — while
+`MetricReading.note`'s own schema already promised "what is unconfirmed". Unverified rows now
+carry their note on present readings; verified rows do not, because provenance commentary on
+every reading is how a field stops being read. Four shipped metrics change behaviour.
+
+**`resting_hr` is matched on `calendarDate`, not `[0]`.** 5b recorded the path as
+`...WELLNESS_RESTING_HEART_RATE[0].value`, but the `DATE` argument returns a statistics
+window: a response exists for a date with no reading in it. The test puts the asked-for date
+second in the window, so an index read would return a real resting heart rate wearing the
+wrong date. `match_calendar_date` already existed for exactly this and had no caller.
+
+The group guard and the date basis moved out of `garmin_training` and are now shared, because
+a second copy of a guard is how one tool ends up accepting a key the other refuses.
+
+Tests: 292 -> 352, 2 skipped. 36 of those are the nine new map rows passing through
+`test_metrics_map.py`'s parametrised assertions; 24 are `test_garmin_health.py`.
+
+### Not done here, on purpose
+
+The re-pin. It cannot happen until this branch is merged and CI publishes an image containing
+`garmin_health`, so step 0 split in two and 0b is post-merge. **The resume block below is
+therefore not rewritten in this entry** — this session ends with an unmerged branch, and the
+one thing three stale resume blocks have taught this repo is that the block can only be true
+after the last merge.
+
 ## RESUME HERE
 
 **Written after the last merge, which is the only time this block can be true.** The 19 October

@@ -170,6 +170,14 @@ def read(
                 verdict=verdicts.PRESENT,
                 source=metric.source_method,
                 measured_on=date,
+                # An unverified row's note names the part of its path that was
+                # inferred, and a present value from a guessed field reads as
+                # exactly as authoritative as one from a recorded field.
+                # `MetricReading.note` already promises "what is unconfirmed";
+                # this is the half of that promise that was missing. A verified
+                # row's note is provenance commentary and would be noise on
+                # every reading, so only the unverified ones carry it.
+                note="" if metric.verified else metric.note,
             )
         )
 
