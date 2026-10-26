@@ -253,6 +253,31 @@ METRICS: tuple[Metric, ...] = (
             "accumulation requirement before a row may earn `not_matured`."
         ),
     ),
+    Metric(
+        key="hrv_feedback",
+        group="health",
+        source_method="get_hrv_data",
+        path="hrvSummary.feedbackPhrase",
+        kind=KIND_PHRASE,
+        verified=True,
+        note=(
+            # Surfaced nowhere, because the row is verified. Kept for the next
+            # reader of the map, where the window distinction belongs.
+            "The payload's SECOND verdict, and it is not a restatement of "
+            "`hrv_status`. Added 2026-10-26 after the Garmin Connect app was "
+            "found to show both: `status` said Unbalanced for the night of "
+            "25-26 Oct while the app's feedback sentence said the night was "
+            "good. `status` classifies HRV against the personal baseline band "
+            "(90 ms against a band built around an 80 ms average is outside "
+            "it); this field appears to comment on the night itself. Returning "
+            "only one of them made the server answer half of Garmin's opinion "
+            "while looking complete. The value is Garmin's own token "
+            "(`HRV_BALANCED_7` shape, 5b), NOT the prose the app renders from "
+            "it -- that mapping is unmeasured and inventing it would be exactly "
+            "the guess this column exists to refuse. Costs no request: it rides "
+            "the payload `hrv_last_night` already fetches."
+        ),
+    ),
     # ---- get_sleep_data: 3584 populated fields, four of them wanted --------
     # Measured 2026-10-26 (step 0a, date 2026-10-25). 5b recorded that this
     # payload was large and never recorded a path out of it, so these rows

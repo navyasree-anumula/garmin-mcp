@@ -151,18 +151,22 @@ def _by_metric(result):
     return {r.metric: r for r in result.readings}
 
 
-def test_three_hrv_metrics_cost_one_request(api):
+def test_all_four_hrv_metrics_cost_one_request(api):
     """The seam, asserted at the tool boundary. Asking for the night, the week
-    and the verdict separately would be three requests against a budget of one
-    every two seconds."""
-    garmin_health(["hrv_last_night", "hrv_weekly", "hrv_status"], DATE)
+    and the two verdicts separately would be four requests against a budget of
+    one every two seconds."""
+    garmin_health(
+        ["hrv_last_night", "hrv_weekly", "hrv_status", "hrv_feedback"], DATE
+    )
     assert api.calls == [("get_hrv_data", (DATE,))]
 
 
 def test_the_whole_health_group_is_four_requests(api):
-    """Ten metrics, four endpoints: spo2 adds none because it has no source,
-    and the three HRV, two stress and three sleep rows each share a payload.
-    Worth asserting as a number -- it is what §6's budget arithmetic rests on."""
+    """Eleven metrics, four endpoints: spo2 adds none because it has no source,
+    and the four HRV, two stress and three sleep rows each share a payload.
+    Worth asserting as a number -- it is what §6's budget arithmetic rests on,
+    and `hrv_feedback` arriving without moving it is the point: a second verdict
+    for no extra request."""
     calls = metric_map.sources_for(metric_map.keys_for_group("health"))
     assert len(calls) == 4
     assert {c.method for c in calls} == {
@@ -211,6 +215,42 @@ def test_hrv_status_reads_status_and_not_the_other_candidate(api):
 
     assert reading.value == "BALANCED"
     assert reading.value != "HRV_BALANCED_7", "the other candidate field"
+
+
+def test_the_payload_carries_two_verdicts_and_they_are_different_fields(api):
+    """Added 2026-10-26 after the Garmin Connect app was found to show both.
+
+    `status` classifies HRV against the personal baseline band; `feedbackPhrase`
+    comments on the night itself. On the day this was checked the first said
+    unbalanced and the second said the night was good -- both correct, about
+    different windows. Returning only one made the server answer half of
+    Garmin's opinion while looking complete, which is worse than a wrong value
+    because nothing about the answer looks incomplete.
+
+    The assertion is that they are distinct fields, because the failure this
+    guards is a future edit pointing both rows at the same path and nobody
+    noticing that one of them stopped saying anything new.
+    """
+    readings = _by_metric(
+        garmin_health(["hrv_status", "hrv_feedback"], DATE)
+    )
+
+    assert readings["hrv_status"].value == "BALANCED"
+    assert readings["hrv_feedback"].value == "HRV_BALANCED_7"
+    assert readings["hrv_status"].value != readings["hrv_feedback"].value
+    assert len(api.calls) == 1, "the second verdict rides the first one's payload"
+
+
+def test_hrv_feedback_is_a_token_not_the_prose_the_app_renders(api):
+    """What comes back is Garmin's own code. The app renders a sentence from it
+    and that mapping has never been measured, so the row returns the token and
+    lets the conversation read it. A hand-written code-to-sentence table would
+    be the invention §5's epistemics exist to refuse."""
+    reading = _by_metric(garmin_health(["hrv_feedback"], DATE))["hrv_feedback"]
+
+    assert reading.value == "HRV_BALANCED_7"
+    assert reading.unit == "", "a phrase carrying a unit would be a lie"
+    assert reading.source == "get_hrv_data"
 
 
 def test_a_verified_row_carries_no_provenance_note(api):

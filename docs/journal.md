@@ -2093,7 +2093,19 @@ proposed an easy session, while Garmin's own app was saying last night looked go
 a wrong field path — `status` is right — it is **a half-read payload**, which is the more
 expensive kind of mistake because nothing about the answer looks incomplete. `feedbackPhrase`
 is recorded by 5b, sits in the payload `hrv_last_night` already fetches, and therefore costs no
-request. It wants a row; that is next, and it is deliberately not bundled into this correction.
+request.
+
+**The row was added the same day, once Mahi asked for it.** `hrv_feedback`,
+`hrvSummary.feedbackPhrase`, verified — the path was recorded by 5b and the app confirmed the
+field is surfaced. It returns **Garmin's token** (`HRV_BALANCED_7` shape), not the prose the app
+renders from it: that mapping has never been measured, and a hand-written code-to-sentence table
+would be exactly the invention the `verified` column exists to refuse.
+
+What changed beyond the row is the tool's own guidance, because a map row the agent does not know
+to ask for is a row that does not exist. `garmin_health`'s docstring and the `metrics` enum help
+now say the two are verdicts about different windows, that either alone is half the answer, and
+that all four HRV metrics still cost **one** request. `test_the_whole_health_group_is_four_requests`
+is the assertion that the second verdict was free: eleven metrics, still four endpoints.
 
 ### The provenance note did not reach the reader either
 
@@ -2319,20 +2331,16 @@ cannot exist on the old image, never with `server_version`.
    fails after the first succeeded. Then **one supervised live create → verify → delete cycle**
    on a throwaway workout, by hand, documented. Cassettes arrive with it (§8's scrubbing
    requirements are requirements on that work).
-2. **A map row for `hrvSummary.feedbackPhrase`** — see the 2026-10-26 finding below. Garmin's
-   app shows a *second* HRV verdict that this map does not return, and on the day it was
-   checked the two pointed opposite ways. One row, no new request: it rides the payload
-   `hrv_last_night` already fetches.
-3. **Settle the four remaining unverified rows** — `training_status`, `load_balance`,
+2. **Settle the four remaining unverified rows** — `training_status`, `load_balance`,
    `readiness`, `recovery_time`. The `hrv_status` settlement shows the cheap method: compare
    the row's output against what the Garmin Connect app displays for the same day. **Do not
    reach for `probe --explain`** for any of them — it prints value types, never values, so it
    cannot answer a question about which field holds a value.
-4. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
+3. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
    `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
    directions. An aborted run must report where it got to, never look like a clean run that
    found less.
-5. **Give `capabilities.json` a consumer** — filtering the group-derived enums by `tools.json`.
+4. **Give `capabilities.json` a consumer** — filtering the group-derived enums by `tools.json`.
 
 **A `login` should not be run casually.** Both mobile login paths took a 429 on 2026-10-11 and
 a fallback carried it, so the login path is IP-rate-limited. The data path has been unaffected
