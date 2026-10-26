@@ -19,6 +19,7 @@ from . import __version__
 from .source import client as source
 from .source import compose as source_compose
 from .source import metrics as metric_map
+from .source import write as source_write
 from .source import readings as source_readings
 from .source.errors import GarminSourceError
 
@@ -58,6 +59,13 @@ class AuthStatus(BaseModel):
     tokens_path: str = Field(description="Path to the token file inside the container.")
     tokens_modified_utc: str = Field(description="When the token file was last written, ISO-8601 UTC.")
     server_version: str = Field(description="Version of this MCP server, plus the build commit when CI-built.")
+    writes_enabled: bool = Field(
+        description=(
+            "Whether this server will write to Garmin at all. False means every "
+            "write is refused before any request, and only the read tools and "
+            "the workout preview can do anything."
+        )
+    )
 
 
 @mcp.tool(
@@ -69,6 +77,10 @@ def garmin_auth_status() -> AuthStatus:
 
     Makes a live authenticated call, so a success proves the stored tokens work
     right now. Use this first when other Garmin tools start failing.
+
+    Also reports whether writes are enabled. Ask this before composing a session
+    you intend to send: a refusal after the human has approved a structure wastes
+    their decision, and the answer costs nothing beyond this call.
     """
     try:
         status = source.auth_status()
@@ -85,6 +97,7 @@ def garmin_auth_status() -> AuthStatus:
         tokens_path=status.tokens_path,
         tokens_modified_utc=status.tokens_modified_utc,
         server_version=_server_version(),
+        writes_enabled=source_write.writes_enabled(),
     )
 
 
@@ -409,14 +422,22 @@ class WorkoutPreview(BaseModel):
     structure: dict = Field(
         description="The exact structure an upload would send to Garmin."
     )
+    approval: str = Field(
+        description=(
+            "Pass this to `garmin_workout_create` with the structure, unchanged. "
+            "It fingerprints what was shown, so an edited or stale structure is "
+            "refused rather than written."
+        )
+    )
     note: str = Field(description="What this call did not do.")
 
 
 _PREVIEW_NOTE = (
     "Nothing was sent to Garmin: a preview composes and validates only, and makes "
-    "zero requests. No create or schedule action exists yet. When one does, "
-    "approval will carry this exact structure rather than the arguments that "
-    "produced it, so that what was approved is what lands."
+    "zero requests. To write this session, show it to the human first, then pass "
+    "`structure` and `approval` to `garmin_workout_create` with a date. Pass the "
+    "structure through unchanged -- it is what was approved, and re-composing it "
+    "from these arguments is what the approval marker exists to catch."
 )
 
 
@@ -533,5 +554,142 @@ def garmin_workouts(
         estimated_duration_basis=basis,
         requests_made=0,
         structure=structure,
+        approval=source_compose.approval_for(structure),
         note=_PREVIEW_NOTE,
+    )
+
+
+# --------------------------------------------------------------------------
+# The write (docs/SCOPE.md §5, v1.5)
+# --------------------------------------------------------------------------
+
+
+class WriteResult(BaseModel):
+    """What reached Garmin, and what to do if it only half did.
+
+    Every field here exists so that a failure is actionable. A write that says
+    only "something went wrong" leaves a template on an account with no way to
+    find it, and the calendar -- which is what the next session reads -- would
+    never show it.
+    """
+
+    action: str = Field(
+        description=(
+            "'uploaded' for a new workout, 'updated' when one of this name "
+            "already existed and was replaced in place, keeping its id."
+        )
+    )
+    workout_id: int | None = Field(
+        description=(
+            "Garmin's id for the template. Null only when the write succeeded "
+            "and the id was not in a key this server recognises -- see warnings."
+        )
+    )
+    scheduled: str = Field(
+        description=(
+            "'new' = put on the calendar by this call. 'already' = it was "
+            "already on that date and no second entry was made. 'failed' = the "
+            "workout exists and is on NO calendar; read the warnings."
+        )
+    )
+    scheduled_workout_id: int | None = Field(
+        description=(
+            "The id undo needs. `unschedule_workout` takes this, NOT "
+            "workout_id, so without it the calendar entry can only be removed "
+            "in Garmin Connect."
+        )
+    )
+    date: str = Field(description="The date this session was scheduled for.")
+    requests_made: int = Field(description="Garmin requests this call made.")
+    warnings: list[str] = Field(
+        description="Empty when everything worked. Read every entry out loud to the human."
+    )
+    raw: dict = Field(
+        description="Garmin's unparsed response, included only when an id could not be read."
+    )
+
+
+@mcp.tool(
+    title="Create and schedule a Garmin workout",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+)
+def garmin_workout_create(
+    structure: Annotated[
+        dict,
+        Field(
+            description=(
+                "The `structure` a preview returned, passed through UNCHANGED. "
+                "Do not rebuild it from the step list."
+            )
+        ),
+    ],
+    approval: Annotated[
+        str,
+        Field(description="The `approval` from the same preview, unchanged."),
+    ],
+    date: Annotated[
+        str, Field(description="YYYY-MM-DD. The day this session goes on the calendar.")
+    ],
+) -> WriteResult:
+    """Write a previewed session to Garmin and put it on the calendar.
+
+    **This reaches the athlete's real Garmin account and their watch.** Show the
+    preview to the human and get their agreement before calling it. The
+    `approval` marker exists because the structure they agreed to must be the
+    structure that lands -- so pass `structure` through exactly as the preview
+    returned it. Rebuilding it from the same step list is the mistake this
+    refuses: the human approves one thing and a second composition is written.
+
+    **A name already on the account is replaced in place**, keeping its id, so
+    every existing calendar entry pointing at it stays valid. That is how a
+    re-prescription of "week 3 Thursday threshold" updates rather than leaving
+    two templates nobody can tell apart. Two existing workouts of that name is
+    refused rather than guessed at.
+
+    **Creating and scheduling are one action.** If the schedule fails after the
+    workout was written, `scheduled` is 'failed' and the warnings say so with
+    the id -- the template exists and is on no calendar, which means nothing
+    that reads the calendar will ever show it, including this server.
+
+    This tool decides nothing about training. It does not pick the date, retry
+    on another day, or adjust a session it thinks is wrong (docs/SCOPE.md §1).
+    """
+    if not source_write.writes_enabled():
+        raise ToolError(str(source_write.WritesDisabled()))
+
+    try:
+        source_compose.validate_structure(structure)
+    except GarminSourceError as exc:
+        raise ToolError(f"{exc} Nothing was sent to Garmin.") from exc
+
+    recomputed = source_compose.approval_for(structure)
+    if approval.strip() != recomputed:
+        raise ToolError(
+            "This structure does not match its approval marker, so nothing was "
+            "sent to Garmin. Either the structure changed after it was previewed, "
+            "or it was rebuilt from the arguments instead of passed through. "
+            "Preview it again, show the human the result, and send that."
+        )
+
+    try:
+        outcome = source_write.create_and_schedule(
+            source._connect(), source.tokenstore_path(), structure, date
+        )
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return WriteResult(
+        action=outcome.action,
+        workout_id=outcome.workout_id,
+        scheduled=outcome.scheduled,
+        scheduled_workout_id=outcome.scheduled_workout_id,
+        date=outcome.date,
+        requests_made=outcome.requests_made,
+        warnings=outcome.warnings,
+        raw=outcome.raw,
     )

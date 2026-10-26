@@ -103,12 +103,31 @@ def test_the_estimate_arrives_with_its_basis():
     assert "contribute 0" in preview.estimated_duration_basis
 
 
-def test_the_note_says_nothing_was_sent_and_no_create_exists():
+def test_the_note_says_nothing_was_sent_and_points_at_create():
+    """Updated 2026-10-27, when `create` arrived. The note used to promise that
+    approval *would* carry the structure; it now names the tool that does."""
     note = garmin_workouts("preview", "Easy 40", EASY_RUN).note
 
     assert "Nothing was sent to Garmin" in note
     assert "zero requests" in note
-    assert "approval will carry this exact structure" in note
+    assert "garmin_workout_create" in note
+    assert "unchanged" in note, "re-composition is the failure the marker catches"
+
+
+def test_the_preview_returns_an_approval_marker_for_its_structure():
+    """The half deferred on 2026-10-26, now that it has a consumer.
+
+    Asserted against the composer's own function rather than a literal digest: a
+    hard-coded hash here would have to be edited every time the structure
+    changes shape, and a test nobody can read the intent of gets edited without
+    being understood.
+    """
+    from garmin_mcp.source import compose as compose_module
+
+    preview = garmin_workouts("preview", "Thu threshold", SESSION)
+
+    assert preview.approval.startswith("sha256:")
+    assert preview.approval == compose_module.approval_for(preview.structure)
 
 
 # --------------------------------------------------------------------------

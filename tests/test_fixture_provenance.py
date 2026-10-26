@@ -32,9 +32,25 @@ TESTS = Path(__file__).resolve().parent
 #: purpose, and demanding a session for them would train everyone to write a
 #: meaningless marker -- which is worse than no marker, because it looks like
 #: evidence.
-PAYLOAD_FILES = ("test_garmin_health.py", "test_garmin_training.py")
+PAYLOAD_FILES = (
+    "test_garmin_health.py",
+    "test_garmin_training.py",
+    "test_write.py",
+    "test_garmin_workout_create.py",
+)
 
-MARKER = "# recorded:"
+#: Two labels, and the second is not a loophole.
+#:
+#: `# recorded:` cites the session that saw the shape. `# invented:` says that
+#: nobody has -- which is the truth for `upload_workout` and `schedule_workout`,
+#: never called by this project, so their response keys are unknown. A file full
+#: of invented shapes needs to SAY so; forcing a citation it cannot give would
+#: produce a fake one, and a fake citation is worse than none because it reads
+#: as evidence.
+#:
+#: An `invented:` marker is therefore a standing invitation: the first live call
+#: that sees the real shape should replace it with a `recorded:` one.
+MARKERS = ("# recorded:", "# invented:")
 
 #: How far above an assignment the marker may sit. Enough for a comment block
 #: that explains the shape, tight enough that it belongs to this fixture and not
@@ -65,8 +81,9 @@ def marker_above(lines: list[str], lineno: int) -> str:
     """The marker line for an assignment at `lineno`, or an empty string."""
     start = max(0, lineno - 1 - LOOKBACK)
     for line in lines[start : lineno - 1]:
-        if line.strip().startswith(MARKER):
-            return line.strip()
+        stripped = line.strip()
+        if any(stripped.startswith(marker) for marker in MARKERS):
+            return stripped
     return ""
 
 
@@ -93,12 +110,15 @@ def test_every_payload_fixture_cites_a_session(name, filename, lineno, path):
 
     assert marker, (
         f"{filename}:{lineno} {name} is a payload fixture with no "
-        f"'{MARKER}' line within {LOOKBACK} lines above it. Say which session "
-        "recorded it -- '5b, 2026-10-11', 'probe --explain sleep, 2026-10-25'. "
-        "If no session did, the shape is invented, and an invented payload is "
-        "not evidence for anything the map or a docstring claims."
+        f"{' or '.join(MARKERS)} line within {LOOKBACK} lines above it. Say "
+        "which session recorded it -- '5b, 2026-10-11', 'probe --explain "
+        "sleep, 2026-10-25' -- or label it '# invented:' and say why no session "
+        "has seen it. An unlabelled shape gets read as evidence for whatever "
+        "the map or a docstring claims about it."
     )
-    assert marker != MARKER, f"{filename}:{lineno} {name} cites nothing after the colon"
+    assert marker not in MARKERS, (
+        f"{filename}:{lineno} {name} cites nothing after the colon"
+    )
 
 
 def test_the_check_can_actually_fail(tmp_path):

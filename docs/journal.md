@@ -2323,127 +2323,215 @@ publishes, the laptop is re-pinned, and Desktop is restarted — step 0b again, 
 scripted operation, but a step rather than an afterthought. The previous session learned that
 by discovering it.
 
+## 2026-10-27 — everything needed to write a workout, and still nothing written
+
+`garmin_workout_create` exists: it takes a previewed structure, its approval marker and a date,
+resolves the name against the account, writes, and schedules. **No workout has reached Garmin.**
+Every call is exercised against a fake client, because §8 makes the one supervised live cycle
+conditional on this being green first — the live attempt should be spent on Garmin's acceptance,
+not on our bugs.
+
+Tests: **461 -> 527**, 2 skipped.
+
+### Two folded-in corrections owed from yesterday
+
+**The laptop runs `sha-71d0541`, not `sha-1964dec`.** The resume block was never updated after
+the second re-pin.
+
+**`sha-5d9993b` was skipped deliberately.** Nothing user-facing changed in it — `provenance` is
+internal and every row is `measured`, so the two read tools answer identically on either image.
+The distinction worth keeping is that this drift is **chosen**, where the eight-week drift was
+**unnoticed**, and from `docker ps` the two look exactly the same. A skipped re-pin needs saying
+out loud or the next session reads it as a failure.
+
+### The spec asked for something MCP cannot express
+
+§5 says `garmin_workouts` carries both actions **and** that preview is read-only while create is
+not. `ToolAnnotations` are per *tool*. One tool holding both would have to be annotated as a
+write, and §5 itself warns that a client gating non-read-only tools behind a confirmation would
+then put a wall in front of the safest call in the flow.
+
+So the write went into a second tool, `garmin_workout_create`, and `garmin_workouts` kept
+`preview` and its honest `read_only_hint=True`. That deviates from §5's phrasing to honour §5's
+substance; flagged in the plan for ratification rather than taken quietly, and asserted in a test
+that says why.
+
+### The write gate, which is the cheap answer to a question carried for three versions
+
+SCOPE §14's 7.b — "are writes enabled right now" must be a question the agent can ask — has been
+open since v1.5 waiting on `tools.json`, whose web UI half does not exist. The first write tool
+was the trigger, and the answer turned out to be one environment variable:
+`GARMIN_MCP_ENABLE_WRITES`, **default off**, with `garmin_auth_status` reporting `writes_enabled`.
+
+Three details earned their tests. The value is read **per call**, never cached at import, because
+two consumers — the refusal and the status field — must agree; a cached one could tell the agent
+writes are on and then refuse it. A near-miss does **not** open the gate: `yes`, `on`, `enabled`
+are all off, because a gate that accepts a near-miss is a gate whose state nobody can predict,
+and the thing behind it writes to a real training calendar. And the gate is checked **before**
+validation, so a disabled server gives the same answer for a good structure and a bad one.
+
+It also means the first live write needs a deliberate edit to the Desktop config — which a new
+build needs anyway, so the gate costs nothing it was not already costing.
+
+### The rule the write path is built around
+
+**Once the workout exists, nothing raises.** `upload_workout` mints a template and
+`schedule_workout` is a second request; an exception between them loses the `workoutId`, leaving
+a template on the account that is on no calendar. Next week's session reads the *calendar*, so it
+would never find it. §5 calls this "a partial write reports what it got to"; concretely it is the
+difference between a mess that can be cleaned up and one that cannot be located.
+
+So every failure after the write comes back as an outcome — including a 429, which the read path
+re-raises and this path must not. The two rules genuinely conflict there and the write side wins,
+because the id is the only thing that can find the orphan.
+
+### What is actually unknown here, and it is most of the response handling
+
+`upload_workout` and `schedule_workout` have **never been called by this project**, so nobody
+knows which keys their responses carry. Known from the library's own code rather than from a
+payload: `get_workouts` items carry `workoutName` and `workoutId` (`__init__.py:3403`).
+
+`_first_id` therefore tries candidate keys, looks one level into an envelope, and **returns None
+rather than raising** on a miss — by which point the write has happened, so an exception would
+destroy the id's only copy. A missing workout id reports the raw response and does not attempt a
+schedule it cannot make; a missing *schedule* id reports success plus the gap, because undo takes
+the schedule id and not the workout id, so losing it costs the only rollback.
+
+### Three cases the plan did not anticipate
+
+All three were found while writing the tests, which is the argument for writing them.
+
+**An exact multiple of the page size needs one more request.** `get_workouts` defaults to 100 and
+200 workouts returns two full pages — and a full page is indistinguishable from "there may be
+more". Without the third call a name at position 201 looks absent, and the re-prescription
+uploads a duplicate instead of updating in place.
+
+**`True` is an `int`.** A response carrying `{"id": true}` would have scheduled workout number 1.
+`_first_id` skips booleans before anything else.
+
+**On the update path a silent write response does not lose the id**, because the match already
+supplied it. That narrows the orphan case to the upload path alone.
+
+### Both of yesterday's guards fired, and both were right
+
+**The doorway allowlist.** Adding `source/write.py` broke `test_fetch_seam.py` until the module
+was named with a reason. The reason is worth having written down: the seam exists to *coalesce*
+reads, and a write sequence is ordered — resolve, then write, then schedule — which is the
+opposite of a set of interchangeable fetches. Coalescing one would mean silently dropping it.
+
+**The fixture-provenance check, which caught me honestly.** It demands a session citation for
+every module-level payload shape, and this session's shapes are genuinely invented. Forcing a
+citation would have produced a fake one — and a fake citation is worse than none, because it
+reads as evidence.
+
+So the guard learned a second label: **`# invented:`**, which states that no session has seen the
+shape. It is not a loophole, it is the honest answer, and it is a standing invitation to replace
+it with `# recorded:` after the live cycle. The check then caught two fixtures with no label at
+all, one of which was not a Garmin response but our own composed structure — which is why the
+rule stayed deliberately simple: in a file carrying payload shapes, *every* module-level shape
+says where it came from. A rule with a category exemption is a rule people argue with.
+
+### Not done here, on purpose
+
+The write itself. `push_workout_to_device` stays out — §5 forbids it by default, because it
+creates a third copy on hardware that a later edit cannot reach. `delete_workout` and
+`unschedule_workout` are not tools; next session's cleanup is done by hand. Cassettes wait for
+the live exchange, which is the only thing one can be recorded from.
+
+**The next session is the first that can change the account**, and it needs both a re-pin and a
+config edit before it can start. That is the gate doing its job: it cannot begin by accident.
+
 ## RESUME HERE
 
-**The rule, fourth iteration — and this time by removing the thing that keeps going stale.**
-Three blocks went stale by naming merges that happened after they were written; the fourth
-went stale by naming its own PR as pending; the fifth said two corrections were "in review"
-and they merged an hour later. Every one of those failures was the same failure: **quoting a
-value that cannot be known at write time.** A commit hash for a merge that has not happened,
-a list of what is open, a count of what is pending. So this block quotes none of them. It
-states what the work *is*, which does not change when the merge lands.
+**The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
+write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
+which does not change when a merge lands.
 
-State: `main` carries the merge of the entry above. **419 passed, 2 skipped.** If that count
-does not match what the suite reports, this block is older than the code and the suite wins.
+State: **527 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+than the code and the suite wins.
 
-**What exists, end to end:**
+**What exists:**
 
-- **Reads, reachable from Claude Desktop.** `garmin_auth_status`, `garmin_training` (5 metrics)
-  and `garmin_health` (9 rows: three HRV, four sleep, resting HR, two stress). `garmin_health`
-  has answered with real data.
-- **The write path's first half, live on the laptop.** `garmin_workouts(action="preview")`
-  composes a running session and sends nothing — zero requests, nine refusal rules, 67 tests.
-  Time and distance with NO_TARGET only. **The laptop runs `sha-1964dec`** (re-pinned
-  2026-10-26 ~21:10 local, digest `sha256:0014673e…`), and Desktop lists the tool, which is
-  itself the proof: `garmin_workouts` cannot exist on `sha-8154e24`.
-
-  The pull timed out on its first attempt — `net/http: timeout awaiting response headers` on
-  the manifest, after the tag had resolved to the right digest. **The digest gate did its job
-  and left the config untouched**, so the retry was free. The script now pulls *before* it
-  backs up, because the step most likely to fail should run before anything that leaves a
-  trace, and it retries four times.
+- **Reads, live on the laptop.** `garmin_auth_status`, `garmin_training` (5 metrics),
+  `garmin_health` (11 rows, four of them HRV including the second verdict `hrv_feedback`).
+- **Preview, live on the laptop.** `garmin_workouts(action="preview")` composes a running session
+  and sends nothing — zero requests, nine refusal rules. Time and distance with NO_TARGET only.
+- **The write, built and not yet reachable.** `garmin_workout_create` takes a previewed structure,
+  its approval marker and a date; resolves the name (match ⇒ update in place keeping the id, no
+  match ⇒ upload, two matches ⇒ refuse); reads the target month on the update path only; writes;
+  schedules. **Gated by `GARMIN_MCP_ENABLE_WRITES`, default off.**
 - **No workout has ever been written to Garmin by this project.** Nothing has reached the
-  calendar, no `workoutId` has ever existed, and the account is untouched by anything but
-  reads.
+  calendar, no `workoutId` has ever existed, and the account is untouched by anything but reads.
 
-**Every new tool needs a re-pin before it is callable**, and the sequence is merge → CI
-publishes `sha-<commit>` → re-pin the config at
-`C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
-→ **restart Desktop.** The restart is not optional: the client caches the tool list at session
-start, so a re-pin alone gives you the new image still advertising the old tools — which looks
-exactly like a build that did not take.
+**The laptop runs `sha-71d0541`.** One build behind by choice — `sha-5d9993b` changed nothing
+user-facing, so it was skipped deliberately. **A chosen drift and an unnoticed one look identical
+from `docker ps`**, which is why the choice is written here.
 
-The script shape that works, in this order: **pull with retries and assert the digest first**,
-then print the config, back it up to `C:\garmin-backup`, replace the tag, assert the JSON still
-parses, stop Desktop, verify with `docker ps`. The digest gate goes before the edit, and the
-pull goes before the backup — a step that fails on a flaky network should leave no trace, and
-the 2026-10-26 run left a backup file for a run that changed nothing. Verify with a tool that
-cannot exist on the old image, never with `server_version`.
+**The next session is the first that can change the account.** It needs, in order: merge → CI
+publishes → re-pin → **add `GARMIN_MCP_ENABLE_WRITES=1` to the Desktop config's `env` block** →
+restart Desktop. Then one supervised live **create → verify → delete** on a throwaway workout, by
+hand, documented. Cassettes get recorded from that exchange, with §8's scrubbing requirements and
+a test asserting no cassette on disk contains a token-shaped string.
 
-**A mechanism needs two readings before it is written in the indicative**, and that rule now
-has two mechanisms rather than only this sentence. `provenance` on the metric row expresses the
-state that went wrong — a verified path with a reported reason — with the count of
-non-`measured` rows asserted as a literal, so adding one is a deliberate edit. Every
-module-level payload fixture must carry `# recorded: <session>, <date>`, enforced by
-`tests/test_fixture_provenance.py`, which is the check that bites when a claim about payload
-behaviour would need an invented fixture to test. Neither judges whether the cited session
-really said it; both make the citation mandatory and visible in review.
+**What that live cycle settles, and it is most of the response handling:** `upload_workout`'s
+response shape, `schedule_workout`'s response shape, and whether Garmin accepts our structure at
+all — an understated `estimatedDurationInSecs` and `NO_TARGET` steps. Until then `_first_id`
+tries candidate keys and reports a miss rather than guessing. **The first thing the live cycle
+should produce is replacing `# invented:` with `# recorded:` in `test_write.py`.**
 
-**Two verification mechanisms are known not to reach the reader:**
+**Rules this repo has paid for, in the order they were learned:**
 
-- **The serverInfo build stamp.** `garmin_auth_status` returns it and a summarising client
-  dropped it, so `docker ps` answered "which build?" instead. **Prefer a capability probe** —
-  call a tool that cannot exist on the old image. `garmin_workouts` is now that probe for
-  anything built after `8154e24`.
-- **The provenance note on unverified rows.** A row with an inferred field path attaches its
-  note to a *present* reading, and the client summarised that note away — so an inferred path
-  was presented as confidently as a measured one. `hrv_status` was the example and is now
-  **verified**, which leaves **four**: `training_status`, `load_balance`, `readiness` and
-  `recovery_time`. They are the rows that answer "should I train hard today", which is the
-  worst possible set to be guessing at. Open question, agreed to be settled *after* the write
-  path: refuse unverified rows, or move the qualifier out of `note` and into `verdict` (a fifth
-  value, `present_unconfirmed`), where the agent already looks and a summariser cannot drop it
-  without changing the answer.
+- **A mechanism goes in the indicative only after two readings.** One paraphrase is a lead. Two
+  guards now enforce it rather than only this sentence: `provenance` on the metric row (the count
+  of non-`measured` rows is asserted as a literal), and `# recorded:`/`# invented:` on every
+  module-level payload fixture.
+- **Verify a build with a capability probe, never `server_version`.** The stamp reached a client
+  and was summarised away; `docker ps` answered instead.
+- **Prefer a bounded refusal to a silent partial.** A page cap that raises beats a name matched
+  against a truncated list; an unreadable calendar refuses before writing rather than scheduling
+  blind.
+- **Once an external artifact exists, report instead of raising.** The id is the only thing that
+  can find an orphan.
+- **A resume block must not name a pending item it is inside of**, and must not quote a value
+  unknowable at write time.
 
-**Still open, unchanged:**
+**Still open:**
 
+- **Four unverified metric rows** — `training_status`, `load_balance`, `readiness`,
+  `recovery_time`. All settleable the free way `hrv_status` was: compare the row's output against
+  what the Garmin Connect app displays for the same day. **`probe --explain` cannot do it** — it
+  prints value types, never values.
+- **`tools.json` is still unbuilt.** The env-var gate answers 7.b for now; the exposure set and
+  `garmin_auth_status` reporting the live tool set remain §5's design.
+- **The provenance note does not reach a summarising reader.** Open question: refuse unverified
+  rows, or move the qualifier out of `note` and into `verdict` as a fifth value.
 - **The cron's failure mode is silence.** Public-repo scheduled workflows auto-disable after 60
-  days of repository inactivity with no documented notification.
-- **Surface reduction is not a general shield.** `opentelemetry-api` CVE-2026-114603 is
-  reachable over stdio through JSON-RPC `_meta`; removing `--http` did not close it.
-- **B.4's check is "read the page against the code", not "diff the two copies."**
-- **SCOPE v1.6 owes** §7's Connectors-not-Developer and per-user Docker path, §7a's bind
-  address for the web UI, and §9's location exposure via activity detail. §7's MSIX path and
-  its `server_version` claim are **done** (2026-10-26), as is the README's Store path and its
-  `:latest` example.
-- **`tools.json` is unbuilt and `garmin_auth_status` cannot report the tool set in force.**
-  Harmless while every tool is read-only. **It stops being harmless the moment `create`
-  lands**, because "are writes enabled right now" becomes a question the agent must be able to
-  ask. This is the one carried item with a trigger date attached.
+  days of inactivity with no documented notification.
+- **`docker.yml` has no path filter**, so a docs-only PR runs a full multi-arch build and a
+  docs-only merge publishes a fresh tag for identical code. A `paths-ignore` would fix it and
+  would also mean `latest` points at the last *code* commit rather than at `main`'s tip — a
+  decision, not a cleanup.
+- **The GHA cache export flakes** (`failed to reserve cache`) when two runs are in flight;
+  `ignore-error=true` on `cache-to` would make it a warning instead of a red check.
+- **SCOPE v1.6 owes** §7's Connectors-not-Developer and per-user Docker path, §7a's bind address
+  for the web UI, §9's location exposure via activity detail — and now the §5 tool-split
+  deviation, if Mahi ratifies it.
 
-**Next, in order:**
+**A `login` should not be run casually.** Both mobile login paths took a 429 on 2026-10-11 and a
+fallback carried it, so the login path is IP-rate-limited. The data path has been fine across
+eleven requests then and six metrics on 2026-10-26.
 
-1. **`create` + `schedule` as one action.** The approval marker over the previewed structure,
-   idempotency by name against `get_workouts` (match ⇒ `update_workout` in place, no match ⇒
-   upload), **both** ids returned because `unschedule_workout` needs the
-   `scheduledWorkoutId` and not the `workoutId`, and an orphan report when the second request
-   fails after the first succeeded. Then **one supervised live create → verify → delete cycle**
-   on a throwaway workout, by hand, documented. Cassettes arrive with it (§8's scrubbing
-   requirements are requirements on that work).
-2. **Settle the four remaining unverified rows** — `training_status`, `load_balance`,
-   `readiness`, `recovery_time`. The `hrv_status` settlement shows the cheap method: compare
-   the row's output against what the Garmin Connect app displays for the same day. **Do not
-   reach for `probe --explain`** for any of them — it prints value types, never values, so it
-   cannot answer a question about which field holds a value.
-3. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
-   `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
-   directions. An aborted run must report where it got to, never look like a clean run that
-   found less.
-4. **Give `capabilities.json` a consumer** — filtering the group-derived enums by `tools.json`.
+Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`, config at
+`C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
+(MSIX path, confirmed by causation). Two containers against one volume is the documented shape
+and the reason the budget is file-backed with a cross-process lock. **The re-pin script shape that
+works:** pull with retries and assert the digest **first**, then print the config, back it up,
+replace the tag, assert the JSON still parses, stop Desktop, verify with `docker ps`. The step
+most likely to fail runs before anything that leaves a trace.
 
-**A `login` should not be run casually.** Both mobile login paths took a 429 on 2026-10-11 and
-a fallback carried it, so the login path is IP-rate-limited. The data path has been unaffected
-across eleven requests then and six metrics on 2026-10-26.
-
-Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`. Two containers
-against one volume is the documented shape and the reason the budget is file-backed with a
-cross-process lock. Quitting Desktop from the tray is the documented restart; `Stop-Process
--Force` on the `Claude` process is the scripted equivalent and worked.
-
-**git/gh:** this repo's account is `navyasree-anumula`. The box's active `gh` account defaults
-to `mahidhark`, which 403s here and lacks the `workflow` scope, and it reverted mid-session
-between two pushes on 24 October — put the switch and the push in one invocation.
-`navyasree-anumula` lacks `read:packages`, so registry tags are checked with an anonymous ghcr
-token against `/v2/.../manifests/<tag>` rather than `gh api`. **`delete_branch_on_merge` is now
-on**, so a push that crosses a merge recreates the remote branch instead of failing; local
-branches and cached `origin/` refs still need `git fetch origin --prune` plus `git branch -d`.
+**git/gh:** this repo's account is `navyasree-anumula`; the box defaults to `mahidhark`, which
+403s here and lacks the `workflow` scope, and it reverted mid-session once — put the switch and
+the push in one invocation. `navyasree-anumula` lacks `read:packages`, so registry tags are
+checked with an anonymous ghcr token against `/v2/.../manifests/<tag>`. `delete_branch_on_merge`
+is on, so a push that crosses a merge recreates the remote branch; local branches and cached
+`origin/` refs still need `git fetch origin --prune` plus `git branch -d`.
