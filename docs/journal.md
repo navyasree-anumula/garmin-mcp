@@ -2561,6 +2561,64 @@ which does not change when a merge lands.
 State: **541 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
+---
+
+## OPEN CHECKS — do these first, in this order
+
+**1. The update path has never run live.** This is the gap worth closing before anything new is
+built. The live cycle exercised the **upload** branch only: no match ⇒ `upload_workout` ⇒
+`schedule_workout`. The other branch — match ⇒ read the target month ⇒ `update_workout` in place
+⇒ skip or schedule — is four code paths and one Garmin behaviour that have never been near a real
+account, and it is the branch a *re-prescription* takes, which is the normal weekly case rather
+than the exceptional one.
+
+Cheapest way to exercise all of it: **create `throwaway test` a second time, same name, a
+different date.** Expect `action: "updated"`, the **same** `workout_id` (1742892340 if the first
+one is still there), `requests_made: 4`, and `scheduled: "new"`. Then a third create on the date
+it is already scheduled for, expecting `scheduled: "already"` and **no second calendar entry**.
+Those two calls settle: the name match, `update_workout` keeping the id, the 1-indexed month
+conversion, and the double-booking guard. Also confirms `id_keys` (check 2) in the same breath.
+
+**2. `id_keys` settles Garmin's response keys — free, on whatever create runs next.** The laptop
+needs a re-pin first; `id_keys` is not on `sha-eeb26dd`. Expect something like
+`{"workout_id": "workoutId", "scheduled_workout_id": "workoutScheduleId"}`. Whatever comes back,
+**write the real key names into `test_write.py`** and change its two id fixtures from
+`# recorded in part:` to `# recorded:`. If a key differs from our first candidate, narrow
+`WORKOUT_ID_KEYS` / `SCHEDULE_ID_KEYS` to what Garmin actually sends and say so.
+
+**3. Delete `throwaway test` from Connect** — both the calendar entry and the workout library
+copy. There is no delete tool by design, so this does not happen on its own. Do it after checks
+1 and 2, since they reuse the same workout.
+
+**4. Cassettes (§8), the one unexercised thing left in the write path.** They have to be recorded
+from a real exchange, which checks 1–2 provide. §8's requirements are requirements on this work:
+`filter_post_data_parameters`, `before_record_response` scrubbing, and a test that **asserts** no
+cassette on disk contains a token-shaped string. `vcrpy` is not yet a dependency.
+
+**5. Decisions waiting on Mahi, none blocking:**
+
+- **Ratify or reject the §5 tool-split deviation** — `garmin_workouts` (preview, read-only) and
+  `garmin_workout_create` (write) as two tools, because `ToolAnnotations` are per tool and §5
+  asks for per-action honesty. If rejected, one tool and preview loses its read-only hint.
+- **`id_keys` surfacing Garmin's response key names.** Argued as schema rather than account data,
+  by analogy with `probe --explain`. Remove it if you read key names as account information.
+- **`paths-ignore: ['docs/**']` on `docker.yml`.** Would stop a docs-only PR running a full
+  multi-arch build and a docs-only merge publishing a tag for identical code — and would mean
+  `latest` points at the last *code* commit rather than `main`'s tip.
+- **`ignore-error=true` on `cache-to`.** Turns the `failed to reserve cache` flake into a warning
+  instead of a red check; it hit two PRs in one evening.
+
+**6. Longer-lived, in rough order of value:** the four unverified metric rows
+(`training_status`, `load_balance`, `readiness`, `recovery_time`) settled the free way
+`hrv_status` was — against the Connect app, **not** `probe --explain`, which prints value types
+and never values; then the provenance question (refuse unverified rows, or move the qualifier
+from `note` into `verdict` as a fifth value `present_unconfirmed`); then `tools.json` and
+`garmin_auth_status` reporting the live tool set, which the env-var gate only answers for now;
+then SCOPE v1.6's standing debts (§7's Connectors-not-Developer and per-user Docker path, §7a's
+bind address, §9's location exposure).
+
+---
+
 **What exists:**
 
 - **Reads, live on the laptop.** `garmin_auth_status`, `garmin_training` (5 metrics),
