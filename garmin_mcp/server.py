@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .source import client as source
+from .source import compose as source_compose
 from .source import metrics as metric_map
 from .source import readings as source_readings
 from .source.errors import GarminSourceError
@@ -312,4 +313,210 @@ def garmin_health(
     measured_on, readings = _read_group("health", list(metrics), date)
     return HealthReadings(
         date=measured_on, date_basis=DATE_BASIS, readings=readings
+    )
+
+
+# --------------------------------------------------------------------------
+# Workouts -- preview only (docs/SCOPE.md §5, v1.5)
+# --------------------------------------------------------------------------
+
+#: Every step kind the composer has a builder for, plus the repeat group. Built
+#: from `compose` rather than restated, so a kind cannot appear in the schema
+#: without something behind it to build it.
+StepKind = Literal[tuple(source_compose.STEP_KINDS + ("repeat",))]  # type: ignore[valid-type]
+
+#: One value, because one action exists. The enum is not a placeholder for the
+#: actions that are coming: a schema that offers `create` before `create` is
+#: written is a schema that lies to the agent.
+WorkoutAction = Literal["preview"]
+
+
+class WorkoutStep(BaseModel):
+    """One step of a prescribed session.
+
+    Give exactly one of `duration_secs` and `distance_m` -- a step ends one way
+    or the other. For `kind="repeat"`, give `iterations` and `repeat` instead,
+    and nothing else.
+    """
+
+    kind: StepKind = Field(
+        description=(
+            "warmup, interval, recovery, cooldown, or repeat. Only an interval "
+            "may be measured by distance; the rest are measured in time."
+        )
+    )
+    duration_secs: float | None = Field(
+        default=None, description="How long this step lasts, in seconds."
+    )
+    distance_m: float | None = Field(
+        default=None, description="How far this step runs, in metres. Interval only."
+    )
+    iterations: int | None = Field(
+        default=None, description="How many times a repeat group repeats. Minimum 2."
+    )
+    repeat: list["WorkoutStep"] = Field(
+        default_factory=list,
+        description=(
+            "The steps inside a repeat group. A repeat group inside another one "
+            "is refused: Garmin's acceptance of it has never been measured."
+        ),
+    )
+
+
+WorkoutStep.model_rebuild()
+
+
+class WorkoutPreview(BaseModel):
+    """A composed session that has not been sent anywhere.
+
+    `structure` is the exact payload an upload would carry. It is returned in
+    full rather than summarised because the human approving it should be able to
+    see what would land, and because the create action -- when it exists -- will
+    take this structure back rather than re-composing it from the same
+    arguments (§5). Re-composition is how a human approves one thing and a
+    second one lands.
+    """
+
+    workout_name: str = Field(description="The name this session would be saved under.")
+    sport: str = Field(description="Always 'running' in v0.")
+    step_summary: list[str] = Field(
+        description="One readable line per step, in the order they would run."
+    )
+    estimated_duration_secs: int = Field(
+        description="Estimated length. Read `estimated_duration_basis` before using it."
+    )
+    estimated_duration_basis: str = Field(
+        description="How the estimate was derived, and what it leaves out."
+    )
+    requests_made: int = Field(
+        description="Garmin requests this call made. Always 0 for a preview."
+    )
+    structure: dict = Field(
+        description="The exact structure an upload would send to Garmin."
+    )
+    note: str = Field(description="What this call did not do.")
+
+
+_PREVIEW_NOTE = (
+    "Nothing was sent to Garmin: a preview composes and validates only, and makes "
+    "zero requests. No create or schedule action exists yet. When one does, "
+    "approval will carry this exact structure rather than the arguments that "
+    "produced it, so that what was approved is what lands."
+)
+
+
+def _as_compose_steps(steps: list[WorkoutStep]) -> tuple[source_compose.Step, ...]:
+    """The wire model, converted to the composer's own.
+
+    Two models for one shape looks like duplication and is not: the wire model
+    is a published schema the agent reads, and the composer's is a frozen
+    dataclass with no pydantic in it. Collapsing them would put `server.py`'s
+    schema concerns inside `source/`, which is the direction §11 exists to stop.
+    """
+    return tuple(
+        source_compose.Step(
+            kind=step.kind,
+            duration_secs=step.duration_secs,
+            distance_m=step.distance_m,
+            iterations=step.iterations,
+            repeat=_as_compose_steps(step.repeat),
+        )
+        for step in steps
+    )
+
+
+def _summarise(steps: list[WorkoutStep]) -> list[str]:
+    """One line per step, in run order.
+
+    Exists because `structure` is 40 lines of Garmin's shape per step, and a
+    human approving a session should not have to read `conditionTypeId` to find
+    out it is a 10 minute warmup.
+    """
+    lines: list[str] = []
+    for step in steps:
+        if step.kind == "repeat":
+            lines.append(f"{step.iterations}x:")
+            lines.extend(f"    {line}" for line in _summarise(step.repeat))
+        elif step.duration_secs is not None:
+            lines.append(f"{step.kind}: {step.duration_secs:g}s")
+        elif step.distance_m is not None:
+            lines.append(f"{step.kind}: {step.distance_m:g}m")
+        else:
+            # Unreachable through the composer, which refuses this -- but a
+            # summary that silently dropped a step would be worse than one that
+            # says it could not read it.
+            lines.append(f"{step.kind}: no end condition")
+    return lines
+
+
+@mcp.tool(
+    title="Garmin workouts",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True
+    ),
+)
+def garmin_workouts(
+    action: Annotated[
+        WorkoutAction,
+        Field(description="Only 'preview' exists. It sends nothing to Garmin."),
+    ],
+    name: Annotated[str, Field(description="What to call this session.")],
+    steps: Annotated[
+        list[WorkoutStep],
+        Field(description="The steps of the session, in the order they should run."),
+    ],
+    description: Annotated[
+        str | None, Field(description="Optional note saved with the workout.")
+    ] = None,
+) -> WorkoutPreview:
+    """Compose a running session and show what would be sent to Garmin.
+
+    **Sends nothing.** A preview makes zero Garmin requests, so it cannot fail
+    on a rate limit and costs nothing to run twice. There is no create or
+    schedule action yet; this is the structure that one would carry.
+
+    **This tool does not design the session.** It composes the steps it is
+    given. Which distance, how many reps, how long the recovery, whether today
+    should be hard at all -- those need how the legs feel, how much time there
+    is and what hurts, which no Garmin endpoint holds. They belong in the
+    conversation (docs/SCOPE.md §1).
+
+    **v0 is time and distance with no pace or heart-rate target.** Every target
+    Garmin offers is zone-based and this account's zones have never been
+    fetched, so a target is refused rather than guessed. Ask for a target and
+    the refusal says this.
+
+    A malformed session is refused with the reason: a repeat group with no
+    steps, fewer than two iterations, a step with no end condition, or one
+    measured both ways.
+    """
+    if action != "preview":
+        raise ToolError(
+            f"unknown action {action!r}. Valid actions: preview. "
+            "Creating and scheduling are not built yet."
+        )
+    if not steps:
+        raise ToolError("a workout with no steps is not a session.")
+
+    # Converted once. Converting twice would let the structure and the estimate
+    # be built from two different readings of the same argument, which is a
+    # smaller version of exactly the re-composition §5 forbids between preview
+    # and create.
+    composed_steps = _as_compose_steps(steps)
+
+    try:
+        structure = source_compose.compose(name, composed_steps, description)
+        estimated, basis = source_compose.estimate_duration(composed_steps)
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return WorkoutPreview(
+        workout_name=structure["workoutName"],
+        sport="running",
+        step_summary=_summarise(steps),
+        estimated_duration_secs=estimated,
+        estimated_duration_basis=basis,
+        requests_made=0,
+        structure=structure,
+        note=_PREVIEW_NOTE,
     )
