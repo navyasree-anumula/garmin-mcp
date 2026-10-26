@@ -30,7 +30,7 @@ from . import client as source
 from . import verdicts
 from .extract import DECODERS, MISSING, at_path
 from .fetch import Fetched, fetch
-from .metrics import KIND_NUMBER, Metric, SourceCall, resolve, sources_for
+from .metrics import KIND_NUMBER, PROV_MEASURED, Metric, SourceCall, resolve, sources_for
 
 
 @dataclass(frozen=True)
@@ -177,7 +177,17 @@ def read(
                 # this is the half of that promise that was missing. A verified
                 # row's note is provenance commentary and would be noise on
                 # every reading, so only the unverified ones carry it.
-                note="" if metric.verified else metric.note,
+                #
+                # A row that is here on somebody's word carries its note too,
+                # even with a verified path. That combination is what went wrong
+                # on 2026-10-26: `hrv_feedback`'s path was genuinely recorded,
+                # the reason for the row was a paraphrase of a phone screen, and
+                # nothing in the reading said so.
+                note=(
+                    ""
+                    if metric.verified and metric.provenance == PROV_MEASURED
+                    else metric.note
+                ),
             )
         )
 

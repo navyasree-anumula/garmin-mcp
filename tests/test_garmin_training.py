@@ -21,6 +21,7 @@ from garmin_mcp.source.errors import AuthExpired, RateLimited
 
 DEVICE = "3612870660"
 
+# recorded: 5b, 2026-10-11
 TRAINING_STATUS = {
     "mostRecentVO2Max": {"generic": {"vo2MaxValue": 52.0}, "cycling": None},
     "mostRecentTrainingStatus": {
@@ -50,12 +51,14 @@ TRAINING_STATUS = {
     },
 }
 
+# recorded: 5a/5b probe sessions -- the list(4) of snapshots
 READINESS = [
     {"timestamp": 100, "score": 40, "recoveryTime": 30},
     {"timestamp": 900, "score": 71, "recoveryTime": 6},
     {"timestamp": 500, "score": 55, "recoveryTime": 18},
 ]
 
+# recorded: 5a/5b probe sessions
 RACE = {"time5K": 1320, "time10K": 2760, "timeHalfMarathon": 6100, "timeMarathon": 13000}
 
 

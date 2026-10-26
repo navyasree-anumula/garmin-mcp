@@ -27,6 +27,7 @@ from garmin_mcp.source.errors import RateLimited
 
 DATE = "2026-10-15"
 
+# recorded: 5b, 2026-10-11
 # 5b: 320 populated fields. Trimmed to the ones the map names plus the two it
 # deliberately does not read, because both have to be present for the choice
 # between them to mean anything.
@@ -47,6 +48,7 @@ HRV = {
     "hrvReadings": [{"hrvValue": 40, "readingTimeGMT": "2026-10-15T02:11:00.0"}],
 }
 
+# recorded: 5b, 2026-10-11
 # The statistics window. Two dated rows, and the one that was asked for is NOT
 # first -- which is the whole point of matching on `calendarDate`.
 RHR = {
@@ -61,6 +63,7 @@ RHR = {
 }
 
 
+# recorded: probe --explain sleep, 2026-10-25
 # 3584 populated fields on 2026-10-25, trimmed to the paths the map names plus
 # the ones it deliberately refuses. The root answering for HRV and resting heart
 # rate is the interesting part: sleep is a real second source for both.
@@ -91,6 +94,7 @@ SLEEP = {
     "avgSkinTempDeviationC": -0.2,
 }
 
+# recorded: probe --explain stress, 2026-10-25
 # The descriptor-driven positional arrays v1.4 predicted, measured at last. The
 # scalars at the root are why stress needs no decoder to ship.
 STRESS = {
@@ -217,19 +221,19 @@ def test_hrv_status_reads_status_and_not_the_other_candidate(api):
     assert reading.value != "HRV_BALANCED_7", "the other candidate field"
 
 
-def test_the_payload_carries_two_verdicts_and_they_are_different_fields(api):
-    """Added 2026-10-26 after the Garmin Connect app was found to show both.
+def test_the_two_hrv_text_fields_are_read_from_different_paths(api):
+    """`status` is a verdict, `feedbackPhrase` is a message key.
 
-    `status` classifies HRV against the personal baseline band; `feedbackPhrase`
-    comments on the night itself. On the day this was checked the first said
-    unbalanced and the second said the night was good -- both correct, about
-    different windows. Returning only one made the server answer half of
-    Garmin's opinion while looking complete, which is worse than a wrong value
-    because nothing about the answer looks incomplete.
+    This test used to carry a claim that the two were verdicts about different
+    windows which could point opposite ways. That was inferred from one
+    paraphrase of what the Connect app displayed and never measured; the first
+    live read (2026-10-26) had both saying unbalanced, so the claim is
+    withdrawn. Whether they can disagree is unknown.
 
-    The assertion is that they are distinct fields, because the failure this
-    guards is a future edit pointing both rows at the same path and nobody
-    noticing that one of them stopped saying anything new.
+    What the test is actually for survives the withdrawal: the two rows must
+    read from different paths. The failure it guards is a future edit pointing
+    both at the same field, after which one row would silently stop saying
+    anything new.
     """
     readings = _by_metric(
         garmin_health(["hrv_status", "hrv_feedback"], DATE)
@@ -241,11 +245,13 @@ def test_the_payload_carries_two_verdicts_and_they_are_different_fields(api):
     assert len(api.calls) == 1, "the second verdict rides the first one's payload"
 
 
-def test_hrv_feedback_is_a_token_not_the_prose_the_app_renders(api):
-    """What comes back is Garmin's own code. The app renders a sentence from it
-    and that mapping has never been measured, so the row returns the token and
-    lets the conversation read it. A hand-written code-to-sentence table would
-    be the invention §5's epistemics exist to refuse."""
+def test_hrv_feedback_is_a_key_not_the_prose_the_app_renders(api):
+    """What comes back is Garmin's own message key -- confirmed live on
+    2026-10-26 as `HRV_UNBALANCED_11`, a identifier with a variant number. The
+    app renders a sentence from it; that mapping has never been measured, so the
+    row returns the key and lets the conversation say it does not know what
+    message 11 reads. A hand-written key-to-sentence table would be the
+    invention §5's epistemics exist to refuse."""
     reading = _by_metric(garmin_health(["hrv_feedback"], DATE))["hrv_feedback"]
 
     assert reading.value == "HRV_BALANCED_7"
@@ -261,6 +267,68 @@ def test_a_verified_row_carries_no_provenance_note(api):
     reading = _by_metric(garmin_health(["hrv_status"], DATE))["hrv_status"]
 
     assert reading.note == ""
+
+
+def test_a_reported_row_carries_its_note_even_with_a_verified_path():
+    """The combination the map could not express until 2026-10-26.
+
+    `hrv_feedback` had a path recorded by 5b -- genuinely verified -- and was in
+    the map because of one paraphrase of a phone screen. Nothing in the reading
+    said so, and a mechanism nobody had measured went into five places in the
+    indicative.
+
+    There is no such row today, so this builds one. A test that could only run
+    when the bug is present would never run; a synthetic row means the guard is
+    live before the next real one arrives.
+    """
+    import dataclasses
+
+    from garmin_mcp.source import metrics as metric_map
+    from garmin_mcp.source import readings as source_readings
+    from garmin_mcp.source.fetch import Fetched
+    from garmin_mcp.source.metrics import SourceCall
+
+    reported = dataclasses.replace(
+        metric_map.BY_KEY["hrv_status"],
+        verified=True,
+        provenance=metric_map.PROV_REPORTED,
+        note="reported: somebody said the app shows this. No payload confirms it.",
+    )
+    call = SourceCall(reported.source_method, reported.call)
+
+    readings = source_readings.read((reported,), {call: Fetched(payload=HRV)}, DATE)
+
+    assert readings[0].verdict == verdicts.PRESENT
+    assert readings[0].value == "BALANCED", "a reported row still answers"
+    assert "reported" in readings[0].note, (
+        "a verified path does not excuse a reported reason from saying so"
+    )
+
+
+def test_a_measured_and_verified_row_is_the_only_silent_combination():
+    """The mirror. Flipping either column back on makes the note appear, so the
+    condition is an AND rather than a leftover from when it was just
+    `verified`."""
+    import dataclasses
+
+    from garmin_mcp.source import metrics as metric_map
+    from garmin_mcp.source import readings as source_readings
+    from garmin_mcp.source.fetch import Fetched
+    from garmin_mcp.source.metrics import SourceCall
+
+    base = dataclasses.replace(
+        metric_map.BY_KEY["hrv_status"], note="a note that should stay hidden"
+    )
+    call = SourceCall(base.source_method, base.call)
+
+    def note_for(**changes):
+        row = dataclasses.replace(base, **changes)
+        return source_readings.read((row,), {call: Fetched(payload=HRV)}, DATE)[0].note
+
+    assert note_for() == "", "verified and measured: silent"
+    assert note_for(verified=False) != "", "an inferred path speaks"
+    assert note_for(provenance=metric_map.PROV_REPORTED) != "", "a reported row speaks"
+    assert note_for(provenance=metric_map.PROV_INFERRED) != "", "an inferred row speaks"
 
 
 def test_resting_hr_is_matched_on_its_own_date_not_by_position(api):

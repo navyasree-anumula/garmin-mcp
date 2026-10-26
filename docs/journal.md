@@ -2078,28 +2078,52 @@ unverified row attaches its note to a *present* reading. The guard moved to
 still unverified, so the next person to verify that row is told to move the guard rather than
 delete it.
 
-**And then the app showed something this map does not return.** Asked whether a feedback
-sentence appeared next to the status, the answer was yes: Garmin was saying yesterday's HRV
-was **good**, while `status` said **Unbalanced**. Both are Garmin's own verdicts, in the same
-payload, pointing opposite ways.
+**And then the app appeared to show something this map does not return.** Asked whether a
+feedback sentence sat next to the status, the answer was yes: Garmin was saying yesterday's HRV
+was **good**, while `status` said **Unbalanced**.
 
-They are not contradictory once you see what each measures. `status` classifies where HRV sits
-against the personal baseline band — 90 ms is outside a band built around an 80 ms average, so
-Unbalanced. `feedbackPhrase` appears to comment on last night specifically, and last night was
-above the average, so good. **Two verdicts about different windows.**
-
-This map returns only one of them. On 2026-10-26 the conversation read "Unbalanced" and
-proposed an easy session, while Garmin's own app was saying last night looked good. That is not
-a wrong field path — `status` is right — it is **a half-read payload**, which is the more
-expensive kind of mistake because nothing about the answer looks incomplete. `feedbackPhrase`
+**What was built on that, and what the live read did to it, is the lesson of the day — see the
+withdrawal below.** At the time it was read as two verdicts about different windows: `status`
+classifying HRV against the personal baseline band (90 ms outside a band built around an 80 ms
+average), `feedbackPhrase` commenting on last night, which was above average. On that reading
+the map returned one of two opinions and looked complete while doing it — a half-read payload
+rather than a wrong path. `feedbackPhrase`
 is recorded by 5b, sits in the payload `hrv_last_night` already fetches, and therefore costs no
 request.
 
 **The row was added the same day, once Mahi asked for it.** `hrv_feedback`,
 `hrvSummary.feedbackPhrase`, verified — the path was recorded by 5b and the app confirmed the
-field is surfaced. It returns **Garmin's token** (`HRV_BALANCED_7` shape), not the prose the app
-renders from it: that mapping has never been measured, and a hand-written code-to-sentence table
-would be exactly the invention the `verified` column exists to refuse.
+field is surfaced. It returns **Garmin's own key**, not the prose the app renders from it: that
+mapping has never been measured, and a hand-written key-to-sentence table would be exactly the
+invention the `verified` column exists to refuse.
+
+### Withdrawn the same evening, by the first live read of the row
+
+The re-pin went in and the very first call returned **`hrv_status: UNBALANCED` and
+`hrv_feedback: HRV_UNBALANCED_11`**. They agree. Desktop noticed before anyone else did, and
+said so: the tool's own description claimed the two had disagreed on this date, and the live
+data did not.
+
+**The "two verdicts about different windows" mechanism was never measured.** It was inferred
+from one paraphrase of a sentence on a phone screen — plausibly about a different night than the
+one queried, or rendered from a field we never read — and then written into the map row's note,
+`garmin_health`'s docstring, a test docstring, the journal and a PR body as though it were a
+finding. Five places, one unverified inference, asserted in the voice the repo reserves for
+things it has measured. It is withdrawn: whether the two fields can disagree is **unknown**.
+
+What the live read *did* settle is the part worth keeping. `feedbackPhrase` is a **lookup key
+with a variant number**, not a verdict and not a sentence; the app renders prose from it, and
+what message 11 reads is not known here. So the row's justification changes from "it carries a
+second opinion that can contradict the first" to "it carries specificity `status` does not, and
+costs no request". The row stays. Its reason for existing is smaller and true.
+
+**The shape of this mistake is worth more than the correction.** The repo's whole epistemic
+apparatus — `verified`, dated notes, "a verdict is a measurement with a date on it" — exists to
+stop exactly this, and it did not fire, because the inference was mine rather than a field
+path's. The map has a column for an unconfirmed path and no column for an unconfirmed
+*explanation of why a row exists*. The guard that would have caught it is cheaper than a column:
+**a mechanism gets written in the indicative only after something has been read twice.** One
+paraphrase is a lead, not a measurement.
 
 What changed beyond the row is the tool's own guidance, because a map row the agent does not know
 to ask for is a row that does not exist. `garmin_health`'s docstring and the `metrics` enum help
@@ -2231,6 +2255,62 @@ description.
 "are writes enabled right now" becomes a question the agent must be able to ask. Recorded as a
 condition on the next session instead of being quietly carried a fourth time.
 
+### Two guards, because the lesson was a convention and conventions erode
+
+The withdrawal above produced a rule — *a mechanism gets written in the indicative only after
+something has been read twice* — and a rule in prose is what this repo keeps catching itself
+trusting. So the rule got two mechanisms, and neither is the obvious one: a keyword lint on note
+text would have passed my bad note, which said the app "was **found** to show both".
+
+**1. `provenance` on the metric row, orthogonal to `verified`.** `verified` answers "was this
+dotted path read off a real payload". `provenance` answers "what evidence put this row in the
+map at all", from a closed set: `measured`, `reported`, `inferred`. The combination that matters
+is **a verified path with a reported reason** — precisely `hrv_feedback` on the day it was
+added, whose path 5b genuinely recorded while the reason was a paraphrase of a phone screen. The
+map could not express that state, so nothing caught it.
+
+Two fields holding one fact is what the composer's own V9 refuses, so the distinction had to be
+real rather than a second spelling of `verified`. It is: the four unverified training rows are
+`measured` with `verified=False` — the payload *was* read, and it is *which* field answers that
+was inferred. Same evidence for the row, different confidence in the path.
+
+The teeth are a literal. `test_the_number_of_rows_not_backed_by_a_payload` asserts the list is
+**empty**, so adding a row on somebody's word costs a deliberate edit to a number — the same
+device as `test_the_whole_health_group_is_four_requests`. The field defaults to `inferred`, the
+pessimistic value, so forgetting it fails that test rather than quietly claiming a measurement.
+`readings.read` now attaches the note for any row that is not *both* verified and measured, with
+the condition asserted as an AND in both directions against a synthetic row, since no real row
+is reported today.
+
+**2. Fixture provenance, AST-checked — and this is the one that would actually have stopped
+me.** Both metric-tool test files open by declaring it: "payload shapes here are the ones 5b
+actually recorded, not invented ones." Stated, never enforced. Every module-level payload
+fixture now carries `# recorded: <session>, <date>`, and `tests/test_fixture_provenance.py`
+fails on one that does not.
+
+Why it bites where the first guard would not: my claim was that two fields *can disagree*. A
+claim about payload behaviour belongs in a test, and a test needs a fixture — so writing it
+would have meant inventing a payload with disagreeing values and citing no session for it. The
+check fires at the moment the fabrication has to be written down.
+
+Three details were worth the extra thought. The file list is **enumerated, not globbed**:
+`test_compose.py`'s step lists are our own inputs, invented on purpose, and demanding a session
+for them would train everybody to write a meaningless marker — which is worse than none,
+because it looks like evidence. The lookback is **bounded at 8 lines**, with a test proving a
+distant marker is not borrowed by the next fixture, since an unbounded one would let a single
+citation at the top of a file bless every shape below it. And `tree.body` is walked rather than
+`ast.walk`, so a dict inside a test function is left alone: a one-off shape is argued for by the
+test around it, while a module-level constant quietly becomes the project's record of what
+Garmin returns.
+
+The markers carry exactly the precision the files already claimed — `5b, 2026-10-11` where the
+docstring states a date, `5a/5b probe sessions` where only the collective claim exists. A marker
+more precise than its evidence would be the same mistake one layer down.
+
+**What neither guard does** is judge whether a cited session really said that. They make the
+citation mandatory and visible in review, which is the difference between a claim somebody has
+to defend and a sentence nobody re-reads. Tests: 427 -> 461.
+
 ### Not done here, on purpose
 
 Create, schedule, update, unschedule, delete. Idempotency resolution, because name-matching
@@ -2289,6 +2369,15 @@ parses, stop Desktop, verify with `docker ps`. The digest gate goes before the e
 pull goes before the backup — a step that fails on a flaky network should leave no trace, and
 the 2026-10-26 run left a backup file for a run that changed nothing. Verify with a tool that
 cannot exist on the old image, never with `server_version`.
+
+**A mechanism needs two readings before it is written in the indicative**, and that rule now
+has two mechanisms rather than only this sentence. `provenance` on the metric row expresses the
+state that went wrong — a verified path with a reported reason — with the count of
+non-`measured` rows asserted as a literal, so adding one is a deliberate edit. Every
+module-level payload fixture must carry `# recorded: <session>, <date>`, enforced by
+`tests/test_fixture_provenance.py`, which is the check that bites when a claim about payload
+behaviour would need an invented fixture to test. Neither judges whether the cited session
+really said it; both make the citation mandatory and visible in review.
 
 **Two verification mechanisms are known not to reach the reader:**
 

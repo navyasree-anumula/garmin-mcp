@@ -35,6 +35,23 @@ CALL_NONE = "none"
 KIND_NUMBER = "number"
 KIND_PHRASE = "phrase"
 
+#: What evidence put this ROW in the map. **Orthogonal to `verified`**, which
+#: answers a different question -- whether the dotted path was read off a real
+#: payload. A row can have a verified path and still be here on somebody's word:
+#: that is exactly the combination that went wrong on 2026-10-26, when
+#: `hrv_feedback` was added on a paraphrase of a phone screen while its path was
+#: genuinely recorded by 5b, and a mechanism nobody had measured was written
+#: into five places in the indicative.
+#:
+#: Two fields holding one fact is what `compose.validate_structure`'s V9 refuses,
+#: so the distinction has to be real: `verified` is about the path, `provenance`
+#: is about the reason. The failure mode each one catches is different.
+PROV_MEASURED = "measured"   # a payload this project received showed the field
+PROV_REPORTED = "reported"   # a human reported it; no payload of ours has yet
+PROV_INFERRED = "inferred"   # reasoning from docs or the library only
+
+PROVENANCE = (PROV_MEASURED, PROV_REPORTED, PROV_INFERRED)
+
 
 @dataclass(frozen=True)
 class Metric:
@@ -57,6 +74,11 @@ class Metric:
     kind: str = KIND_NUMBER
     accumulates: bool = False
     verified: bool = False
+    #: Defaults to the most pessimistic value on purpose. A row added without
+    #: stating its evidence is counted as inferred, which trips
+    #: `test_the_number_of_rows_not_backed_by_a_payload` -- so forgetting this
+    #: field fails a test rather than quietly claiming a measurement.
+    provenance: str = PROV_INFERRED
     note: str = ""
 
 
@@ -73,6 +95,7 @@ METRICS: tuple[Metric, ...] = (
         path="trainingStatusFeedbackPhrase",
         kind=KIND_PHRASE,
         verified=False,
+        provenance=PROV_MEASURED,
         note=(
             "The device-keyed container is recorded (5b: "
             "latestTrainingStatusData.<deviceId>.trainingStatus). The sibling "
@@ -91,6 +114,7 @@ METRICS: tuple[Metric, ...] = (
         path="trainingBalanceFeedbackPhrase",
         kind=KIND_PHRASE,
         verified=False,
+        provenance=PROV_MEASURED,
         note=(
             "Container recorded in 5b via its sibling "
             "metricsTrainingLoadBalanceDTOMap.<deviceId>.monthlyLoadAerobicLow. "
@@ -105,6 +129,7 @@ METRICS: tuple[Metric, ...] = (
         path="mostRecentVO2Max.generic.vo2MaxValue",
         unit="mL/kg/min",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Recorded 5b. NOT get_max_metrics, which answers a single date with "
             "list(0) -- the finding that made this map a tested artifact. "
@@ -120,6 +145,7 @@ METRICS: tuple[Metric, ...] = (
         path="score",
         unit="index, scale unconfirmed",
         verified=False,
+        provenance=PROV_MEASURED,
         note=(
             "The root being list(4) for one day, selected by `timestamp` rather "
             "than by index, is recorded (5b). The score's own field name and its "
@@ -137,6 +163,7 @@ METRICS: tuple[Metric, ...] = (
         path="recoveryTime",
         unit="hours (inferred)",
         verified=False,
+        provenance=PROV_MEASURED,
         note=(
             "Same payload as readiness, so it costs no extra request. Neither "
             "the field name nor the unit is recorded anywhere -- 5c confirms "
@@ -157,6 +184,7 @@ METRICS: tuple[Metric, ...] = (
         path="time5K",
         unit="s (inferred)",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Field name recorded 5b. Two things about this row are NOT recorded "
             "and 5c settles both: the unit (a bare int with no unit in its name "
@@ -174,6 +202,7 @@ METRICS: tuple[Metric, ...] = (
         path="time10K",
         unit="s (inferred)",
         verified=True,
+        provenance=PROV_MEASURED,
         note="See race_5k for the unit decision.",
     ),
     Metric(
@@ -184,6 +213,7 @@ METRICS: tuple[Metric, ...] = (
         path="timeHalfMarathon",
         unit="s (inferred)",
         verified=True,
+        provenance=PROV_MEASURED,
         note="See race_5k for the unit decision.",
     ),
     Metric(
@@ -194,6 +224,7 @@ METRICS: tuple[Metric, ...] = (
         path="timeMarathon",
         unit="s (inferred)",
         verified=True,
+        provenance=PROV_MEASURED,
         note="See race_5k for the unit decision.",
     ),
     # ---- get_hrv_data: three metrics, one payload --------------------------
@@ -209,6 +240,7 @@ METRICS: tuple[Metric, ...] = (
         path="hrvSummary.lastNightAvg",
         unit="ms",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Recorded 5b (2026-10-11), 320 populated fields. The overnight "
             "average Garmin's own HRV status is computed from."
@@ -221,6 +253,7 @@ METRICS: tuple[Metric, ...] = (
         path="hrvSummary.weeklyAvg",
         unit="ms",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Recorded 5b, same payload as hrv_last_night, so the pair costs one "
             "request. This is the trend half: one night means little without a "
@@ -234,6 +267,7 @@ METRICS: tuple[Metric, ...] = (
         path="hrvSummary.status",
         kind=KIND_PHRASE,
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             # Kept although the row is verified: `note` is not surfaced on a
             # verified reading, so this is a record for the next reader of the
@@ -260,22 +294,25 @@ METRICS: tuple[Metric, ...] = (
         path="hrvSummary.feedbackPhrase",
         kind=KIND_PHRASE,
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             # Surfaced nowhere, because the row is verified. Kept for the next
             # reader of the map, where the window distinction belongs.
-            "The payload's SECOND verdict, and it is not a restatement of "
-            "`hrv_status`. Added 2026-10-26 after the Garmin Connect app was "
-            "found to show both: `status` said Unbalanced for the night of "
-            "25-26 Oct while the app's feedback sentence said the night was "
-            "good. `status` classifies HRV against the personal baseline band "
-            "(90 ms against a band built around an 80 ms average is outside "
-            "it); this field appears to comment on the night itself. Returning "
-            "only one of them made the server answer half of Garmin's opinion "
-            "while looking complete. The value is Garmin's own token "
-            "(`HRV_BALANCED_7` shape, 5b), NOT the prose the app renders from "
-            "it -- that mapping is unmeasured and inventing it would be exactly "
-            "the guess this column exists to refuse. Costs no request: it rides "
-            "the payload `hrv_last_night` already fetches."
+            "A LOOKUP KEY, not a verdict and not prose. Measured live "
+            "2026-10-26: `HRV_UNBALANCED_11` alongside `hrv_status`'s "
+            "`UNBALANCED`. So the value is a message identifier with a variant "
+            "number, and the Connect app renders a sentence from it; the "
+            "key-to-sentence mapping is unmeasured, and inventing a table for "
+            "it would be exactly the guess this column exists to refuse. "
+            "**The row was added on a wrong premise and kept for a right one.** "
+            "It was added believing `status` and this field were verdicts about "
+            "different windows that could disagree -- inferred from a single "
+            "paraphrase of what the app displayed, never measured. The first "
+            "live read had both fields agreeing, so that claim is WITHDRAWN: "
+            "whether they can ever disagree is unknown. What stands is that "
+            "this field carries specificity `status` does not (which of several "
+            "messages, by number) and costs no request, since it rides the "
+            "payload `hrv_last_night` already fetches."
         ),
     ),
     # ---- get_sleep_data: 3584 populated fields, four of them wanted --------
@@ -298,6 +335,7 @@ METRICS: tuple[Metric, ...] = (
         path="dailySleepDTO.sleepScores.overall.value",
         unit="index, scale unconfirmed",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Path measured 2026-10-26. The scale is NOT: only `overall`, "
             "`remPercentage`, `lightPercentage` and `deepPercentage` carry a "
@@ -313,6 +351,7 @@ METRICS: tuple[Metric, ...] = (
         path="dailySleepDTO.sleepScores.overall.qualifierKey",
         kind=KIND_PHRASE,
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Garmin's own wording for the score, measured 2026-10-26. Offered "
             "beside sleep_score for the same reason training_status is: a "
@@ -327,6 +366,7 @@ METRICS: tuple[Metric, ...] = (
         path="dailySleepDTO.sleepTimeSeconds",
         unit="s",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Measured 2026-10-26. Sleep only: `napTimeSeconds` is a separate "
             "field and is deliberately not added in, because a nap and a night "
@@ -347,6 +387,7 @@ METRICS: tuple[Metric, ...] = (
         path="avgStressLevel",
         unit="index, scale unconfirmed",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Measured 2026-10-26, 2896 populated fields. All-day average. The "
             "scale is unconfirmed for the same reason as sleep_score: "
@@ -361,6 +402,7 @@ METRICS: tuple[Metric, ...] = (
         path="maxStressLevel",
         unit="index, scale unconfirmed",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Same payload as stress_avg, so the pair costs one request. An "
             "average alone hides a day that spiked and recovered."
@@ -376,6 +418,7 @@ METRICS: tuple[Metric, ...] = (
         path="value",
         unit="bpm",
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Recorded 5b at "
             "allMetrics.metricsMap.WELLNESS_RESTING_HEART_RATE[0].value. Selected "
@@ -395,6 +438,7 @@ METRICS: tuple[Metric, ...] = (
         group="health",
         source_method=None,
         verified=True,
+        provenance=PROV_MEASURED,
         note=(
             "Measured, not assumed: on 2026-10-09 get_spo2_data returned a full "
             "envelope with averageSpO2, lowestSpO2, avgSleepSpO2 and every "
