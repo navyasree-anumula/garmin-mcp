@@ -2049,8 +2049,18 @@ them.
 **`hrv_status` narrowed, not settled.** The row is `verified=False` because *which* of
 `status` and `feedbackPhrase` is the human-readable verdict was inferred. "Unbalanced" is
 consistent with `hrvSummary.status`'s enum and not with a feedback phrase, so the inference
-looks right — but one field seen through a summariser is not `--explain hrv`, and the row
-stays `verified=False` until both fields are read side by side.
+looks right — but one field seen through a summariser is not a measurement, and the row stays
+`verified=False`.
+
+**Corrected 2026-10-26, later the same day: `--explain hrv` cannot settle this.** This entry,
+the resume block and the map row all said it could. `--explain` prints key paths and value
+*types* only (`probe.py:343`), so it would report `status: str` and `feedbackPhrase: str` —
+exactly what 5b already recorded. The question is about values, and the diagnostic suppresses
+values deliberately, because a reading in a terminal's scrollback is health data (§8). The
+claim was asserted three times in one session and was never true; worse, it sat in
+`metrics.py`'s own note, which is the instruction the next session would have followed into a
+wasted live request. What settles it costs no request at all: compare the row's output against
+the status Garmin Connect displays for the same night.
 
 ### The provenance note did not reach the reader either
 
@@ -2204,22 +2214,36 @@ does not match what the suite reports, this block is older than the code and the
 **What exists, end to end:**
 
 - **Reads, reachable from Claude Desktop.** `garmin_auth_status`, `garmin_training` (5 metrics)
-  and `garmin_health` (9 rows: three HRV, four sleep, resting HR, two stress). The laptop runs
-  `sha-8154e24`; `garmin_health` has answered with real data.
-- **The write path's first half.** `garmin_workouts(action="preview")` composes a running
-  session and sends nothing — zero requests, nine refusal rules, 67 tests. Time and distance
-  with NO_TARGET only.
+  and `garmin_health` (9 rows: three HRV, four sleep, resting HR, two stress). `garmin_health`
+  has answered with real data.
+- **The write path's first half, live on the laptop.** `garmin_workouts(action="preview")`
+  composes a running session and sends nothing — zero requests, nine refusal rules, 67 tests.
+  Time and distance with NO_TARGET only. **The laptop runs `sha-1964dec`** (re-pinned
+  2026-10-26 ~21:10 local, digest `sha256:0014673e…`), and Desktop lists the tool, which is
+  itself the proof: `garmin_workouts` cannot exist on `sha-8154e24`.
+
+  The pull timed out on its first attempt — `net/http: timeout awaiting response headers` on
+  the manifest, after the tag had resolved to the right digest. **The digest gate did its job
+  and left the config untouched**, so the retry was free. The script now pulls *before* it
+  backs up, because the step most likely to fail should run before anything that leaves a
+  trace, and it retries four times.
 - **No workout has ever been written to Garmin by this project.** Nothing has reached the
   calendar, no `workoutId` has ever existed, and the account is untouched by anything but
   reads.
 
-**The laptop needs a re-pin before the preview is callable.** Merge → CI publishes
-`sha-<commit>` → re-pin the config at
+**Every new tool needs a re-pin before it is callable**, and the sequence is merge → CI
+publishes `sha-<commit>` → re-pin the config at
 `C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
-→ **restart Desktop** (the client caches the tool list at session start, so a re-pin alone is
-not enough). The script shape that worked: print the config, back it up to `C:\garmin-backup`,
-pull and assert the digest, replace the tag, assert the JSON still parses, stop Desktop, then
-verify with `docker ps`. Gate the edit behind the digest check, not after it.
+→ **restart Desktop.** The restart is not optional: the client caches the tool list at session
+start, so a re-pin alone gives you the new image still advertising the old tools — which looks
+exactly like a build that did not take.
+
+The script shape that works, in this order: **pull with retries and assert the digest first**,
+then print the config, back it up to `C:\garmin-backup`, replace the tag, assert the JSON still
+parses, stop Desktop, verify with `docker ps`. The digest gate goes before the edit, and the
+pull goes before the backup — a step that fails on a flaky network should leave no trace, and
+the 2026-10-26 run left a backup file for a run that changed nothing. Verify with a tool that
+cannot exist on the old image, never with `server_version`.
 
 **Two verification mechanisms are known not to reach the reader:**
 
@@ -2257,9 +2281,12 @@ verify with `docker ps`. Gate the edit behind the digest check, not after it.
    fails after the first succeeded. Then **one supervised live create → verify → delete cycle**
    on a throwaway workout, by hand, documented. Cassettes arrive with it (§8's scrubbing
    requirements are requirements on that work).
-2. **`--explain hrv`** — one request, settles whether `status` or `feedbackPhrase` is the
-   human-readable verdict. Today's live `garmin_health` returned "Unbalanced", which fits
-   `status`'s enum and not a feedback phrase, so this is confirmation rather than discovery.
+2. **Settle `hrv_status` against the Garmin Connect app** — zero requests, zero code. The row
+   reads `hrvSummary.status` and returned "Unbalanced" for the night of 25–26 Oct; if the app
+   shows that same status for that night, `status` is the field the app surfaces and the row
+   becomes `verified=True`. **Do not reach for `probe --explain hrv`** — it prints value types,
+   never values, so it cannot answer a question about which field holds a value. Seeing what
+   `feedbackPhrase` contains is a second map row, not a diagnostic.
 3. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
    `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
    directions. An aborted run must report where it got to, never look like a clean run that

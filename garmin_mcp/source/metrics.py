@@ -237,11 +237,17 @@ METRICS: tuple[Metric, ...] = (
         note=(
             "The container is recorded (5b) and so are both `status` and "
             "`feedbackPhrase`; WHICH of the two is the human-readable verdict is "
-            "inferred, and one `--explain hrv` settles it. `accumulates` stays "
-            "false deliberately: HRV status needing roughly three weeks of wear "
-            "is domain knowledge flagged [Mahi-verify] in SCOPE 13, not a "
-            "measurement, and v1.4 requires a MEASURED accumulation requirement "
-            "before a row may earn `not_matured`."
+            "inferred. **`probe --explain hrv` cannot settle it** -- it prints "
+            "key paths and value TYPES only (`probe.py:343`), so it would report "
+            "`status: str` and `feedbackPhrase: str`, which is what 5b already "
+            "recorded. The question is about values and the diagnostic suppresses "
+            "values by design (SCOPE 8: a reading in terminal scrollback is health "
+            "data). What settles it costs no request: compare this row's output "
+            "against the status Garmin Connect displays for the same night. "
+            "`accumulates` stays false deliberately: HRV status needing roughly "
+            "three weeks of wear is domain knowledge flagged [Mahi-verify] in "
+            "SCOPE 13, not a measurement, and v1.4 requires a MEASURED "
+            "accumulation requirement before a row may earn `not_matured`."
         ),
     ),
     # ---- get_sleep_data: 3584 populated fields, four of them wanted --------
