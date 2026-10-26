@@ -79,7 +79,18 @@ extensions and devtools can all see the field, where a terminal exposed none of 
 CLI stays available for anyone who wants the tighter boundary, and it is the only route
 that can handle an MFA code.
 
-Add it to Claude Desktop's `claude_desktop_config.json`:
+Add it to Claude Desktop's `claude_desktop_config.json`. **On a Microsoft Store install
+that file is not where the docs usually say it is.** MSIX redirects the roaming profile, so
+it lives under:
+
+```text
+%LOCALAPPDATA%\Packages\Claude_<packageid>\LocalCache\Roaming\Claude\claude_desktop_config.json
+```
+
+`%APPDATA%\Claude\claude_desktop_config.json` is the non-Store path. On a Store install it
+does not exist at all — creating it there changes nothing, the server never appears, and
+there is no error to explain why. Either folder exists only after the app has been launched
+once. `Settings → Developer → Edit Config` opens the right one without guessing.
 
 ```json
 {
@@ -87,11 +98,18 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
     "garmin": {
       "command": "docker",
       "args": ["run", "-i", "--rm", "-v", "garmin-tokens:/data",
-                "ghcr.io/navyasree-anumula/garmin-mcp:latest", "serve"]
+                "ghcr.io/navyasree-anumula/garmin-mcp:sha-8154e24", "serve"]
     }
   }
 }
 ```
+
+**Pin a `sha-` tag, never `latest`.** `docker run` does not re-pull a moving tag — it uses
+whatever was last pulled — so a config on `latest` runs a silently stale image with nothing
+anywhere saying so. This is not hypothetical: the laptop ran eight weeks and 36 commits
+behind, missing three dependency bumps and two whole tools, and `docker ps` was what finally
+said so. `git log --oneline -1 origin/main` gives the short commit; the tag is `sha-` plus
+that. Upgrading is deliberate — edit the tag, restart Desktop, then confirm with `docker ps`.
 
 ## Things that are easy to get wrong
 
@@ -103,6 +121,12 @@ Add it to Claude Desktop's `claude_desktop_config.json`:
   out of conversation transcripts.
 - **Never `print()` in this server.** stdout carries the protocol. All logging goes to
   stderr; `tests/test_stdio_purity.py` enforces it.
+- **Do not trust `server_version` to tell you which build answered.** `garmin_auth_status`
+  returns it, stamped by CI with the commit — but a client that summarises tool output can
+  drop the field, and one did: the first time it mattered, `docker ps` had to answer instead.
+  To check that an upgrade actually took, **call a tool that cannot exist on the old image**
+  (`garmin_health` did not exist before `sha-8154e24`). A capability probe cannot be
+  summarised away; a version string can.
 - **A configured server appears under Settings → Connectors, not Settings → Developer.**
   The Developer page has a "Local MCP servers" list that stays on *"No servers added"* even
   while a config-file server is connected and answering. Look in Connectors, where it shows

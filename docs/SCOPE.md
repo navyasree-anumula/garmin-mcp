@@ -670,7 +670,11 @@ account.
   roaming profile. The config is **not** at `%APPDATA%\Claude`; it is under
   `%LOCALAPPDATA%\Packages\Claude_<packageid>\LocalCache\Roaming\Claude\`. The folder
   does not exist until the app has been launched once. Use **Settings → Developer → Edit
-  Config** rather than guessing the path.
+  Config** rather than guessing the path. **Confirmed 2026-10-26 (step 0b)** on the live
+  install, `Claude_pzs8sxrjxfjjc` — and confirmed by *causation*, not by reading a filename:
+  editing that file moved the running containers onto a new image tag. It had been found by
+  filename in the previous session and recorded as an inference until then. The README said
+  only `claude_desktop_config.json` with no Store caveat, which is now fixed there too.
 - A packaged app does **not** reliably inherit the shell `PATH`. `"command": "docker"` can
   fail to resolve with no visible error — the server simply never appears. Use the absolute
   path to `docker.exe`, with backslashes escaped for JSON.
@@ -678,7 +682,17 @@ account.
 **Pin the image tag in the client config, not `latest`.** `docker run` does not re-pull a
 moving tag: it uses whatever was last pulled. A config on `latest` therefore runs a silently
 stale image with nothing anywhere saying so. `garmin_auth_status` reports `server_version`,
-stamped by CI with the commit, so the running build is always identifiable.
+stamped by CI with the commit, so the running build is identifiable **from the payload**.
+
+> **Correction, 2026-10-26 (step 0b).** This section used to say the running build was
+> "always identifiable" from `server_version`. It is not. The field reached the client and
+> the client summarised it away, so the first real "which build is answering?" was answered
+> by `docker ps`, from outside the conversation — the exact thing the stamp was added to
+> avoid. **A field a summarising client can drop is not a verification mechanism unless
+> something asks for it by name.** The reliable check is a capability probe: call a tool that
+> cannot exist on the older image and let its existence prove the build. Pinning, and the
+> reason for pinning, are unaffected — the laptop had run 36 commits behind for eight weeks,
+> which is the failure this paragraph exists to prevent.
 
 **Image hygiene from day one:** tag, and prune old tags. Do not repeat the no-retention
 mistake on a second machine.
