@@ -2073,85 +2073,202 @@ met for reads. Every tool built in this arc is now reachable from the laptop, an
 dependency bumps, the wrong-password/expired-token fix and the serverInfo stamp arrived with
 it. No code changed in this session; tests stay at 352 passed, 2 skipped.
 
+## 2026-10-26 (v0 arc, session 3) — the preview, which reaches nothing
+
+The write path's first behaviour: `garmin_workouts(action="preview", ...)` composes a running
+session, validates it, and sends nothing. Zero Garmin requests, no tokens, no budget, no lock.
+SCOPE §8 (v1.5) named this as the first write-path behaviour testable without a network, and
+that is the whole reason it went first — the one supervised live cycle is now spent confirming
+Garmin's acceptance rather than finding our own bugs.
+
+Tests: 292 -> 352 last session, **352 -> 419** this one, 2 skipped. 67 added, which is roughly
+double the plan's estimate: the estimate counted test functions and the suite counts cases,
+and six of the refusal tests are parametrised over the values that break them.
+
+### Two decisions taken before the plan was written
+
+**`estimatedDurationInSecs` is the sum of time-based steps only.** A distance step's duration
+is unknowable without a pace, and this account has no measured pace — `get_heart_rate_zones`
+and the pace endpoints have never been run. So a distance step contributes 0, and the response
+carries a sentence saying so, including that Garmin may recompute on upload. The rejected
+option was assuming a pace: a fabricated number in a field the calendar may display is exactly
+the shape of the failure the previous session was spent on.
+
+That means an all-distance session estimates **0 seconds**, which reads as broken unless the
+basis is read with it. The two are returned together for that reason and a test asserts the
+wording explains the zero rather than merely describing the method.
+
+**No approval hash yet.** §5 requires that `create` take the structure the preview returned
+rather than re-composing from the same arguments — otherwise the human approves one thing and
+a second one lands. The integrity marker that enforces it arrives *with* `create`, the
+consumer that checks it. Shipping it now would have put a second zero-consumer artifact next
+to `capabilities.json`. Accepted cost: `create` changes this tool's response shape.
+
+### Reading the library killed one unknown and found another
+
+The plan had a decision in it about whether to construct an explicit `NO_TARGET`.
+There was nothing to decide: `create_warmup_step(..., target_type=None)` **already** fills in
+`{"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}`. v0 passes nothing and the
+structure still states the target explicitly, so that is one fewer thing for the live cycle to
+confirm.
+
+It is asserted in a test anyway, and the reason is the interesting part: if upstream ever
+changed that default to `None`, `to_dict()`'s `exclude_none` would **silently drop the field**
+and we would upload steps with no target at all. The assertion is not about today's behaviour;
+it is about a change that would otherwise be invisible.
+
+The same read found the opposite shape. `create_repeat_group` writes the iteration count into
+**both** `numberOfIterations` and `endConditionValue`. Two fields holding one fact are two
+fields that can disagree, so V9 refuses a structure where they do.
+
+### The composer owns `stepOrder`, which deletes a whole §8 case
+
+`stepOrder` is flat across a segment, not per-group: a repeat's children continue the parent's
+numbering rather than restarting at 1. Garmin orders a segment by that field, so getting it
+wrong produces a workout whose steps run in an undefined order.
+
+So the caller cannot supply it. §8 asks for a duplicated-`stepOrder` refusal, and a value the
+caller cannot supply is a value the caller cannot duplicate — the bug class is removed at the
+source rather than validated against. `validate_structure` still checks it, because that is
+the function `create` will run on a structure that came back from a conversation rather than
+from the composer, and four of §8's nine cases are only reachable that way. Their tests compose
+a valid session and then break it, which is the same path.
+
+### Nine refusals, each with the valid variant beside it
+
+V1 no steps, V2 a repeat group with no steps, V3 fewer than two iterations, V4 duplicated or
+non-contiguous `stepOrder`, V5 a non-positive or **non-finite** measure, V6 any target but
+NO_TARGET including an absent one, V7 an empty name, V8 a repeat nested in a repeat, V9 the two
+iteration fields disagreeing.
+
+Two of those are worth naming. **V5 exists because `float` accepts NaN and infinity and typing
+catches neither** — `endConditionValue` is a float all the way to the wire, so a NaN duration
+would serialise and travel. **V7 refuses only the empty name**: Garmin's length limit has never
+been measured, and an invented cap would refuse sessions Garmin accepts. The repo's habit of
+refusing to invent a number held here.
+
+Every refusal is paired with the valid variant passing, because a validator only ever seen to
+refuse might be refusing everything.
+
+### "Makes no requests" is asserted structurally, not counted
+
+Counting calls proves nothing was called that time. So the claim is asserted two ways: an AST
+check that `compose.py` never names `_garmin_access` and imports nothing named `client`, in the
+shape of `test_fetch_seam.py`'s doorway check; and a runtime check that replaces the doorway
+with something that raises, then composes a full session anyway. The tool's entire test file
+runs with the doorway trapped, so any future test there that needs a request fails loudly.
+
+### What the stress test caught that the code had already got wrong
+
+**The tool converted its arguments twice** — once to build the structure, once to compute the
+estimate. Two readings of one argument is a miniature of the re-composition §5 forbids between
+preview and create, and it was in the first draft of the tool. Converted once now, with the
+comment saying why.
+
+**#4's security finding was about arguments, not responses.** `name` and `description` are free
+text an agent may fill with health context — "easy run, HRV unbalanced". §8's "no health data
+in logs" had only ever had to hold for responses. Nothing logs the structure, the name or the
+description.
+
+**#7 found the trigger condition rather than a blocker.** SCOPE §14's 7.b/A.6 — that
+`garmin_auth_status` cannot report the tool set actually in force, and `tools.json` is unbuilt
+— does not bite yet, because a preview is read-only. It bites the moment `create` lands, when
+"are writes enabled right now" becomes a question the agent must be able to ask. Recorded as a
+condition on the next session instead of being quietly carried a fourth time.
+
+### Not done here, on purpose
+
+Create, schedule, update, unschedule, delete. Idempotency resolution, because name-matching
+needs a live `get_workouts` and cannot live in a zero-request preview; it ships with `create`,
+where it gets a consumer on arrival. Every target but NO_TARGET. Cassettes. The supervised live
+cycle.
+
+**And the session is not finished at merge.** A new tool is invisible in Desktop until CI
+publishes, the laptop is re-pinned, and Desktop is restarted — step 0b again, now a one-minute
+scripted operation, but a step rather than an afterthought. The previous session learned that
+by discovering it.
+
 ## RESUME HERE
 
-**Rewritten a third time, because the second draft went stale the way the first two did.**
-The 19 October block described merges that happened after it was written; the first draft of
-the 24 October block said four branches were pending within an hour of them being merged; the
-first draft of *this* block named its own PR #29 as pending, and #29 merged while the next
-commit was being written. The lesson is narrower than "write it after the last merge" — it is
-that **a resume block must not name a pending item it is itself inside of.** Pending items
-belong in the PR, which closes on its own; the block states only what has landed.
+**The rule, fourth iteration — and this time by removing the thing that keeps going stale.**
+Three blocks went stale by naming merges that happened after they were written; the fourth
+went stale by naming its own PR as pending; the fifth said two corrections were "in review"
+and they merged an hour later. Every one of those failures was the same failure: **quoting a
+value that cannot be known at write time.** A commit hash for a merge that has not happened,
+a list of what is open, a count of what is pending. So this block quotes none of them. It
+states what the work *is*, which does not change when the merge lands.
 
-**Landed:** `main` = **`75f05b4`** (the #29 merge, carrying this entry). **352 passed, 2
-skipped.** Two docs-only corrections are in review and neither changes anything described
-above: the withdrawal below, and `docs/client-wiring-msix-and-stamp` (the README's Store path
-and `:latest` example, §7's "always identifiable" claim).
+State: `main` carries the merge of the entry above. **419 passed, 2 skipped.** If that count
+does not match what the suite reports, this block is older than the code and the suite wins.
 
-**Step 0 is closed, both halves.** The laptop runs `sha-8154e24`, re-pinned 2026-10-26 20:14
-local from `sha-21829cc`. Config lives at
+**What exists, end to end:**
+
+- **Reads, reachable from Claude Desktop.** `garmin_auth_status`, `garmin_training` (5 metrics)
+  and `garmin_health` (9 rows: three HRV, four sleep, resting HR, two stress). The laptop runs
+  `sha-8154e24`; `garmin_health` has answered with real data.
+- **The write path's first half.** `garmin_workouts(action="preview")` composes a running
+  session and sends nothing — zero requests, nine refusal rules, 67 tests. Time and distance
+  with NO_TARGET only.
+- **No workout has ever been written to Garmin by this project.** Nothing has reached the
+  calendar, no `workoutId` has ever existed, and the account is untouched by anything but
+  reads.
+
+**The laptop needs a re-pin before the preview is callable.** Merge → CI publishes
+`sha-<commit>` → re-pin the config at
 `C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
-— the MSIX/Store path, now **confirmed by causation** (editing it moved the containers), not by
-filename. Backups of every edit are in `C:\garmin-backup\claude_desktop_config.<stamp>.json`.
-`garmin_health` answered with real data from Desktop, which is what closes the arc's
-acceptance criterion for reads.
+→ **restart Desktop** (the client caches the tool list at session start, so a re-pin alone is
+not enough). The script shape that worked: print the config, back it up to `C:\garmin-backup`,
+pull and assert the digest, replace the tag, assert the JSON still parses, stop Desktop, then
+verify with `docker ps`. Gate the edit behind the digest check, not after it.
 
-**Two verification mechanisms were found not to reach the reader**, one day after being built:
+**Two verification mechanisms are known not to reach the reader:**
 
-- **The serverInfo build stamp.** `garmin_auth_status` returned it on the wire and the client
-  summarised it away. `docker ps` answered instead. A field a summarising client can drop
-  verifies nothing unless something asks for it by name — **prefer a capability probe** (call
-  a tool that cannot exist on the old image) to a version string.
-- **The provenance note on unverified rows.** `hrv_status` is `verified=False`; its note did
-  not survive into what was read. An inferred path was presented as confidently as a measured
-  one. Open question, deliberately unsolved: refuse to ship unverified rows, or put the
-  qualifier in the value rather than beside it.
+- **The serverInfo build stamp.** `garmin_auth_status` returns it and a summarising client
+  dropped it, so `docker ps` answered "which build?" instead. **Prefer a capability probe** —
+  call a tool that cannot exist on the old image. `garmin_workouts` is now that probe for
+  anything built after `8154e24`.
+- **The provenance note on unverified rows.** `hrv_status` is `verified=False` and its note did
+  not survive into what was read, so an inferred field path was presented as confidently as a
+  measured one. Open question, agreed to be settled *after* the write path: refuse unverified
+  rows, or put the qualifier inside the value.
 
 **Still open, unchanged:**
 
-- **SCOPE v1.6's §7 debt is unchanged**, and it is *not* the MSIX path — §7 has had that
-  right since v1.3. It owes Connectors-not-Developer and the per-user Docker path. The
-  README's missing Store caveat and `:latest` example, and §7's "always identifiable" claim
-  about `server_version`, are fixed on `docs/client-wiring-msix-and-stamp` as single-line
-  factual corrections — no version bump, so v1.6 stays a reviewable amendment rather than
-  something quietly half-spent.
-- **The cron's failure mode is silence.** Public-repo scheduled workflows auto-disable after
-  60 days of repository inactivity with no documented notification. Needs a consumer that
-  cannot be ignored before the gate is trustworthy.
+- **The cron's failure mode is silence.** Public-repo scheduled workflows auto-disable after 60
+  days of repository inactivity with no documented notification.
 - **Surface reduction is not a general shield.** `opentelemetry-api` CVE-2026-114603 is
-  reachable over stdio through JSON-RPC `_meta`, so removing `--http` did not close it.
-- **B.4's check is "read the page against the code", not "diff the two copies."** The two
-  copies matched exactly and were equally wrong about a test count.
-- **SCOPE v1.6 owes** §7 (Connectors-not-Developer, per-user Docker path, and now the MSIX
-  path), §7a (the bind-address correction for the *web UI*, stale for a second version — and
-  not affected by the `--http` removal; v1.0's A.1 was wrong), and §9 (location exposure via
-  activity detail). §6's cache key is settled; the store is what moved, carrying the open
-  question that a payload cache is health data at rest on the credential volume.
+  reachable over stdio through JSON-RPC `_meta`; removing `--http` did not close it.
+- **B.4's check is "read the page against the code", not "diff the two copies."**
+- **SCOPE v1.6 owes** §7's Connectors-not-Developer and per-user Docker path, §7a's bind
+  address for the web UI, and §9's location exposure via activity detail. §7's MSIX path and
+  its `server_version` claim are **done** (2026-10-26), as is the README's Store path and its
+  `:latest` example.
+- **`tools.json` is unbuilt and `garmin_auth_status` cannot report the tool set in force.**
+  Harmless while every tool is read-only. **It stops being harmless the moment `create`
+  lands**, because "are writes enabled right now" becomes a question the agent must be able to
+  ask. This is the one carried item with a trigger date attached.
 
 **Next, in order:**
 
-1. **The write path, preview first** — structure validation, idempotency by name, both ids
-   returned, create-and-schedule as one action, and a `preview` that makes zero Garmin
-   requests. This is the second half of the daily loop (read what the body says, **write a
-   session to the watch**, check it got done) and the first thing in this repo that is not
-   read-only. v0 run workouts are time and distance with `NO_TARGET`: `TargetType` offers only
-   zone-based targets, `get_heart_rate_zones` has never been run, and absolute ranges via
-   `ExecutableStep`'s `extra="allow"` are unverified against Garmin's acceptance — so the one
-   supervised live cycle confirms our structure, not two unknowns at once.
-2. **`--explain hrv`, `max_metrics_range`, and the six candidates** — `heart_rates`,
-   `hydration`, `body_battery_events`, `morning_readiness`, `heart_rate_zones`,
-   `stats_and_body`, plus `get_lactate_threshold`, activity detail and splits, and a read-only
-   look at `get_workouts` / `get_scheduled_workouts`. `hrv` is new to this list and cheap: it
-   settles `hrv_status`'s path by reading `status` and `feedbackPhrase` side by side.
-   **A `login` should not be run casually** — both mobile login paths took a 429 on
-   2026-10-11 and a fallback carried it, so the login path is IP-rate-limited. The data path
-   was unaffected across eleven requests, and across six metrics again today.
+1. **`create` + `schedule` as one action.** The approval marker over the previewed structure,
+   idempotency by name against `get_workouts` (match ⇒ `update_workout` in place, no match ⇒
+   upload), **both** ids returned because `unschedule_workout` needs the
+   `scheduledWorkoutId` and not the `workoutId`, and an orphan report when the second request
+   fails after the first succeeded. Then **one supervised live create → verify → delete cycle**
+   on a throwaway workout, by hand, documented. Cassettes arrive with it (§8's scrubbing
+   requirements are requirements on that work).
+2. **`--explain hrv`** — one request, settles whether `status` or `feedbackPhrase` is the
+   human-readable verdict. Today's live `garmin_health` returned "Unbalanced", which fits
+   `status`'s enum and not a feedback phrase, so this is confirmation rather than discovery.
 3. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
    `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
    directions. An aborted run must report where it got to, never look like a clean run that
    found less.
-4. **Give `capabilities.json` a consumer.** Still one producer, zero consumers. The missing
-   piece is filtering the group-derived enums by `tools.json`.
+4. **Give `capabilities.json` a consumer** — filtering the group-derived enums by `tools.json`.
+
+**A `login` should not be run casually.** Both mobile login paths took a 429 on 2026-10-11 and
+a fallback carried it, so the login path is IP-rate-limited. The data path has been unaffected
+across eleven requests then and six metrics on 2026-10-26.
 
 Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`. Two containers
 against one volume is the documented shape and the reason the budget is file-backed with a
@@ -2159,7 +2276,9 @@ cross-process lock. Quitting Desktop from the tray is the documented restart; `S
 -Force` on the `Claude` process is the scripted equivalent and worked.
 
 **git/gh:** this repo's account is `navyasree-anumula`. The box's active `gh` account defaults
-to `mahidhark`, which 403s here and lacks the `workflow` scope; it also **reverted
-mid-session** between two pushes on 24 October, so put the switch and the push in one
-invocation. `navyasree-anumula` also lacks `read:packages`, so registry tags are checked with
-an anonymous ghcr token against `/v2/.../manifests/<tag>` rather than via `gh api`.
+to `mahidhark`, which 403s here and lacks the `workflow` scope, and it reverted mid-session
+between two pushes on 24 October — put the switch and the push in one invocation.
+`navyasree-anumula` lacks `read:packages`, so registry tags are checked with an anonymous ghcr
+token against `/v2/.../manifests/<tag>` rather than `gh api`. **`delete_branch_on_merge` is now
+on**, so a push that crosses a merge recreates the remote branch instead of failing; local
+branches and cached `origin/` refs still need `git fetch origin --prune` plus `git branch -d`.
