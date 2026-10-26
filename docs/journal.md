@@ -1969,100 +1969,174 @@ therefore not rewritten in this entry** — this session ends with an unmerged b
 one thing three stale resume blocks have taught this repo is that the block can only be true
 after the last merge.
 
+## 2026-10-26 (v0 arc, session 2) — step 0b: the pin moved, and the stamp went missing
+
+Step 0b was the post-merge half of step 0: #28 merged as `8154e24`, the Docker push run
+(`40382393960`) succeeded, so for the first time an image existed that contained
+`garmin_health`. The laptop was re-pinned from `sha-21829cc` (2026-08-30) to `sha-8154e24`,
+closing a 36-commit, eight-week gap in one edit.
+
+Run as one script with the checks in front of the edit, because the thing being edited was a
+file whose role was still an inference. Order: print the config, back it up to
+`C:\garmin-backup`, pull and assert the digest, replace the tag, assert the result still
+parses as JSON, stop Desktop, restart. The digest gate and the JSON gate both exit non-zero,
+so reaching the last line is itself the evidence both passed.
+
+### The config path stopped being an inference
+
+5a found `claude_desktop_config.json` under
+`...\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\` **by filename**, and recorded
+that it held the `garmin local dev` connector as an inference. Editing it moved the running
+containers, which is the only proof that was ever available: causation, not file contents.
+
+So the README defect is now definite rather than suspected. It says to add the server to
+`claude_desktop_config.json` and shows the classic `%APPDATA%\Claude\` location, which on an
+MSIX/Store install does not exist. **Not fixed in this entry** — it is a README change, not a
+journal one, and it wants its own commit.
+
+### Both containers came back on the new tag
+
+    angry_wright         | ghcr.io/.../garmin-mcp:sha-8154e24 | "python -m garmin_mc…"
+    stupefied_mendeleev  | ghcr.io/.../garmin-mcp:sha-8154e24 | "python -m garmin_mc…"
+
+New names, ~30s old, so Desktop respawned them from the new pin rather than reattaching
+anything. `sha-8154e24` and `latest` were the same digest
+(`sha256:3ef253704955e03bef28149e161ab986f2e075f55f03e6b61a41b46efd9923d9`) at pull time;
+the pin is still a `sha-`, so B.1's neutralisation holds and the next upgrade is again
+deliberate.
+
+### The build stamp was dropped by the conversation it was built for
+
+`garmin_auth_status` authenticated, metric units, tokens last written 19:41 local. It did
+**not** report `server_version`. The client summarised the field away, and
+`0.2.0+8154e24ec067a8d8e8bdbf062d0d02697b10131d` was never seen.
+
+`1934bfc` added that stamp precisely so "which image is answering?" would be answerable from
+inside a conversation instead of from `docker ps`. On its first real use the answer existed
+on the wire and did not survive to the reader. **A field a summarising client can drop is not
+a verification mechanism** — it is one only when something asks for it by name. `docker ps`
+answered the question again, from outside.
+
+What made the verification hold anyway was asking for something that cannot exist on the old
+image. `garmin_health` is not in `sha-21829cc` at all, so a successful call proves the build
+by its own existence, with nothing to summarise away. **Prefer a capability probe to a
+version string** when a human-readable layer sits in between.
+
+### First real data through `garmin_health`
+
+Six metrics asked, six returned, no `no_data`: `hrv_last_night` 90 ms, `hrv_weekly` 80 ms,
+`hrv_status` Unbalanced, sleep 8h13m with score 84 (Good), `resting_hr` 46 bpm, stress avg 27
+and max 93. One request's worth of payloads answering across three endpoints.
+
+The sleep score returning a number matters more than the number. Four of the eight
+`sleepScores` sub-objects carry no `value` at all, and 5a recorded that mapping one of those
+would have looked reasonable and returned `no_data` forever. The mapped path is not one of
+them.
+
+**`hrv_status` narrowed, not settled.** The row is `verified=False` because *which* of
+`status` and `feedbackPhrase` is the human-readable verdict was inferred. "Unbalanced" is
+consistent with `hrvSummary.status`'s enum and not with a feedback phrase, so the inference
+looks right — but one field seen through a summariser is not `--explain hrv`, and the row
+stays `verified=False` until both fields are read side by side.
+
+### The provenance note did not reach the reader either
+
+`hrv_status` is an unverified row, and yesterday's change was precisely that unverified rows
+carry their note on *present* readings, not only on absent ones. The summary that came back
+carried no provenance at all. Same failure as the build stamp, one day after the mechanism
+was built: **the note reaches the wire model and dies at the client.** An inferred reading
+was presented as confidently as a measured one.
+
+This does not make the change wrong — a client that renders the payload shows it, and the
+schema is the right place for it. It does mean provenance-by-note cannot be the *only*
+defence against an unverified path being read as fact. Carried as an open question, not
+solved here: the candidates are refusing to ship an unverified row at all, or putting the
+qualifier in the value rather than beside it.
+
+### Where step 0 stands
+
+**Closed.** The arc's acceptance criterion — "something I can call from Claude Desktop" — is
+met for reads. Every tool built in this arc is now reachable from the laptop, and the
+dependency bumps, the wrong-password/expired-token fix and the serverInfo stamp arrived with
+it. No code changed in this session; tests stay at 352 passed, 2 skipped.
+
 ## RESUME HERE
 
-**Written after the last merge, which is the only time this block can be true.** The 19 October
-block was stale on arrival for describing merges that happened after it was written. The first draft
-of *this* block was stale within the hour for the same reason — it said the work branch was unpushed
-and four branches were pending. This is its correction, written once `main` was final.
+**Written with this entry's own PR open, which is the one thing the last three blocks got
+wrong.** The 19 October block described merges that happened after it was written; the first
+draft of the 24 October block said four branches were pending within an hour of them being
+merged. So: `main` = **`8154e24`** (#28, `garmin_health`). **352 passed, 2 skipped.** The only
+pending item is the branch carrying *this* entry — `docs/journal-2026-10-26-step-0b` — and
+when it merges, `main` moves and nothing else here changes.
 
-State: `main` = **`c904152`**. **292 passed, 2 skipped.** **No open PRs, and no branch but `main`**
-either locally or on the remote — the first time this repo has had none.
+**Step 0 is closed, both halves.** The laptop runs `sha-8154e24`, re-pinned 2026-10-26 20:14
+local from `sha-21829cc`. Config lives at
+`C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
+— the MSIX/Store path, now **confirmed by causation** (editing it moved the containers), not by
+filename. Backups of every edit are in `C:\garmin-backup\claude_desktop_config.<stamp>.json`.
+`garmin_health` answered with real data from Desktop, which is what closes the arc's
+acceptance criterion for reads.
 
-Four PRs merged 2026-10-24, in this order:
+**Two verification mechanisms were found not to reach the reader**, one day after being built:
 
-- **#24** → `badd6b0`. `certifi` 2026.7.22 → 2026.10.23, `opentelemetry-api` 1.44.0 → 1.45.1.
-  **Unplanned:** #23's audit caught both, eight days after `main` last ran one.
-- **#23** → `c73f5ef`. The 19 October documentation: plan, architecture page, journal.
-- **#25** → `0d30eda`. **Option B itself**: weekly `audit.yml` (`17 6 * * 1`, `contents: read`
-  only), the derived ratelimit bound, `--http` and `--port` removed across eight sites,
-  `test_transport_surface.py`, and the plan's v1.1 amendment.
-- **#26** → `c904152`. Architecture snapshot re-dated to `0d30eda`, and the fifth guard recorded.
+- **The serverInfo build stamp.** `garmin_auth_status` returned it on the wire and the client
+  summarised it away. `docker ps` answered instead. A field a summarising client can drop
+  verifies nothing unless something asks for it by name — **prefer a capability probe** (call
+  a tool that cannot exist on the old image) to a version string.
+- **The provenance note on unverified rows.** `hrv_status` is `verified=False`; its note did
+  not survive into what was read. An inferred path was presented as confidently as a measured
+  one. Open question, deliberately unsolved: refuse to ship unverified rows, or put the
+  qualifier in the value rather than beside it.
 
-**Option B is closed.** Every §10.1 decision ratified, every `[Mahi-verify]` resolved, both
-post-merge steps executed:
+**Still open, unchanged:**
 
-- **§7 step 6b — done.** `workflow_dispatch` run `40100380617` succeeded, so the workflow runs end
-  to end. **#2.c and A.3 are CLOSED:** scheduled-run failure notifications go to whoever last
-  modified the cron syntax — `navyasree-anumula`, by `git blame` on the cron line — and Mahi
-  confirmed Actions email is enabled in Settings. **The cron has a consumer.** Two documented ways
-  the recipient moves: re-enabling a disabled scheduled workflow reassigns it to whoever re-enabled
-  it, and changing the default branch reassigns the actor.
-- **§7 step 6c — done.** `docs/architecture.html` republished to
-  <https://claude.ai/artifact/ThFxyUzfBKKBPinyQi4AyA> (version 3), now describing `0d30eda`. The
-  repo file is the source; edit it and republish, never the reverse.
-- **#7.d — done.** `main` carries no branch protection, so there is no required-check set to change.
-- **§7 step 7 — done.** All six merged branches deleted, local and remote, each tip verified an
-  ancestor of `origin/main` first. **`delete_branch_on_merge` is still `false`**, so that was six
-  manual deletions — and note the setting would only ever handle the *remote* half: the local branch
-  and the cached `origin/` ref always need `git fetch origin --prune` plus `git branch -d`.
-  `allow_update_branch` was turned on today, which is how #23 got its clean re-run.
-
-**New items this session, none folded into Option B:**
-
-- **The laptop is 36 commits / ~8 weeks behind** — running `sha-21829cc` (2026-08-30). No
-  `garmin_training`, none of the three dependency bumps, no credential-error fix, no serverInfo
-  build stamp. Upgrade is a deliberate re-pin, not automatic: `docker run` never re-pulls a moving
-  tag and the config pins a `sha-`. On that image `serve --http` would start `mcp` 2.1.1's
-  vulnerable streamable endpoint.
-- **`claude_desktop_config.json` does not exist** at `%APPDATA%\Claude\` on the laptop, yet
-  `garmin local dev` is connected. **This blocks the upgrade above** — the pin has to be edited
-  somewhere, and the README instructs editing a file the working install does not have. Find where
-  Claude Desktop stores it; that is a README/§7 defect either way.
-- **The cron's failure mode is silence.** Public-repo scheduled workflows auto-disable after 60 days
-  of repository inactivity with no documented notification. Needs a consumer that cannot be ignored
-  before the gate is trustworthy; not built here on purpose.
-- **Surface reduction is not a general shield.** `opentelemetry-api` CVE-2026-114603 is reachable
-  over stdio through JSON-RPC `_meta`, so removing `--http` did not close it. Worth remembering the
-  next time a transport removal is offered as mitigation.
-- **B.4's check is "read the page against the code", not "diff the two copies".** Running it for the
-  first time, the published page matched the repo file exactly — no divergence — yet the read still
-  caught a stale test count in the state strip that *both* copies carried. Comparing the copies
-  would have shown nothing, because they were equally wrong. Step 6c expected two edits; there were
-  five.
-
-**Still open from before, unchanged:** SCOPE **v1.6** owes §7 (Connectors-not-Developer, per-user
-Docker path), §7a (the bind-address correction for the *web UI*, knowingly stale for a second
-version — **and not, it turns out, affected by the `--http` removal; v1.0's A.1 was wrong**), and §9
-(location exposure via activity detail). §6's cache key is settled; the store is what moved, carrying
-the open question that a payload cache is health data at rest on the credential volume.
+- **The README tells Store-install users to edit a file they do not have.** Now a confirmed
+  defect, not a suspicion. Wants its own commit, and §7 of SCOPE owes the same correction.
+- **The cron's failure mode is silence.** Public-repo scheduled workflows auto-disable after
+  60 days of repository inactivity with no documented notification. Needs a consumer that
+  cannot be ignored before the gate is trustworthy.
+- **Surface reduction is not a general shield.** `opentelemetry-api` CVE-2026-114603 is
+  reachable over stdio through JSON-RPC `_meta`, so removing `--http` did not close it.
+- **B.4's check is "read the page against the code", not "diff the two copies."** The two
+  copies matched exactly and were equally wrong about a test count.
+- **SCOPE v1.6 owes** §7 (Connectors-not-Developer, per-user Docker path, and now the MSIX
+  path), §7a (the bind-address correction for the *web UI*, stale for a second version — and
+  not affected by the `--http` removal; v1.0's A.1 was wrong), and §9 (location exposure via
+  activity detail). §6's cache key is settled; the store is what moved, carrying the open
+  question that a payload cache is health data at rest on the credential volume.
 
 **Next, in order:**
 
-1. **`--explain max_metrics_range`, and the six new candidates** — `heart_rates`, `hydration`,
-   `body_battery_events`, `morning_readiness`, `heart_rate_zones`, `stats_and_body`, plus
-   `get_lactate_threshold`, activity detail and splits, and a read-only look at `get_workouts` /
-   `get_scheduled_workouts`. ~12 requests. Settles five unverified map rows and one unknown shape.
-   **A `login` should not be run casually** — both mobile login paths took a 429 on 2026-10-11 and a
-   fallback carried it, so the login path is IP-rate-limited. The data path was unaffected across
-   eleven requests.
-2. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
+1. **The write path, preview first** — structure validation, idempotency by name, both ids
+   returned, create-and-schedule as one action, and a `preview` that makes zero Garmin
+   requests. This is the second half of the daily loop (read what the body says, **write a
+   session to the watch**, check it got done) and the first thing in this repo that is not
+   read-only. v0 run workouts are time and distance with `NO_TARGET`: `TargetType` offers only
+   zone-based targets, `get_heart_rate_zones` has never been run, and absolute ranges via
+   `ExecutableStep`'s `extra="allow"` are unverified against Garmin's acceptance — so the one
+   supervised live cycle confirms our structure, not two unknowns at once.
+2. **`--explain hrv`, `max_metrics_range`, and the six candidates** — `heart_rates`,
+   `hydration`, `body_battery_events`, `morning_readiness`, `heart_rate_zones`,
+   `stats_and_body`, plus `get_lactate_threshold`, activity detail and splits, and a read-only
+   look at `get_workouts` / `get_scheduled_workouts`. `hrv` is new to this list and cheap: it
+   settles `hrv_status`'s path by reading `status` and `feedbackPhrase` side by side.
+   **A `login` should not be run casually** — both mobile login paths took a 429 on
+   2026-10-11 and a fallback carried it, so the login path is IP-rate-limited. The data path
+   was unaffected across eleven requests, and across six metrics again today.
+3. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
    `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
-   directions. An aborted run must report where it got to, never look like a clean run that found
-   less.
-3. **Give `capabilities.json` a consumer.** Still one producer, zero consumers. The missing piece is
-   filtering `garmin_training`'s group-derived enum by `tools.json`.
-4. **`garmin_health(metrics=[...], date)`** — the health half of the map, plus the two decoders
-   training did not need (descriptor-driven positional arrays; `resting_hr` matched on the nested
-   `calendarDate`). Never return raw series. Its arrival decides whether the payload store is worth
-   building.
-5. **The write path, preview first** — structure validation, idempotency by name, both ids returned,
-   create-and-schedule as one action, and a `preview` with zero Garmin requests.
+   directions. An aborted run must report where it got to, never look like a clean run that
+   found less.
+4. **Give `capabilities.json` a consumer.** Still one producer, zero consumers. The missing
+   piece is filtering the group-derived enums by `tools.json`.
 
 Laptop: tokens on the `garmin-tokens` volume, backed up at `C:\garmin-backup`. Two containers
 against one volume is the documented shape and the reason the budget is file-backed with a
-cross-process lock.
+cross-process lock. Quitting Desktop from the tray is the documented restart; `Stop-Process
+-Force` on the `Claude` process is the scripted equivalent and worked.
 
-**git/gh:** this repo's account is `navyasree-anumula`. The box's active `gh` account defaults to
-`mahidhark`, which 403s here and lacks the `workflow` scope; it also **reverted mid-session** today
-between two pushes, so put the switch and the push in one invocation.
+**git/gh:** this repo's account is `navyasree-anumula`. The box's active `gh` account defaults
+to `mahidhark`, which 403s here and lacks the `workflow` scope; it also **reverted
+mid-session** between two pushes on 24 October, so put the switch and the push in one
+invocation. `navyasree-anumula` also lacks `read:packages`, so registry tags are checked with
+an anonymous ghcr token against `/v2/.../manifests/<tag>` rather than via `gh api`.
