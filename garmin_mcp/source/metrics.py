@@ -233,15 +233,49 @@ METRICS: tuple[Metric, ...] = (
         source_method="get_hrv_data",
         path="hrvSummary.status",
         kind=KIND_PHRASE,
-        verified=False,
+        verified=True,
         note=(
-            "The container is recorded (5b) and so are both `status` and "
-            "`feedbackPhrase`; WHICH of the two is the human-readable verdict is "
-            "inferred, and one `--explain hrv` settles it. `accumulates` stays "
-            "false deliberately: HRV status needing roughly three weeks of wear "
-            "is domain knowledge flagged [Mahi-verify] in SCOPE 13, not a "
-            "measurement, and v1.4 requires a MEASURED accumulation requirement "
-            "before a row may earn `not_matured`."
+            # Kept although the row is verified: `note` is not surfaced on a
+            # verified reading, so this is a record for the next reader of the
+            # map rather than commentary on every answer.
+            "VERIFIED 2026-10-26 against the Garmin Connect app, which is what "
+            "settled it rather than any endpoint. 5b recorded that both `status` "
+            "and `feedbackPhrase` exist and could not say which holds the "
+            "human-readable verdict. This row read `status` and returned "
+            "'Unbalanced' for the night of 25-26 Oct; the app displayed the same "
+            "status for the same night, alongside the last-night and 7-day "
+            "averages this map also returns, both matching. `probe --explain` "
+            "could NOT have settled this -- it prints value types, never values "
+            "(`probe.py:343`), and the question was about a value. "
+            "`accumulates` stays false deliberately: HRV status needing roughly "
+            "three weeks of wear is domain knowledge flagged [Mahi-verify] in "
+            "SCOPE 13, not a measurement, and v1.4 requires a MEASURED "
+            "accumulation requirement before a row may earn `not_matured`."
+        ),
+    ),
+    Metric(
+        key="hrv_feedback",
+        group="health",
+        source_method="get_hrv_data",
+        path="hrvSummary.feedbackPhrase",
+        kind=KIND_PHRASE,
+        verified=True,
+        note=(
+            # Surfaced nowhere, because the row is verified. Kept for the next
+            # reader of the map, where the window distinction belongs.
+            "The payload's SECOND verdict, and it is not a restatement of "
+            "`hrv_status`. Added 2026-10-26 after the Garmin Connect app was "
+            "found to show both: `status` said Unbalanced for the night of "
+            "25-26 Oct while the app's feedback sentence said the night was "
+            "good. `status` classifies HRV against the personal baseline band "
+            "(90 ms against a band built around an 80 ms average is outside "
+            "it); this field appears to comment on the night itself. Returning "
+            "only one of them made the server answer half of Garmin's opinion "
+            "while looking complete. The value is Garmin's own token "
+            "(`HRV_BALANCED_7` shape, 5b), NOT the prose the app renders from "
+            "it -- that mapping is unmeasured and inventing it would be exactly "
+            "the guess this column exists to refuse. Costs no request: it rides "
+            "the payload `hrv_last_night` already fetches."
         ),
     ),
     # ---- get_sleep_data: 3584 populated fields, four of them wanted --------

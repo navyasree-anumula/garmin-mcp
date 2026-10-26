@@ -2049,8 +2049,63 @@ them.
 **`hrv_status` narrowed, not settled.** The row is `verified=False` because *which* of
 `status` and `feedbackPhrase` is the human-readable verdict was inferred. "Unbalanced" is
 consistent with `hrvSummary.status`'s enum and not with a feedback phrase, so the inference
-looks right — but one field seen through a summariser is not `--explain hrv`, and the row
-stays `verified=False` until both fields are read side by side.
+looks right — but one field seen through a summariser is not a measurement, and the row stays
+`verified=False`.
+
+**Corrected 2026-10-26, later the same day: `--explain hrv` cannot settle this.** This entry,
+the resume block and the map row all said it could. `--explain` prints key paths and value
+*types* only (`probe.py:343`), so it would report `status: str` and `feedbackPhrase: str` —
+exactly what 5b already recorded. The question is about values, and the diagnostic suppresses
+values deliberately, because a reading in a terminal's scrollback is health data (§8). The
+claim was asserted three times in one session and was never true; worse, it sat in
+`metrics.py`'s own note, which is the instruction the next session would have followed into a
+wasted live request. What settles it costs no request at all: compare the row's output against
+the status Garmin Connect displays for the same night.
+
+### `hrv_status` is verified, and the app answered a question nobody asked
+
+**Settled 2026-10-26, against the Garmin Connect app rather than against any endpoint.** The
+row reads `hrvSummary.status` and returned "Unbalanced" for the night of 25-26 Oct; the app
+displayed the same status for the same night, alongside the last-night (90 ms) and 7-day
+(80 ms) averages this map also returns, both matching. So `status` is the field carrying the
+verdict, the row is `verified=True`, and it is the **first of five guessed rows to be
+confirmed.** Four remain, and they are the "should I train hard today" rows:
+`training_status`, `load_balance`, `readiness`, `recovery_time`.
+
+Verifying it deleted the only test that guarded a behaviour shipped the day before — that an
+unverified row attaches its note to a *present* reading. The guard moved to
+`training_status` rather than being rewritten away, and it now asserts that the row it uses is
+still unverified, so the next person to verify that row is told to move the guard rather than
+delete it.
+
+**And then the app showed something this map does not return.** Asked whether a feedback
+sentence appeared next to the status, the answer was yes: Garmin was saying yesterday's HRV
+was **good**, while `status` said **Unbalanced**. Both are Garmin's own verdicts, in the same
+payload, pointing opposite ways.
+
+They are not contradictory once you see what each measures. `status` classifies where HRV sits
+against the personal baseline band — 90 ms is outside a band built around an 80 ms average, so
+Unbalanced. `feedbackPhrase` appears to comment on last night specifically, and last night was
+above the average, so good. **Two verdicts about different windows.**
+
+This map returns only one of them. On 2026-10-26 the conversation read "Unbalanced" and
+proposed an easy session, while Garmin's own app was saying last night looked good. That is not
+a wrong field path — `status` is right — it is **a half-read payload**, which is the more
+expensive kind of mistake because nothing about the answer looks incomplete. `feedbackPhrase`
+is recorded by 5b, sits in the payload `hrv_last_night` already fetches, and therefore costs no
+request.
+
+**The row was added the same day, once Mahi asked for it.** `hrv_feedback`,
+`hrvSummary.feedbackPhrase`, verified — the path was recorded by 5b and the app confirmed the
+field is surfaced. It returns **Garmin's token** (`HRV_BALANCED_7` shape), not the prose the app
+renders from it: that mapping has never been measured, and a hand-written code-to-sentence table
+would be exactly the invention the `verified` column exists to refuse.
+
+What changed beyond the row is the tool's own guidance, because a map row the agent does not know
+to ask for is a row that does not exist. `garmin_health`'s docstring and the `metrics` enum help
+now say the two are verdicts about different windows, that either alone is half the answer, and
+that all four HRV metrics still cost **one** request. `test_the_whole_health_group_is_four_requests`
+is the assertion that the second verdict was free: eleven metrics, still four endpoints.
 
 ### The provenance note did not reach the reader either
 
@@ -2204,22 +2259,36 @@ does not match what the suite reports, this block is older than the code and the
 **What exists, end to end:**
 
 - **Reads, reachable from Claude Desktop.** `garmin_auth_status`, `garmin_training` (5 metrics)
-  and `garmin_health` (9 rows: three HRV, four sleep, resting HR, two stress). The laptop runs
-  `sha-8154e24`; `garmin_health` has answered with real data.
-- **The write path's first half.** `garmin_workouts(action="preview")` composes a running
-  session and sends nothing — zero requests, nine refusal rules, 67 tests. Time and distance
-  with NO_TARGET only.
+  and `garmin_health` (9 rows: three HRV, four sleep, resting HR, two stress). `garmin_health`
+  has answered with real data.
+- **The write path's first half, live on the laptop.** `garmin_workouts(action="preview")`
+  composes a running session and sends nothing — zero requests, nine refusal rules, 67 tests.
+  Time and distance with NO_TARGET only. **The laptop runs `sha-1964dec`** (re-pinned
+  2026-10-26 ~21:10 local, digest `sha256:0014673e…`), and Desktop lists the tool, which is
+  itself the proof: `garmin_workouts` cannot exist on `sha-8154e24`.
+
+  The pull timed out on its first attempt — `net/http: timeout awaiting response headers` on
+  the manifest, after the tag had resolved to the right digest. **The digest gate did its job
+  and left the config untouched**, so the retry was free. The script now pulls *before* it
+  backs up, because the step most likely to fail should run before anything that leaves a
+  trace, and it retries four times.
 - **No workout has ever been written to Garmin by this project.** Nothing has reached the
   calendar, no `workoutId` has ever existed, and the account is untouched by anything but
   reads.
 
-**The laptop needs a re-pin before the preview is callable.** Merge → CI publishes
-`sha-<commit>` → re-pin the config at
+**Every new tool needs a re-pin before it is callable**, and the sequence is merge → CI
+publishes `sha-<commit>` → re-pin the config at
 `C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
-→ **restart Desktop** (the client caches the tool list at session start, so a re-pin alone is
-not enough). The script shape that worked: print the config, back it up to `C:\garmin-backup`,
-pull and assert the digest, replace the tag, assert the JSON still parses, stop Desktop, then
-verify with `docker ps`. Gate the edit behind the digest check, not after it.
+→ **restart Desktop.** The restart is not optional: the client caches the tool list at session
+start, so a re-pin alone gives you the new image still advertising the old tools — which looks
+exactly like a build that did not take.
+
+The script shape that works, in this order: **pull with retries and assert the digest first**,
+then print the config, back it up to `C:\garmin-backup`, replace the tag, assert the JSON still
+parses, stop Desktop, verify with `docker ps`. The digest gate goes before the edit, and the
+pull goes before the backup — a step that fails on a flaky network should leave no trace, and
+the 2026-10-26 run left a backup file for a run that changed nothing. Verify with a tool that
+cannot exist on the old image, never with `server_version`.
 
 **Two verification mechanisms are known not to reach the reader:**
 
@@ -2227,10 +2296,15 @@ verify with `docker ps`. Gate the edit behind the digest check, not after it.
   dropped it, so `docker ps` answered "which build?" instead. **Prefer a capability probe** —
   call a tool that cannot exist on the old image. `garmin_workouts` is now that probe for
   anything built after `8154e24`.
-- **The provenance note on unverified rows.** `hrv_status` is `verified=False` and its note did
-  not survive into what was read, so an inferred field path was presented as confidently as a
-  measured one. Open question, agreed to be settled *after* the write path: refuse unverified
-  rows, or put the qualifier inside the value.
+- **The provenance note on unverified rows.** A row with an inferred field path attaches its
+  note to a *present* reading, and the client summarised that note away — so an inferred path
+  was presented as confidently as a measured one. `hrv_status` was the example and is now
+  **verified**, which leaves **four**: `training_status`, `load_balance`, `readiness` and
+  `recovery_time`. They are the rows that answer "should I train hard today", which is the
+  worst possible set to be guessing at. Open question, agreed to be settled *after* the write
+  path: refuse unverified rows, or move the qualifier out of `note` and into `verdict` (a fifth
+  value, `present_unconfirmed`), where the agent already looks and a summariser cannot drop it
+  without changing the answer.
 
 **Still open, unchanged:**
 
@@ -2257,9 +2331,11 @@ verify with `docker ps`. Gate the edit behind the digest check, not after it.
    fails after the first succeeded. Then **one supervised live create → verify → delete cycle**
    on a throwaway workout, by hand, documented. Cassettes arrive with it (§8's scrubbing
    requirements are requirements on that work).
-2. **`--explain hrv`** — one request, settles whether `status` or `feedbackPhrase` is the
-   human-readable verdict. Today's live `garmin_health` returned "Unbalanced", which fits
-   `status`'s enum and not a feedback phrase, so this is confirmation rather than discovery.
+2. **Settle the four remaining unverified rows** — `training_status`, `load_balance`,
+   `readiness`, `recovery_time`. The `hrv_status` settlement shows the cheap method: compare
+   the row's output against what the Garmin Connect app displays for the same day. **Do not
+   reach for `probe --explain`** for any of them — it prints value types, never values, so it
+   cannot answer a question about which field holds a value.
 3. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
    `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
    directions. An aborted run must report where it got to, never look like a clean run that

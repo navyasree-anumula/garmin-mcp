@@ -15,6 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from garmin_mcp.server import garmin_training
 from garmin_mcp.source import client as source
+from garmin_mcp.source import metrics as metric_map
 from garmin_mcp.source import verdicts
 from garmin_mcp.source.errors import AuthExpired, RateLimited
 
@@ -151,6 +152,31 @@ def test_race_predictions_are_four_metrics_from_one_request(api):
     assert readings["race_marathon"].value == 13000
     assert all(r.unit == "s (inferred)" for r in result.readings)
     assert api.calls == [("get_race_predictions", ())]
+
+
+def test_an_unverified_row_carries_its_note_on_a_present_reading(api):
+    """The guard on the 2026-10-26 change, moved here when `hrv_status` was
+    verified and stopped being an example of one.
+
+    Before that change `readings.read` attached a row's note only where there
+    was NO reading, so four rows with inferred field paths returned confident
+    values in silence -- while `MetricReading.note`'s own schema promised "what
+    is unconfirmed". `training_status` is now the standing example: its path
+    `trainingStatusFeedbackPhrase` is inferred, so a present value has to say
+    so. If this test ever has no unverified row left to use, that is good news
+    and it should be deleted rather than weakened.
+    """
+    reading = _by_metric(garmin_training(["training_status"], "2026-10-15"))[
+        "training_status"
+    ]
+
+    assert reading.verdict == verdicts.PRESENT
+    assert reading.value == "PRODUCTIVE_1"
+    assert reading.note, "an inferred path must say so even when it answers"
+    assert not metric_map.BY_KEY["training_status"].verified, (
+        "this test is about an unverified row; if the row was verified, move "
+        "the guard to another one rather than deleting it"
+    )
 
 
 def test_a_missing_path_is_no_data_and_says_why(api):
