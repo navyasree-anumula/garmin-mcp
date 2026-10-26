@@ -2075,14 +2075,18 @@ it. No code changed in this session; tests stay at 352 passed, 2 skipped.
 
 ## RESUME HERE
 
-**Written with this entry's own PR open, which is the one thing the last three blocks got
-wrong.** The 19 October block described merges that happened after it was written; the first
-draft of the 24 October block said four branches were pending within an hour of them being
-merged. So: `main` = **`8154e24`** (#28, `garmin_health`). **352 passed, 2 skipped.** The only
-pending items are the branch carrying *this* entry — `docs/journal-2026-10-26-step-0b`,
-PR #29 — and `docs/client-wiring-msix-and-stamp`, the README/SCOPE §7 corrections this entry
-describes. Both are open as this is written, both are docs-only, and they touch disjoint
-files. When they merge, `main` moves and nothing else here changes.
+**Rewritten a third time, because the second draft went stale the way the first two did.**
+The 19 October block described merges that happened after it was written; the first draft of
+the 24 October block said four branches were pending within an hour of them being merged; the
+first draft of *this* block named its own PR #29 as pending, and #29 merged while the next
+commit was being written. The lesson is narrower than "write it after the last merge" — it is
+that **a resume block must not name a pending item it is itself inside of.** Pending items
+belong in the PR, which closes on its own; the block states only what has landed.
+
+**Landed:** `main` = **`75f05b4`** (the #29 merge, carrying this entry). **352 passed, 2
+skipped.** Two docs-only corrections are in review and neither changes anything described
+above: the withdrawal below, and `docs/client-wiring-msix-and-stamp` (the README's Store path
+and `:latest` example, §7's "always identifiable" claim).
 
 **Step 0 is closed, both halves.** The laptop runs `sha-8154e24`, re-pinned 2026-10-26 20:14
 local from `sha-21829cc`. Config lives at
