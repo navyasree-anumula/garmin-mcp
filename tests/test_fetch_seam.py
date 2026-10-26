@@ -129,7 +129,7 @@ def test_an_unknown_call_shape_raises_because_it_is_our_bug(api, tokens):
 
 PACKAGE = Path(__file__).resolve().parent.parent / "garmin_mcp"
 
-#: Four files may name the doorway, each for a stated reason:
+#: Five files may name the doorway, each for a stated reason:
 #:
 #: - `source/client.py` defines it.
 #: - `source/fetch.py` is the seam -- the only data-path caller.
@@ -140,10 +140,22 @@ PACKAGE = Path(__file__).resolve().parent.parent / "garmin_mcp"
 #:   the budget on a real filesystem. It makes **no Garmin request at all**
 #:   (`test_selftest_makes_no_garmin_calls`), so the rule it must not break --
 #:   data reads coalesce -- does not apply to it.
+#: - `source/write.py` is the write path, added 2026-10-27. The seam's job is to
+#:   **coalesce** reads: two metrics sharing a payload cost one request. Applying
+#:   that to a write would mean silently dropping one, which has no upside -- and
+#:   a write sequence is ordered (resolve, then write, then schedule), which is
+#:   the opposite of a set of interchangeable fetches. Its own reads page
+#:   `get_workouts` and read one calendar month, neither of which any other
+#:   caller duplicates.
+#:
+#: This list is the point of the test. Adding a line to it is a deliberate,
+#: reviewable act with a reason attached; reaching past the seam without one is
+#: what fails.
 ALLOWED = {
     "source/client.py",
     "source/fetch.py",
     "source/probe.py",
+    "source/write.py",
     "cli.py",
 }
 

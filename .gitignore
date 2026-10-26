@@ -15,6 +15,13 @@ venv/
 dist/
 build/
 
+# Runtime state — the cross-process lock and the request budget live next to
+# the token file (lock.py, ratelimit.py). A test that passes a bare relative
+# token path lands them here instead, which is how they first got committed.
+.garmin.lock
+.garmin.ratelimit.json
+.garmin.ratelimit.lock
+
 # Test recordings — cassettes are scrubbed, but never commit an unreviewed one.
 tests/cassettes/*.unscrubbed.yaml
 

@@ -26,6 +26,8 @@ the conversation (§1).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -230,6 +232,29 @@ def compose(
     structure = workout.to_dict()
     validate_structure(structure)
     return structure
+
+
+def approval_for(structure: dict[str, Any]) -> str:
+    """A fingerprint of the structure a human was shown.
+
+    §5: the create action takes the exact structure the preview returned, never
+    a re-composition from the same arguments -- otherwise the human approves one
+    thing and a second composition is what lands, which is the right value
+    recorded against the wrong event.
+
+    Canonical JSON, so the marker depends on the content and not on key order or
+    whitespace: a client that round-trips the structure through its own JSON
+    serialiser must not invalidate an approval by reordering keys it never
+    looked at.
+
+    It is **not** a security boundary. It cannot be, since whoever can call
+    `create` can also call `preview` and get a fresh marker. What it stops is
+    the accident: an edited structure, a stale structure from an earlier turn,
+    or a re-composition that drifted. That is the failure §5 names, and it is the
+    one that actually happens.
+    """
+    canonical = json.dumps(structure, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
