@@ -234,6 +234,37 @@ def compose(
     return structure
 
 
+def _numeric_canonical(value: Any) -> Any:
+    """Whole-valued floats become ints, everywhere, at any depth.
+
+    **This is what makes the marker survive a client.** JavaScript has a single
+    number type, so `JSON.stringify(600.0)` emits `600`. Our steps carry
+    `endConditionValue` as a float, because that is the library model's type --
+    so a preview emits `600.0`, the client parses and re-serialises it as `600`,
+    and the structure that comes back to `create` is numerically identical and
+    textually different.
+
+    Found on 2026-10-27 by the first real round trip through Claude Desktop,
+    which refused its own preview. **No test could have caught it**: Python's
+    own `json` round trip preserves `600.0`, and every test passed the structure
+    in-process as an object. The marker's whole job is to survive a transport
+    and nothing exercised one.
+
+    Normalising for the *hash* only. The structure sent to Garmin is the one the
+    client handed us, not this view of it -- rewriting a payload on its way out
+    would be a second composition, which is the thing §5 forbids.
+    """
+    if isinstance(value, bool):
+        return value  # bool is an int subclass; leave it alone
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _numeric_canonical(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_numeric_canonical(item) for item in value]
+    return value
+
+
 def approval_for(structure: dict[str, Any]) -> str:
     """A fingerprint of the structure a human was shown.
 
@@ -242,18 +273,25 @@ def approval_for(structure: dict[str, Any]) -> str:
     thing and a second composition is what lands, which is the right value
     recorded against the wrong event.
 
-    Canonical JSON, so the marker depends on the content and not on key order or
-    whitespace: a client that round-trips the structure through its own JSON
-    serialiser must not invalidate an approval by reordering keys it never
-    looked at.
+    Canonical JSON over a numerically normalised view, so the marker depends on
+    the content and not on how a client happens to render it. Key order and
+    whitespace were the obvious hazards; `600.0` against `600` was the one that
+    actually bit, and `_numeric_canonical` explains it.
 
     It is **not** a security boundary. It cannot be, since whoever can call
     `create` can also call `preview` and get a fresh marker. What it stops is
     the accident: an edited structure, a stale structure from an earlier turn,
     or a re-composition that drifted. That is the failure §5 names, and it is the
     one that actually happens.
+
+    The failure direction is deliberate. A marker that is too strict refuses a
+    write; one that is too loose lets an edited session through. The first costs
+    a round trip, the second costs a wrong workout on a watch -- so where a
+    transformation cannot be proven harmless, it stays a mismatch.
     """
-    canonical = json.dumps(structure, sort_keys=True, separators=(",", ":"))
+    canonical = json.dumps(
+        _numeric_canonical(structure), sort_keys=True, separators=(",", ":")
+    )
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 

@@ -2441,13 +2441,66 @@ the live exchange, which is the only thing one can be recorded from.
 **The next session is the first that can change the account**, and it needs both a re-pin and a
 config edit before it can start. That is the gate doing its job: it cannot begin by accident.
 
+## 2026-10-27 (later) — the approval marker refused its own preview
+
+Writes were enabled on the laptop and the first create attempt failed. Not on Garmin's side:
+**the server refused its own preview's structure.** Nothing was sent.
+
+Claude Desktop diagnosed it correctly and unprompted, which is worth recording because it
+diagnosed it from behaviour rather than from the code. It re-previewed, got a byte-identical
+structure and the same marker (`04af53…`), ruled out its own first guess that the marker was
+tied to a server session, and landed on the real mechanism: the step lengths come out as `600.0`
+and `300.0`, and something between the two calls was dropping the `.0`.
+
+That is exactly it. **JavaScript has one number type**, so `JSON.stringify(600.0)` emits `600`.
+Our steps carry `endConditionValue` as a float because that is the library model's type, so the
+preview emits `600.0`, the client re-serialises it as `600`, and what comes back to `create` is
+numerically identical and textually different. The hash is over text. Every workout with a
+whole-number duration — which is nearly all of them — was unwritable.
+
+### Why no test caught it, which is the part worth keeping
+
+**Python's own `json` round trip preserves `600.0`.** So a `json.dumps`/`loads` pair in a test
+reproduces nothing, and every test in this repo passed the structure in-process as a Python
+object. The marker's entire purpose is to survive a transport, and not one test exercised a
+transport.
+
+The new test does not use `json` at all. It uses a deliberate `through_a_javascript_client`
+helper that collapses whole floats to ints, written as a helper precisely because the obvious
+Python idiom does not reproduce the bug. A guard whose honest form is "simulate the other
+runtime" should say so in its name.
+
+### The fix, and what it deliberately does not do
+
+`_numeric_canonical` collapses whole-valued floats to ints at any depth before hashing — and
+**for the hash only.** The structure sent to Garmin is still the one the client handed us.
+Rewriting a payload on its way out would be a second composition, which is the thing §5 forbids
+in the first place.
+
+Booleans are skipped explicitly, because `True` is an `int` subclass and a careless normaliser
+turns it into `1` — after which `{"displayable": true}` and `{"displayable": 1}` would hash alike
+while meaning different things to whoever reads the payload. That is the second time this week
+`bool` being an `int` has had to be handled on purpose; the first was `_first_id`.
+
+Asserted in both directions: a 600.5 and a 600 must NOT collide, or a half-minute edit would
+pass as approved.
+
+### The failure direction was right, and that is why this cost nothing
+
+A marker that is too strict refuses a write; one that is too loose lets an edited session
+through. The first costs a round trip, the second costs a wrong workout on a watch. This bug was
+the strict kind, so the worst it did was block a throwaway test — and **nothing reached the
+account**, which is also what the gate and the supervised cycle were for.
+
+Tests: 527 -> 537, 2 skipped.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **527 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **537 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 **What exists:**
@@ -2456,16 +2509,23 @@ than the code and the suite wins.
   `garmin_health` (11 rows, four of them HRV including the second verdict `hrv_feedback`).
 - **Preview, live on the laptop.** `garmin_workouts(action="preview")` composes a running session
   and sends nothing — zero requests, nine refusal rules. Time and distance with NO_TARGET only.
-- **The write, built and not yet reachable.** `garmin_workout_create` takes a previewed structure,
+- **The write, reachable and never yet used.** `garmin_workout_create` takes a previewed structure,
   its approval marker and a date; resolves the name (match ⇒ update in place keeping the id, no
   match ⇒ upload, two matches ⇒ refuse); reads the target month on the update path only; writes;
   schedules. **Gated by `GARMIN_MCP_ENABLE_WRITES`, default off.**
 - **No workout has ever been written to Garmin by this project.** Nothing has reached the
   calendar, no `workoutId` has ever existed, and the account is untouched by anything but reads.
 
-**The laptop runs `sha-71d0541`.** One build behind by choice — `sha-5d9993b` changed nothing
-user-facing, so it was skipped deliberately. **A chosen drift and an unnoticed one look identical
-from `docker ps`**, which is why the choice is written here.
+**The laptop runs `sha-7a5b852` with writes ENABLED** (`-e GARMIN_MCP_ENABLE_WRITES=1` in the
+Desktop config's `args`, before the image name — **not** an `env` block: `docker run` does not
+forward the parent process's environment into the container, so an `env` block looks configured
+and leaves writes off). `sha-5d9993b` was skipped deliberately on the way, because nothing
+user-facing changed in it — **a chosen drift and an unnoticed one look identical from
+`docker ps`**, which is why the choice is written here.
+
+**The laptop is one build behind again**: the approval-marker fix is not on it, so a create from
+Desktop still refuses any whole-number duration. That re-pin is the first thing the next session
+needs.
 
 **The next session is the first that can change the account.** It needs, in order: merge → CI
 publishes → re-pin → **add `GARMIN_MCP_ENABLE_WRITES=1` to the Desktop config's `env` block** →
