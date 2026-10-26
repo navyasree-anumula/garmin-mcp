@@ -27,12 +27,17 @@ from garmin_mcp.source.write import WriteRefused
 
 DAY = "2026-11-05"
 
-# invented: upload_workout has never been called; this is the shape its docstring
-# implies (the created workout, echoed back). Replace after the live cycle.
+# recorded in part: 2026-10-27, the first real write. The live call returned a
+# readable `workout_id` (1742892340), so SOME key in WORKOUT_ID_KEYS is right and
+# the value is a plain int. WHICH key is still unknown -- the raw response is
+# attached only on a miss, so a success taught nothing. `_first_id_with_key` now
+# records it, and the next create settles this line.
 UPLOAD_OK = {"workoutId": 12345, "workoutName": "Thu threshold"}
 
-# invented: schedule_workout has never been called. SCOPE §5 says undo needs the
-# scheduled id and not the workout id, so the key matters more than most.
+# recorded in part: same call, `scheduled_workout_id` 1821895273 -- so a key in
+# SCHEDULE_ID_KEYS is right and undo is reachable in principle. Which of the
+# three carried it is unknown for the same reason. This is the line that matters
+# most: `unschedule_workout` takes this id and nothing else.
 SCHEDULE_OK = {"workoutScheduleId": 98765, "date": DAY}
 
 # invented: the calendar month. The container key is the part that decides
@@ -470,6 +475,57 @@ def test_an_unreadable_schedule_id_still_reports_success_and_the_gap(api):
     assert outcome.scheduled_workout_id is None
     assert outcome.raw == {"schedule_response": {"ok": True}}
     assert "Undo needs that id" in outcome.warnings[0]
+
+
+def test_a_successful_write_records_which_key_carried_each_id(api):
+    """The gap the first real write exposed.
+
+    That call returned both ids and taught us nothing about Garmin's response
+    shape, because `raw` is attached only on a miss. A response that explains
+    itself only on failure cannot teach you anything when it works -- so the key
+    name travels on every call now. Key names are schema, not health data, which
+    is the same argument `probe --explain` makes for printing paths and never
+    values.
+    """
+    outcome = run(api)
+
+    assert outcome.id_keys == {
+        "workout_id": "workoutId",
+        "scheduled_workout_id": "workoutScheduleId",
+    }
+
+
+def test_a_later_candidate_is_recorded_as_itself(api):
+    """If Garmin uses the second or third candidate, the point is to find out --
+    not to silently succeed and leave the guess unexamined for another month."""
+    api.upload_response = {"id": 4242}
+    api.schedule_response = {"scheduledWorkoutId": 777}
+
+    outcome = run(api)
+
+    assert outcome.id_keys["workout_id"] == "id"
+    assert outcome.id_keys["scheduled_workout_id"] == "scheduledWorkoutId"
+
+
+def test_a_nested_key_is_recorded_with_its_envelope(api):
+    """`workout.workoutId` rather than `workoutId`, so the recorded shape is
+    specific enough to narrow the candidate list afterwards."""
+    api.upload_response = {"workout": {"workoutId": 4242}}
+
+    assert run(api).id_keys["workout_id"] == "workout.workoutId"
+
+
+def test_an_id_that_came_from_the_name_match_says_so(api):
+    """On the update path a silent response falls back to the matched id. That
+    is not evidence about Garmin's response shape and must not be recorded as
+    though it were."""
+    api.workouts = [{"workoutName": "Thu threshold", "workoutId": 12345}]
+    api.upload_response = {"ok": True}
+
+    outcome = run(api)
+
+    assert outcome.workout_id == 12345
+    assert "not the response" in outcome.id_keys["workout_id"]
 
 
 def test_an_id_in_a_nested_envelope_is_found(api):

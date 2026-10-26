@@ -607,6 +607,13 @@ class WriteResult(BaseModel):
     raw: dict = Field(
         description="Garmin's unparsed response, included only when an id could not be read."
     )
+    id_keys: dict = Field(
+        description=(
+            "Which response key each id was read from. Recorded so a SUCCESSFUL "
+            "write documents Garmin's response shape -- the raw response is "
+            "attached only on a miss, so a success used to teach nothing."
+        )
+    )
 
 
 @mcp.tool(
@@ -692,4 +699,5 @@ def garmin_workout_create(
         requests_made=outcome.requests_made,
         warnings=outcome.warnings,
         raw=outcome.raw,
+        id_keys=outcome.id_keys,
     )

@@ -50,7 +50,14 @@ PAYLOAD_FILES = (
 #:
 #: An `invented:` marker is therefore a standing invitation: the first live call
 #: that sees the real shape should replace it with a `recorded:` one.
-MARKERS = ("# recorded:", "# invented:")
+#:
+#: `# recorded in part:` is the third state, added 2026-10-27 when the first real
+#: write produced exactly it. The call returned both ids, so their value shapes
+#: are known -- but the server attaches the raw response only on a miss, so WHICH
+#: response key carried each id stayed unknown. "Partly recorded" was the honest
+#: label and neither of the other two fit: `recorded:` would overclaim and
+#: `invented:` would throw away what the live call did settle.
+MARKERS = ("# recorded:", "# recorded in part:", "# invented:")
 
 #: How far above an assignment the marker may sit. Enough for a comment block
 #: that explains the shape, tight enough that it belongs to this fixture and not
