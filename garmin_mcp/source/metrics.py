@@ -233,17 +233,20 @@ METRICS: tuple[Metric, ...] = (
         source_method="get_hrv_data",
         path="hrvSummary.status",
         kind=KIND_PHRASE,
-        verified=False,
+        verified=True,
         note=(
-            "The container is recorded (5b) and so are both `status` and "
-            "`feedbackPhrase`; WHICH of the two is the human-readable verdict is "
-            "inferred. **`probe --explain hrv` cannot settle it** -- it prints "
-            "key paths and value TYPES only (`probe.py:343`), so it would report "
-            "`status: str` and `feedbackPhrase: str`, which is what 5b already "
-            "recorded. The question is about values and the diagnostic suppresses "
-            "values by design (SCOPE 8: a reading in terminal scrollback is health "
-            "data). What settles it costs no request: compare this row's output "
-            "against the status Garmin Connect displays for the same night. "
+            # Kept although the row is verified: `note` is not surfaced on a
+            # verified reading, so this is a record for the next reader of the
+            # map rather than commentary on every answer.
+            "VERIFIED 2026-10-26 against the Garmin Connect app, which is what "
+            "settled it rather than any endpoint. 5b recorded that both `status` "
+            "and `feedbackPhrase` exist and could not say which holds the "
+            "human-readable verdict. This row read `status` and returned "
+            "'Unbalanced' for the night of 25-26 Oct; the app displayed the same "
+            "status for the same night, alongside the last-night and 7-day "
+            "averages this map also returns, both matching. `probe --explain` "
+            "could NOT have settled this -- it prints value types, never values "
+            "(`probe.py:343`), and the question was about a value. "
             "`accumulates` stays false deliberately: HRV status needing roughly "
             "three weeks of wear is domain knowledge flagged [Mahi-verify] in "
             "SCOPE 13, not a measurement, and v1.4 requires a MEASURED "

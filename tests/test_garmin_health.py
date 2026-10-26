@@ -200,14 +200,27 @@ def test_hrv_status_is_a_phrase_with_no_unit(api):
     assert reading.unit == ""
 
 
-def test_hrv_status_says_that_its_field_is_unconfirmed(api):
-    """`status` and `feedbackPhrase` both exist in the payload and the map picks
-    one by inference. A row that guessed quietly would be the failure §5's
-    epistemics exist to prevent."""
+def test_hrv_status_reads_status_and_not_the_other_candidate(api):
+    """`status` and `feedbackPhrase` both exist in the payload, and until
+    2026-10-26 which one held the verdict was inferred. It was settled against
+    the Garmin Connect app: the app showed the same status this row returns for
+    the same night. The assertion that matters is that the OTHER field is not
+    what comes back -- both are strings, so a wrong pick would have looked
+    entirely plausible."""
     reading = _by_metric(garmin_health(["hrv_status"], DATE))["hrv_status"]
 
-    assert "inferred" in reading.note
+    assert reading.value == "BALANCED"
     assert reading.value != "HRV_BALANCED_7", "the other candidate field"
+
+
+def test_a_verified_row_carries_no_provenance_note(api):
+    """The mirror of the training-group test below it. A verified row says
+    nothing about provenance on a present reading, because a note on every
+    answer is how a field stops being read -- which is the reason the note is
+    attached conditionally rather than always."""
+    reading = _by_metric(garmin_health(["hrv_status"], DATE))["hrv_status"]
+
+    assert reading.note == ""
 
 
 def test_resting_hr_is_matched_on_its_own_date_not_by_position(api):

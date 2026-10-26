@@ -2062,6 +2062,39 @@ claim was asserted three times in one session and was never true; worse, it sat 
 wasted live request. What settles it costs no request at all: compare the row's output against
 the status Garmin Connect displays for the same night.
 
+### `hrv_status` is verified, and the app answered a question nobody asked
+
+**Settled 2026-10-26, against the Garmin Connect app rather than against any endpoint.** The
+row reads `hrvSummary.status` and returned "Unbalanced" for the night of 25-26 Oct; the app
+displayed the same status for the same night, alongside the last-night (90 ms) and 7-day
+(80 ms) averages this map also returns, both matching. So `status` is the field carrying the
+verdict, the row is `verified=True`, and it is the **first of five guessed rows to be
+confirmed.** Four remain, and they are the "should I train hard today" rows:
+`training_status`, `load_balance`, `readiness`, `recovery_time`.
+
+Verifying it deleted the only test that guarded a behaviour shipped the day before — that an
+unverified row attaches its note to a *present* reading. The guard moved to
+`training_status` rather than being rewritten away, and it now asserts that the row it uses is
+still unverified, so the next person to verify that row is told to move the guard rather than
+delete it.
+
+**And then the app showed something this map does not return.** Asked whether a feedback
+sentence appeared next to the status, the answer was yes: Garmin was saying yesterday's HRV
+was **good**, while `status` said **Unbalanced**. Both are Garmin's own verdicts, in the same
+payload, pointing opposite ways.
+
+They are not contradictory once you see what each measures. `status` classifies where HRV sits
+against the personal baseline band — 90 ms is outside a band built around an 80 ms average, so
+Unbalanced. `feedbackPhrase` appears to comment on last night specifically, and last night was
+above the average, so good. **Two verdicts about different windows.**
+
+This map returns only one of them. On 2026-10-26 the conversation read "Unbalanced" and
+proposed an easy session, while Garmin's own app was saying last night looked good. That is not
+a wrong field path — `status` is right — it is **a half-read payload**, which is the more
+expensive kind of mistake because nothing about the answer looks incomplete. `feedbackPhrase`
+is recorded by 5b, sits in the payload `hrv_last_night` already fetches, and therefore costs no
+request. It wants a row; that is next, and it is deliberately not bundled into this correction.
+
 ### The provenance note did not reach the reader either
 
 `hrv_status` is an unverified row, and yesterday's change was precisely that unverified rows
@@ -2251,10 +2284,15 @@ cannot exist on the old image, never with `server_version`.
   dropped it, so `docker ps` answered "which build?" instead. **Prefer a capability probe** —
   call a tool that cannot exist on the old image. `garmin_workouts` is now that probe for
   anything built after `8154e24`.
-- **The provenance note on unverified rows.** `hrv_status` is `verified=False` and its note did
-  not survive into what was read, so an inferred field path was presented as confidently as a
-  measured one. Open question, agreed to be settled *after* the write path: refuse unverified
-  rows, or put the qualifier inside the value.
+- **The provenance note on unverified rows.** A row with an inferred field path attaches its
+  note to a *present* reading, and the client summarised that note away — so an inferred path
+  was presented as confidently as a measured one. `hrv_status` was the example and is now
+  **verified**, which leaves **four**: `training_status`, `load_balance`, `readiness` and
+  `recovery_time`. They are the rows that answer "should I train hard today", which is the
+  worst possible set to be guessing at. Open question, agreed to be settled *after* the write
+  path: refuse unverified rows, or move the qualifier out of `note` and into `verdict` (a fifth
+  value, `present_unconfirmed`), where the agent already looks and a summariser cannot drop it
+  without changing the answer.
 
 **Still open, unchanged:**
 
@@ -2281,17 +2319,20 @@ cannot exist on the old image, never with `server_version`.
    fails after the first succeeded. Then **one supervised live create → verify → delete cycle**
    on a throwaway workout, by hand, documented. Cassettes arrive with it (§8's scrubbing
    requirements are requirements on that work).
-2. **Settle `hrv_status` against the Garmin Connect app** — zero requests, zero code. The row
-   reads `hrvSummary.status` and returned "Unbalanced" for the night of 25–26 Oct; if the app
-   shows that same status for that night, `status` is the field the app surfaces and the row
-   becomes `verified=True`. **Do not reach for `probe --explain hrv`** — it prints value types,
-   never values, so it cannot answer a question about which field holds a value. Seeing what
-   `feedbackPhrase` contains is a second map row, not a diagnostic.
-3. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
+2. **A map row for `hrvSummary.feedbackPhrase`** — see the 2026-10-26 finding below. Garmin's
+   app shows a *second* HRV verdict that this map does not return, and on the day it was
+   checked the two pointed opposite ways. One row, no new request: it rides the payload
+   `hrv_last_night` already fetches.
+3. **Settle the four remaining unverified rows** — `training_status`, `load_balance`,
+   `readiness`, `recovery_time`. The `hrv_status` settlement shows the cheap method: compare
+   the row's output against what the Garmin Connect app displays for the same day. **Do not
+   reach for `probe --explain`** for any of them — it prints value types, never values, so it
+   cannot answer a question about which field holds a value.
+4. **Re-probe the whole account with the fixed counter**, writing the v1.4 vocabulary and a
    `schema_version`. `capabilities.json` still holds August verdicts, two wrong in opposite
    directions. An aborted run must report where it got to, never look like a clean run that
    found less.
-4. **Give `capabilities.json` a consumer** — filtering the group-derived enums by `tools.json`.
+5. **Give `capabilities.json` a consumer** — filtering the group-derived enums by `tools.json`.
 
 **A `login` should not be run casually.** Both mobile login paths took a 429 on 2026-10-11 and
 a fallback carried it, so the login path is IP-rate-limited. The data path has been unaffected
