@@ -217,19 +217,19 @@ def test_hrv_status_reads_status_and_not_the_other_candidate(api):
     assert reading.value != "HRV_BALANCED_7", "the other candidate field"
 
 
-def test_the_payload_carries_two_verdicts_and_they_are_different_fields(api):
-    """Added 2026-10-26 after the Garmin Connect app was found to show both.
+def test_the_two_hrv_text_fields_are_read_from_different_paths(api):
+    """`status` is a verdict, `feedbackPhrase` is a message key.
 
-    `status` classifies HRV against the personal baseline band; `feedbackPhrase`
-    comments on the night itself. On the day this was checked the first said
-    unbalanced and the second said the night was good -- both correct, about
-    different windows. Returning only one made the server answer half of
-    Garmin's opinion while looking complete, which is worse than a wrong value
-    because nothing about the answer looks incomplete.
+    This test used to carry a claim that the two were verdicts about different
+    windows which could point opposite ways. That was inferred from one
+    paraphrase of what the Connect app displayed and never measured; the first
+    live read (2026-10-26) had both saying unbalanced, so the claim is
+    withdrawn. Whether they can disagree is unknown.
 
-    The assertion is that they are distinct fields, because the failure this
-    guards is a future edit pointing both rows at the same path and nobody
-    noticing that one of them stopped saying anything new.
+    What the test is actually for survives the withdrawal: the two rows must
+    read from different paths. The failure it guards is a future edit pointing
+    both at the same field, after which one row would silently stop saying
+    anything new.
     """
     readings = _by_metric(
         garmin_health(["hrv_status", "hrv_feedback"], DATE)
@@ -241,11 +241,13 @@ def test_the_payload_carries_two_verdicts_and_they_are_different_fields(api):
     assert len(api.calls) == 1, "the second verdict rides the first one's payload"
 
 
-def test_hrv_feedback_is_a_token_not_the_prose_the_app_renders(api):
-    """What comes back is Garmin's own code. The app renders a sentence from it
-    and that mapping has never been measured, so the row returns the token and
-    lets the conversation read it. A hand-written code-to-sentence table would
-    be the invention §5's epistemics exist to refuse."""
+def test_hrv_feedback_is_a_key_not_the_prose_the_app_renders(api):
+    """What comes back is Garmin's own message key -- confirmed live on
+    2026-10-26 as `HRV_UNBALANCED_11`, a identifier with a variant number. The
+    app renders a sentence from it; that mapping has never been measured, so the
+    row returns the key and lets the conversation say it does not know what
+    message 11 reads. A hand-written key-to-sentence table would be the
+    invention §5's epistemics exist to refuse."""
     reading = _by_metric(garmin_health(["hrv_feedback"], DATE))["hrv_feedback"]
 
     assert reading.value == "HRV_BALANCED_7"

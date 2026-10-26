@@ -2078,28 +2078,52 @@ unverified row attaches its note to a *present* reading. The guard moved to
 still unverified, so the next person to verify that row is told to move the guard rather than
 delete it.
 
-**And then the app showed something this map does not return.** Asked whether a feedback
-sentence appeared next to the status, the answer was yes: Garmin was saying yesterday's HRV
-was **good**, while `status` said **Unbalanced**. Both are Garmin's own verdicts, in the same
-payload, pointing opposite ways.
+**And then the app appeared to show something this map does not return.** Asked whether a
+feedback sentence sat next to the status, the answer was yes: Garmin was saying yesterday's HRV
+was **good**, while `status` said **Unbalanced**.
 
-They are not contradictory once you see what each measures. `status` classifies where HRV sits
-against the personal baseline band — 90 ms is outside a band built around an 80 ms average, so
-Unbalanced. `feedbackPhrase` appears to comment on last night specifically, and last night was
-above the average, so good. **Two verdicts about different windows.**
-
-This map returns only one of them. On 2026-10-26 the conversation read "Unbalanced" and
-proposed an easy session, while Garmin's own app was saying last night looked good. That is not
-a wrong field path — `status` is right — it is **a half-read payload**, which is the more
-expensive kind of mistake because nothing about the answer looks incomplete. `feedbackPhrase`
+**What was built on that, and what the live read did to it, is the lesson of the day — see the
+withdrawal below.** At the time it was read as two verdicts about different windows: `status`
+classifying HRV against the personal baseline band (90 ms outside a band built around an 80 ms
+average), `feedbackPhrase` commenting on last night, which was above average. On that reading
+the map returned one of two opinions and looked complete while doing it — a half-read payload
+rather than a wrong path. `feedbackPhrase`
 is recorded by 5b, sits in the payload `hrv_last_night` already fetches, and therefore costs no
 request.
 
 **The row was added the same day, once Mahi asked for it.** `hrv_feedback`,
 `hrvSummary.feedbackPhrase`, verified — the path was recorded by 5b and the app confirmed the
-field is surfaced. It returns **Garmin's token** (`HRV_BALANCED_7` shape), not the prose the app
-renders from it: that mapping has never been measured, and a hand-written code-to-sentence table
-would be exactly the invention the `verified` column exists to refuse.
+field is surfaced. It returns **Garmin's own key**, not the prose the app renders from it: that
+mapping has never been measured, and a hand-written key-to-sentence table would be exactly the
+invention the `verified` column exists to refuse.
+
+### Withdrawn the same evening, by the first live read of the row
+
+The re-pin went in and the very first call returned **`hrv_status: UNBALANCED` and
+`hrv_feedback: HRV_UNBALANCED_11`**. They agree. Desktop noticed before anyone else did, and
+said so: the tool's own description claimed the two had disagreed on this date, and the live
+data did not.
+
+**The "two verdicts about different windows" mechanism was never measured.** It was inferred
+from one paraphrase of a sentence on a phone screen — plausibly about a different night than the
+one queried, or rendered from a field we never read — and then written into the map row's note,
+`garmin_health`'s docstring, a test docstring, the journal and a PR body as though it were a
+finding. Five places, one unverified inference, asserted in the voice the repo reserves for
+things it has measured. It is withdrawn: whether the two fields can disagree is **unknown**.
+
+What the live read *did* settle is the part worth keeping. `feedbackPhrase` is a **lookup key
+with a variant number**, not a verdict and not a sentence; the app renders prose from it, and
+what message 11 reads is not known here. So the row's justification changes from "it carries a
+second opinion that can contradict the first" to "it carries specificity `status` does not, and
+costs no request". The row stays. Its reason for existing is smaller and true.
+
+**The shape of this mistake is worth more than the correction.** The repo's whole epistemic
+apparatus — `verified`, dated notes, "a verdict is a measurement with a date on it" — exists to
+stop exactly this, and it did not fire, because the inference was mine rather than a field
+path's. The map has a column for an unconfirmed path and no column for an unconfirmed
+*explanation of why a row exists*. The guard that would have caught it is cheaper than a column:
+**a mechanism gets written in the indicative only after something has been read twice.** One
+paraphrase is a lead, not a measurement.
 
 What changed beyond the row is the tool's own guidance, because a map row the agent does not know
 to ask for is a row that does not exist. `garmin_health`'s docstring and the `metrics` enum help
@@ -2289,6 +2313,12 @@ parses, stop Desktop, verify with `docker ps`. The digest gate goes before the e
 pull goes before the backup — a step that fails on a flaky network should leave no trace, and
 the 2026-10-26 run left a backup file for a run that changed nothing. Verify with a tool that
 cannot exist on the old image, never with `server_version`.
+
+**A mechanism needs two readings before it is written in the indicative.** On 2026-10-26 a
+single paraphrase of a phone screen became a stated mechanism in five places — a map note, a
+tool docstring, a test docstring, the journal and a PR body — and the first live read of the
+row contradicted it. `verified` guards field paths; nothing guards the story about why a row
+exists. One paraphrase is a lead.
 
 **Two verification mechanisms are known not to reach the reader:**
 

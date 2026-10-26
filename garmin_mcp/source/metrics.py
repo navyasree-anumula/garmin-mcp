@@ -263,19 +263,21 @@ METRICS: tuple[Metric, ...] = (
         note=(
             # Surfaced nowhere, because the row is verified. Kept for the next
             # reader of the map, where the window distinction belongs.
-            "The payload's SECOND verdict, and it is not a restatement of "
-            "`hrv_status`. Added 2026-10-26 after the Garmin Connect app was "
-            "found to show both: `status` said Unbalanced for the night of "
-            "25-26 Oct while the app's feedback sentence said the night was "
-            "good. `status` classifies HRV against the personal baseline band "
-            "(90 ms against a band built around an 80 ms average is outside "
-            "it); this field appears to comment on the night itself. Returning "
-            "only one of them made the server answer half of Garmin's opinion "
-            "while looking complete. The value is Garmin's own token "
-            "(`HRV_BALANCED_7` shape, 5b), NOT the prose the app renders from "
-            "it -- that mapping is unmeasured and inventing it would be exactly "
-            "the guess this column exists to refuse. Costs no request: it rides "
-            "the payload `hrv_last_night` already fetches."
+            "A LOOKUP KEY, not a verdict and not prose. Measured live "
+            "2026-10-26: `HRV_UNBALANCED_11` alongside `hrv_status`'s "
+            "`UNBALANCED`. So the value is a message identifier with a variant "
+            "number, and the Connect app renders a sentence from it; the "
+            "key-to-sentence mapping is unmeasured, and inventing a table for "
+            "it would be exactly the guess this column exists to refuse. "
+            "**The row was added on a wrong premise and kept for a right one.** "
+            "It was added believing `status` and this field were verdicts about "
+            "different windows that could disagree -- inferred from a single "
+            "paraphrase of what the app displayed, never measured. The first "
+            "live read had both fields agreeing, so that claim is WITHDRAWN: "
+            "whether they can ever disagree is unknown. What stands is that "
+            "this field carries specificity `status` does not (which of several "
+            "messages, by number) and costs no request, since it rides the "
+            "payload `hrv_last_night` already fetches."
         ),
     ),
     # ---- get_sleep_data: 3584 populated fields, four of them wanted --------

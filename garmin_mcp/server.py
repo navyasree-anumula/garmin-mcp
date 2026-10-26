@@ -135,8 +135,8 @@ _TRAINING_CLOSING = (
 _HEALTH_CLOSING = (
     "Ask for everything you need in ONE call: all four HRV metrics come from "
     "one payload, so together they cost a single Garmin request. Ask for "
-    "`hrv_status` and `hrv_feedback` TOGETHER -- they are two verdicts about "
-    "different windows and either one alone is half the answer. `spo2` is "
+    "`hrv_status` and `hrv_feedback` TOGETHER -- the first is the verdict, the "
+    "second is the key Garmin's app renders a sentence from. `spo2` is "
     "answerable and will tell you this watch does not measure it -- which is a "
     "better answer than silence."
 )
@@ -307,14 +307,18 @@ def garmin_health(
     `hrv_last_night` rather than instead of it: a single night against no
     baseline is close to unreadable.
 
-    **`hrv_status` and `hrv_feedback` are two different verdicts, not one
-    verdict twice, and they can point opposite ways.** `hrv_status` classifies
-    HRV against the athlete's own baseline band, so a night above their average
-    can still read `UNBALANCED` when it sits outside that band. `hrv_feedback`
-    is Garmin's comment on the night itself. On 2026-10-26 the first said
-    unbalanced and the second said the night was good -- both correct, about
-    different windows. Reading one and not the other is how this server would
-    report half of Garmin's opinion while looking complete, so ask for both.
+    **`hrv_status` is a verdict; `hrv_feedback` is a message key.**
+    `hrv_status` classifies HRV against the athlete's own baseline band, so a
+    night above their average can still read `UNBALANCED` when it sits outside
+    that band. `hrv_feedback` returns an identifier like `HRV_UNBALANCED_11` --
+    the key Garmin's own app renders a sentence from. The trailing number
+    selects one of several messages, and what any given number says is NOT
+    known here, so do not guess at it; the Connect app is where that sentence
+    can be read.
+
+    Whether the two can ever disagree is **unmeasured** -- on 2026-10-26 they
+    agreed. Taking both still costs one request, so there is no reason not to,
+    and the key carries detail the verdict does not.
 
     **An empty answer is not an incapable watch.** A night the watch was not
     worn returns `no_data`, and `unsupported` means this account or device
