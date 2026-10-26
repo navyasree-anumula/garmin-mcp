@@ -136,6 +136,44 @@ class Outcome:
     requests_made: int = 0
     warnings: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    #: Which response key each id was read from, e.g. {"workout_id":
+    #: "workoutId"}. Recorded on SUCCESS, which is the case that was previously
+    #: silent -- see `_first_id_with_key`.
+    id_keys: dict[str, str] = field(default_factory=dict)
+
+
+def _first_id_with_key(
+    payload: Any, keys: tuple[str, ...]
+) -> tuple[int | None, str]:
+    """The id, and **which key carried it**.
+
+    Added 2026-10-27, after the first real write. That call returned both ids
+    and taught us nothing about Garmin's response shape, because the raw
+    response is attached only on a miss -- so a success proved the candidate
+    list was sufficient and left which candidate matched unknown, which is
+    exactly what `test_write.py`'s `# invented:` labels were waiting on.
+
+    **A response that only explains itself on failure cannot teach you anything
+    when it works.** The key name travels on every call now. Key names are
+    schema rather than health data -- the same argument `probe --explain` makes
+    for printing paths and never values -- so this costs nothing to surface.
+    """
+    if not isinstance(payload, dict):
+        return None, ""
+
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, bool):  # bool is an int; it is not an id
+            continue
+        if isinstance(value, int):
+            return value, key
+
+    for outer, value in payload.items():
+        if isinstance(value, dict):
+            found, key = _first_id_with_key(value, keys)
+            if found is not None:
+                return found, f"{outer}.{key}"
+    return None, ""
 
 
 def _first_id(payload: Any, keys: tuple[str, ...]) -> int | None:
@@ -345,13 +383,17 @@ def create_and_schedule(
             written = api.update_workout(plan.workout_id, structure)
     requests += 1
 
-    workout_id = _first_id(written, WORKOUT_ID_KEYS) or plan.workout_id
+    workout_id, workout_key = _first_id_with_key(written, WORKOUT_ID_KEYS)
+    if workout_id is None:
+        workout_id = plan.workout_id
+        workout_key = "(from the name match, not the response)" if workout_id else ""
     outcome = Outcome(
         action=plan.action,
         workout_id=workout_id,
         scheduled=SCHEDULED_FAILED,
         date=day,
         requests_made=requests,
+        id_keys={"workout_id": workout_key} if workout_key else {},
     )
 
     if workout_id is None:
@@ -386,7 +428,11 @@ def create_and_schedule(
     outcome.requests_made = requests
 
     outcome.scheduled = SCHEDULED_NEW
-    outcome.scheduled_workout_id = _first_id(booked, SCHEDULE_ID_KEYS)
+    outcome.scheduled_workout_id, schedule_key = _first_id_with_key(
+        booked, SCHEDULE_ID_KEYS
+    )
+    if schedule_key:
+        outcome.id_keys["scheduled_workout_id"] = schedule_key
     if outcome.scheduled_workout_id is None:
         outcome.raw = {"schedule_response": booked}
         outcome.warnings.append(

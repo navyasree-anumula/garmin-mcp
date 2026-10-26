@@ -2494,13 +2494,71 @@ account**, which is also what the gate and the supervised cycle were for.
 
 Tests: 527 -> 537, 2 skipped.
 
+## 2026-10-27 (later still) — the first workout this project ever wrote
+
+`throwaway test` is on the Garmin calendar for 27 October: a 10 minute warmup and a 5 minute
+cooldown, no targets. Uploaded and scheduled in three requests, no warnings, both ids readable.
+Confirmed in the Connect app, where the deletion also has to happen — the server has no delete
+tool on purpose.
+
+    {"action": "uploaded", "workout_id": 1742892340, "scheduled": "new",
+     "scheduled_workout_id": 1821895273, "date": "2026-10-27",
+     "requests_made": 3, "warnings": [], "raw": {}}
+
+**Six phases of measurement, five sessions of building, and the loop now closes**: read what the
+body says, write a session to the watch, check it got done. The structure Garmin accepted was the
+one `compose` builds with `estimatedDurationInSecs` summed from time steps only and every step
+carrying `no.target` — so both of the unverified assumptions the preview session recorded are
+answered, and answered in the affirmative.
+
+The session that proved it is the same one that could not be written an hour earlier. It was the
+regression check and the milestone in one call.
+
+### What a success could not tell us, which is a flaw in what I built
+
+The call returned both ids and **taught us nothing about Garmin's response shape.** `_first_id`
+tries three candidate keys and returns the value; the raw response is attached only on a *miss*.
+So a success proves the candidate list is sufficient and leaves which candidate matched unknown —
+which is precisely what `test_write.py`'s labels were waiting on.
+
+**A response that only explains itself on failure cannot teach you anything when it works.**
+
+Fixed by recording the key name on every call: `id_keys` now carries e.g.
+`{"workout_id": "workoutId", "scheduled_workout_id": "workoutScheduleId"}`, nested keys written
+as `workout.workoutId` so the record is specific enough to narrow the list afterwards. Key names
+are schema rather than health data — the same argument `probe --explain` makes for printing paths
+and never values — so surfacing them costs nothing. An id that came from the name match rather
+than the response says so, because that is not evidence about Garmin's shape.
+
+### A third provenance label, because the real state was neither of the two
+
+`# recorded:` would overclaim and `# invented:` would throw away what the live call settled. So
+`# recorded in part:` exists now: the value shapes are known (plain ints), the keys are not. The
+guard learned it the same way it learned `# invented:` yesterday — by refusing a label that was
+honest and unlisted.
+
+Both of `test_write.py`'s id fixtures carry it, and the line that matters most says why:
+`unschedule_workout` takes `scheduled_workout_id` and nothing else, so a readable schedule id is
+the whole undo path. It is readable. Which key carried it settles on the next create, for free.
+
+### The pattern that held all session
+
+Four times a summarising client dropped a structured field we deliberately returned:
+`server_version`, the provenance note, the local-vs-Garmin refusal distinction, and the ids from
+this very write — which came back only when asked for by name. It is a constraint rather than bad
+luck. **Anything that has to be read back must be asked for by name; anything that has to be
+verified must be a capability probe or an observable side effect.** The Connect app is what
+confirmed this workout, not the response.
+
+Tests: 537 -> 541, 2 skipped.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **537 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **541 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 **What exists:**
@@ -2513,8 +2571,12 @@ than the code and the suite wins.
   its approval marker and a date; resolves the name (match ⇒ update in place keeping the id, no
   match ⇒ upload, two matches ⇒ refuse); reads the target month on the update path only; writes;
   schedules. **Gated by `GARMIN_MCP_ENABLE_WRITES`, default off.**
-- **No workout has ever been written to Garmin by this project.** Nothing has reached the
-  calendar, no `workoutId` has ever existed, and the account is untouched by anything but reads.
+- **The loop closes.** On 2026-10-27 `throwaway test` was uploaded and scheduled for 27 Oct in
+  three requests, no warnings, both ids readable (`workout_id` 1742892340,
+  `scheduled_workout_id` 1821895273), confirmed in the Connect app. **Garmin accepted the
+  structure `compose` builds** — `estimatedDurationInSecs` summed from time steps only, every
+  step carrying `no.target` — so both of the preview session's recorded assumptions are answered
+  yes. Delete it in Connect; there is no delete tool by design.
 
 **The laptop runs `sha-7a5b852` with writes ENABLED** (`-e GARMIN_MCP_ENABLE_WRITES=1` in the
 Desktop config's `args`, before the image name — **not** an `env` block: `docker run` does not
@@ -2527,17 +2589,23 @@ user-facing changed in it — **a chosen drift and an unnoticed one look identic
 Desktop still refuses any whole-number duration. That re-pin is the first thing the next session
 needs.
 
-**The next session is the first that can change the account.** It needs, in order: merge → CI
-publishes → re-pin → **add `GARMIN_MCP_ENABLE_WRITES=1` to the Desktop config's `env` block** →
-restart Desktop. Then one supervised live **create → verify → delete** on a throwaway workout, by
-hand, documented. Cassettes get recorded from that exchange, with §8's scrubbing requirements and
-a test asserting no cassette on disk contains a token-shaped string.
+**The live cycle is done.** What it still owes: **cassettes**, which §8 wants recorded from a
+real exchange and which did not happen during this one — so they are the next session's work,
+with §8's scrubbing requirements and a test asserting no cassette on disk contains a token-shaped
+string. Nothing else in the write path is unexercised.
 
-**What that live cycle settles, and it is most of the response handling:** `upload_workout`'s
-response shape, `schedule_workout`'s response shape, and whether Garmin accepts our structure at
-all — an understated `estimatedDurationInSecs` and `NO_TARGET` steps. Until then `_first_id`
-tries candidate keys and reports a miss rather than guessing. **The first thing the live cycle
-should produce is replacing `# invented:` with `# recorded:` in `test_write.py`.**
+**What the live cycle settled, and what it did not.** Garmin accepts the structure, and both ids
+are readable — so the candidate lists in `_first_id` are sufficient. **Which key carried each id
+is still unknown**, because the raw response is attached only on a miss: a success taught nothing.
+That is now fixed — `id_keys` records the key name on every call — so **the next create settles
+it for free**, and `test_write.py`'s two id fixtures are labelled `# recorded in part:` until it
+does.
+
+**Anything read back must be asked for by name.** Four times in one session a summarising
+client dropped a structured field we deliberately returned: `server_version`, the provenance note,
+the local-vs-Garmin refusal distinction, and the write's own ids. A field is not a channel.
+Verification belongs in a capability probe or an observable side effect — the Connect app is what
+confirmed the first workout, not the response.
 
 **Rules this repo has paid for, in the order they were learned:**
 
@@ -2554,6 +2622,9 @@ should produce is replacing `# invented:` with `# recorded:` in `test_write.py`.
   can find an orphan.
 - **A resume block must not name a pending item it is inside of**, and must not quote a value
   unknowable at write time.
+- **A response that only explains itself on failure teaches nothing when it works.** The first
+  real write returned both ids and left Garmin's response keys unknown, because the raw payload
+  was attached only on a miss.
 
 **Still open:**
 
