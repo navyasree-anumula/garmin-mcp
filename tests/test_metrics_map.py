@@ -56,6 +56,73 @@ def test_numbers_have_units_and_phrases_do_not(metric):
 
 
 @pytest.mark.parametrize("metric", metrics.METRICS, ids=lambda m: m.key)
+def test_every_row_states_what_evidence_put_it_here(metric):
+    """`provenance` answers a different question from `verified`.
+
+    `verified` is about the dotted path: was it read off a real payload?
+    `provenance` is about the row: what evidence put it in the map at all? The
+    combination that matters is a **verified path with a reported reason**,
+    which is what happened on 2026-10-26 -- `hrv_feedback`'s path was genuinely
+    recorded by 5b, the reason for adding it was one paraphrase of a phone
+    screen, and a mechanism nobody had measured went into five places in the
+    indicative. Nothing in the map could express that state, so nothing caught
+    it.
+
+    The field defaults to `inferred`, the most pessimistic value, so a row added
+    without stating its evidence trips the count assertion below rather than
+    quietly claiming a measurement.
+    """
+    assert metric.provenance in metrics.PROVENANCE
+
+
+def test_the_number_of_rows_not_backed_by_a_payload():
+    """**The teeth.** A literal, so adding such a row means editing a test.
+
+    Today every row is in the map because a payload this project received showed
+    the field -- including the four whose `verified` is False, where the payload
+    was read and it is *which* field answers that was inferred. That is the
+    orthogonality working: same evidence for the row, different confidence in
+    the path.
+
+    So the number is zero, and it is asserted rather than described. A row on
+    somebody's word is a legitimate thing to add -- `hrv_feedback` was one for
+    about an hour -- but it should cost a deliberate edit to a number here,
+    the way `test_the_whole_health_group_is_four_requests` makes a request-count
+    change deliberate. If this assertion fails, the right fix is usually to
+    change the number and say why in the row's note, not to relabel the row.
+    """
+    not_measured = [
+        m.key for m in metrics.METRICS if m.provenance != metrics.PROV_MEASURED
+    ]
+
+    assert not_measured == [], (
+        f"{not_measured} are in the map on something other than a payload. "
+        "That is allowed; it is not allowed to be silent. Update this count "
+        "and make the row's note say what the evidence actually was."
+    )
+
+
+def test_a_row_not_backed_by_a_payload_says_so_in_its_note():
+    """A reported or inferred row has to carry the words, because the note is
+    what reaches the reading -- `readings.read` attaches it for any row that is
+    not both verified and measured.
+
+    Deliberately not parametrised. Every row is measured today, so a
+    parametrised version would skip twenty times and bury the suite's skip
+    count, which is a number this repo reads as a signal. Vacuous today, and it
+    has teeth the moment the count above changes.
+    """
+    for metric in metrics.METRICS:
+        if metric.provenance == metrics.PROV_MEASURED:
+            continue
+        assert metric.note, f"{metric.key} is {metric.provenance} and silent about it"
+        assert metric.provenance in metric.note.lower(), (
+            f"{metric.key} is {metric.provenance} but its note does not say the "
+            "word, and the note is what the agent reads"
+        )
+
+
+@pytest.mark.parametrize("metric", metrics.METRICS, ids=lambda m: m.key)
 def test_an_unverified_path_says_what_would_confirm_it(metric):
     """Half the rows were inferred rather than recorded. That is acceptable;
     being quiet about which is not."""

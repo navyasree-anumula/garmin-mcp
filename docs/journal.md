@@ -2255,6 +2255,62 @@ description.
 "are writes enabled right now" becomes a question the agent must be able to ask. Recorded as a
 condition on the next session instead of being quietly carried a fourth time.
 
+### Two guards, because the lesson was a convention and conventions erode
+
+The withdrawal above produced a rule — *a mechanism gets written in the indicative only after
+something has been read twice* — and a rule in prose is what this repo keeps catching itself
+trusting. So the rule got two mechanisms, and neither is the obvious one: a keyword lint on note
+text would have passed my bad note, which said the app "was **found** to show both".
+
+**1. `provenance` on the metric row, orthogonal to `verified`.** `verified` answers "was this
+dotted path read off a real payload". `provenance` answers "what evidence put this row in the
+map at all", from a closed set: `measured`, `reported`, `inferred`. The combination that matters
+is **a verified path with a reported reason** — precisely `hrv_feedback` on the day it was
+added, whose path 5b genuinely recorded while the reason was a paraphrase of a phone screen. The
+map could not express that state, so nothing caught it.
+
+Two fields holding one fact is what the composer's own V9 refuses, so the distinction had to be
+real rather than a second spelling of `verified`. It is: the four unverified training rows are
+`measured` with `verified=False` — the payload *was* read, and it is *which* field answers that
+was inferred. Same evidence for the row, different confidence in the path.
+
+The teeth are a literal. `test_the_number_of_rows_not_backed_by_a_payload` asserts the list is
+**empty**, so adding a row on somebody's word costs a deliberate edit to a number — the same
+device as `test_the_whole_health_group_is_four_requests`. The field defaults to `inferred`, the
+pessimistic value, so forgetting it fails that test rather than quietly claiming a measurement.
+`readings.read` now attaches the note for any row that is not *both* verified and measured, with
+the condition asserted as an AND in both directions against a synthetic row, since no real row
+is reported today.
+
+**2. Fixture provenance, AST-checked — and this is the one that would actually have stopped
+me.** Both metric-tool test files open by declaring it: "payload shapes here are the ones 5b
+actually recorded, not invented ones." Stated, never enforced. Every module-level payload
+fixture now carries `# recorded: <session>, <date>`, and `tests/test_fixture_provenance.py`
+fails on one that does not.
+
+Why it bites where the first guard would not: my claim was that two fields *can disagree*. A
+claim about payload behaviour belongs in a test, and a test needs a fixture — so writing it
+would have meant inventing a payload with disagreeing values and citing no session for it. The
+check fires at the moment the fabrication has to be written down.
+
+Three details were worth the extra thought. The file list is **enumerated, not globbed**:
+`test_compose.py`'s step lists are our own inputs, invented on purpose, and demanding a session
+for them would train everybody to write a meaningless marker — which is worse than none,
+because it looks like evidence. The lookback is **bounded at 8 lines**, with a test proving a
+distant marker is not borrowed by the next fixture, since an unbounded one would let a single
+citation at the top of a file bless every shape below it. And `tree.body` is walked rather than
+`ast.walk`, so a dict inside a test function is left alone: a one-off shape is argued for by the
+test around it, while a module-level constant quietly becomes the project's record of what
+Garmin returns.
+
+The markers carry exactly the precision the files already claimed — `5b, 2026-10-11` where the
+docstring states a date, `5a/5b probe sessions` where only the collective claim exists. A marker
+more precise than its evidence would be the same mistake one layer down.
+
+**What neither guard does** is judge whether a cited session really said that. They make the
+citation mandatory and visible in review, which is the difference between a claim somebody has
+to defend and a sentence nobody re-reads. Tests: 427 -> 461.
+
 ### Not done here, on purpose
 
 Create, schedule, update, unschedule, delete. Idempotency resolution, because name-matching
@@ -2314,11 +2370,14 @@ pull goes before the backup — a step that fails on a flaky network should leav
 the 2026-10-26 run left a backup file for a run that changed nothing. Verify with a tool that
 cannot exist on the old image, never with `server_version`.
 
-**A mechanism needs two readings before it is written in the indicative.** On 2026-10-26 a
-single paraphrase of a phone screen became a stated mechanism in five places — a map note, a
-tool docstring, a test docstring, the journal and a PR body — and the first live read of the
-row contradicted it. `verified` guards field paths; nothing guards the story about why a row
-exists. One paraphrase is a lead.
+**A mechanism needs two readings before it is written in the indicative**, and that rule now
+has two mechanisms rather than only this sentence. `provenance` on the metric row expresses the
+state that went wrong — a verified path with a reported reason — with the count of
+non-`measured` rows asserted as a literal, so adding one is a deliberate edit. Every
+module-level payload fixture must carry `# recorded: <session>, <date>`, enforced by
+`tests/test_fixture_provenance.py`, which is the check that bites when a claim about payload
+behaviour would need an invented fixture to test. Neither judges whether the cited session
+really said it; both make the citation mandatory and visible in review.
 
 **Two verification mechanisms are known not to reach the reader:**
 
