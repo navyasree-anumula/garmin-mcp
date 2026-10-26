@@ -3,13 +3,24 @@
 An MCP server over one person's Garmin Connect account — reads, plus structured workout
 creation and calendar scheduling.
 
-**Status: pass 2, phase 5.** Two tools — `garmin_auth_status` and `garmin_training` — plus
-a local web UI for signing in and checking the machine's state. `garmin_training` reads
-Garmin's own training measurements through the metric→source map, which exists because in
-four of nine known cases the endpoint named after a metric is not the one that answers it.
-It returns measurements and never advice: what they mean for a given week needs things no
-endpoint holds, so that judgement belongs in the conversation (`docs/SCOPE.md` §1).
-Health metrics and the workout write path come next.
+**Status: pass 2, phase 5.** Three tools — `garmin_auth_status`, `garmin_training` and
+`garmin_health` — plus a local web UI for signing in and checking the machine's state. The
+two metric tools read Garmin's own measurements through the metric→source map, which exists
+because in four of nine known cases the endpoint named after a metric is not the one that
+answers it. They return measurements and never advice: what they mean for a given week
+needs things no endpoint holds, so that judgement belongs in the conversation
+(`docs/SCOPE.md` §1).
+
+`garmin_health` covers HRV (last night, weekly average, Garmin's status phrase), sleep
+(score, Garmin's qualifier, duration), all-day stress (average and peak) and resting heart
+rate — ten metrics over four requests, because rows sharing a payload are coalesced before
+anything is sent. It answers about SpO2 by reporting it unsupported rather than omitting it:
+this watch measures none, which is a better answer than silence.
+
+Body battery is measured but deliberately unmapped. It arrives inside the stress payload as
+a descriptor-indexed positional array, which needs a decoder that resolves a descriptor key
+to a position, and a row written before that decoder exists would be a guess. The workout
+write path comes next.
 
 Read [`docs/SCOPE.md`](docs/SCOPE.md) before adding to it.
 

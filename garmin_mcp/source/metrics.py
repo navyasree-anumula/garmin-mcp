@@ -196,6 +196,161 @@ METRICS: tuple[Metric, ...] = (
         verified=True,
         note="See race_5k for the unit decision.",
     ),
+    # ---- get_hrv_data: three metrics, one payload --------------------------
+    # 5a concluded HRV should be read off the sleep payload "because that is
+    # where this account's data measurably is". Withdrawn at 5b: `get_hrv_data`
+    # answered with a summary of its own, and `lastNightAvg` is already the
+    # scalar a tool wants -- mining the same number out of sleep's 4589 fields
+    # was solving a problem that did not exist.
+    Metric(
+        key="hrv_last_night",
+        group="health",
+        source_method="get_hrv_data",
+        path="hrvSummary.lastNightAvg",
+        unit="ms",
+        verified=True,
+        note=(
+            "Recorded 5b (2026-10-11), 320 populated fields. The overnight "
+            "average Garmin's own HRV status is computed from."
+        ),
+    ),
+    Metric(
+        key="hrv_weekly",
+        group="health",
+        source_method="get_hrv_data",
+        path="hrvSummary.weeklyAvg",
+        unit="ms",
+        verified=True,
+        note=(
+            "Recorded 5b, same payload as hrv_last_night, so the pair costs one "
+            "request. This is the trend half: one night means little without a "
+            "baseline to read it against, which is why both are offered."
+        ),
+    ),
+    Metric(
+        key="hrv_status",
+        group="health",
+        source_method="get_hrv_data",
+        path="hrvSummary.status",
+        kind=KIND_PHRASE,
+        verified=False,
+        note=(
+            "The container is recorded (5b) and so are both `status` and "
+            "`feedbackPhrase`; WHICH of the two is the human-readable verdict is "
+            "inferred, and one `--explain hrv` settles it. `accumulates` stays "
+            "false deliberately: HRV status needing roughly three weeks of wear "
+            "is domain knowledge flagged [Mahi-verify] in SCOPE 13, not a "
+            "measurement, and v1.4 requires a MEASURED accumulation requirement "
+            "before a row may earn `not_matured`."
+        ),
+    ),
+    # ---- get_sleep_data: 3584 populated fields, four of them wanted --------
+    # Measured 2026-10-26 (step 0a, date 2026-10-25). 5b recorded that this
+    # payload was large and never recorded a path out of it, so these rows
+    # could not exist until now.
+    #
+    # Note what is NOT taken from here. The root carries `avgOvernightHrv`,
+    # `hrvStatus` and `restingHeartRate`, so sleep is a genuine second source
+    # for two metrics this map answers from their own endpoints. 5b's
+    # withdrawal of 5a stands: `get_hrv_data` also carries the weekly average
+    # and the baseline, which sleep does not, and a metric answered from the
+    # richer source stays auditable because every reading names where it came
+    # from. Recorded here so the duplication is a decision rather than an
+    # oversight.
+    Metric(
+        key="sleep_score",
+        group="health",
+        source_method="get_sleep_data",
+        path="dailySleepDTO.sleepScores.overall.value",
+        unit="index, scale unconfirmed",
+        verified=True,
+        note=(
+            "Path measured 2026-10-26. The scale is NOT: only `overall`, "
+            "`remPercentage`, `lightPercentage` and `deepPercentage` carry a "
+            "`value` at all -- `totalDuration`, `stress`, `awakeCount` and "
+            "`restlessness` carry only a qualifier and an optimal range -- so "
+            "the shape is known and the 0-100 range is still an assumption."
+        ),
+    ),
+    Metric(
+        key="sleep_score_phrase",
+        group="health",
+        source_method="get_sleep_data",
+        path="dailySleepDTO.sleepScores.overall.qualifierKey",
+        kind=KIND_PHRASE,
+        verified=True,
+        note=(
+            "Garmin's own wording for the score, measured 2026-10-26. Offered "
+            "beside sleep_score for the same reason training_status is: a "
+            "qualifier that Garmin wrote beats a number whose scale we are "
+            "guessing at."
+        ),
+    ),
+    Metric(
+        key="sleep_duration",
+        group="health",
+        source_method="get_sleep_data",
+        path="dailySleepDTO.sleepTimeSeconds",
+        unit="s",
+        verified=True,
+        note=(
+            "Measured 2026-10-26. Sleep only: `napTimeSeconds` is a separate "
+            "field and is deliberately not added in, because a nap and a night "
+            "are not interchangeable to a coach."
+        ),
+    ),
+    # ---- get_all_day_stress: the scalars, not the arrays -------------------
+    # The descriptor-driven positional arrays v1.4 predicted are real:
+    # `stressValueDescriptorsDTOList` of {index, key} against
+    # `stressValuesArray: list(480)` of `list(2)`, and the same shape with four
+    # descriptors for body battery. Reading those needs a decoder that maps a
+    # descriptor key to a position -- which is why body battery is NOT a row
+    # yet. `avgStressLevel` is a plain int at the root and needs nothing.
+    Metric(
+        key="stress_avg",
+        group="health",
+        source_method="get_all_day_stress",
+        path="avgStressLevel",
+        unit="index, scale unconfirmed",
+        verified=True,
+        note=(
+            "Measured 2026-10-26, 2896 populated fields. All-day average. The "
+            "scale is unconfirmed for the same reason as sleep_score: "
+            "`stressChartYAxisOrigin` and `stressChartValueOffset` hint at a "
+            "range without stating one."
+        ),
+    ),
+    Metric(
+        key="stress_max",
+        group="health",
+        source_method="get_all_day_stress",
+        path="maxStressLevel",
+        unit="index, scale unconfirmed",
+        verified=True,
+        note=(
+            "Same payload as stress_avg, so the pair costs one request. An "
+            "average alone hides a day that spiked and recovered."
+        ),
+    ),
+    # ---- get_rhr_day: a statistics window, not a day -----------------------
+    Metric(
+        key="resting_hr",
+        group="health",
+        source_method="get_rhr_day",
+        container="allMetrics.metricsMap.WELLNESS_RESTING_HEART_RATE",
+        decoder="calendar_date",
+        path="value",
+        unit="bpm",
+        verified=True,
+        note=(
+            "Recorded 5b at "
+            "allMetrics.metricsMap.WELLNESS_RESTING_HEART_RATE[0].value. Selected "
+            "by the row's own `calendarDate` rather than by index, because the "
+            "DATE argument returns a statistics window: a response exists for a "
+            "date that has no reading, and a neighbouring day's resting heart "
+            "rate presented as today's is worse than silence."
+        ),
+    ),
     # ---- A row with no source, which is the point --------------------------
     # §13.9's finding 8.a: a test asserting every metric resolves to a real
     # library method would have to call this row a failure. It is not a

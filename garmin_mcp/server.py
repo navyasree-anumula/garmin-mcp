@@ -96,26 +96,47 @@ def garmin_auth_status() -> AuthStatus:
 #: the drift pass A exists to find -- and the tool's JSON schema carries this as
 #: an enum, so a wrong key is refused by the client before a request is made.
 MetricKey = Literal[tuple(metric_map.keys_for_group("training"))]  # type: ignore[valid-type]
+HealthMetricKey = Literal[tuple(metric_map.keys_for_group("health"))]  # type: ignore[valid-type]
 
 
-def _metrics_help() -> str:
+def _metrics_help(group: str, closing: str) -> str:
     """Build the parameter description from the map, units included.
 
     §5 (v1.5): the enum is how the model learns what exists, so each value
     carries its unit. A phrase is Garmin's own wording for a code we have no
     mapping for, and is marked as such rather than given a fake unit.
+
+    Takes the group rather than hard-coding one, so a second metric tool cannot
+    describe itself from a list that has drifted from the map.
     """
-    rows = [
-        f"{m.key} [{m.unit or 'phrase'}]"
-        for m in metric_map.METRICS
-        if m.group == "training"
-    ]
+    rows = []
+    for m in metric_map.METRICS:
+        if m.group != group:
+            continue
+        # A no-source row is neither a number nor a phrase: it is a metric this
+        # watch cannot answer, kept in the map on purpose (§5). Labelling it
+        # `phrase` would invite the agent to expect a word back.
+        if m.source_method is None:
+            label = "unsupported on this watch"
+        else:
+            label = m.unit or "phrase"
+        rows.append(f"{m.key} [{label}]")
     return (
-        "Which training metrics to read, as a list. " + ", ".join(rows) + ". "
-        "Ask for everything you need in ONE call: metrics that share a source "
-        "cost a single Garmin request together, and three of these come from "
-        "one payload."
+        f"Which {group} metrics to read, as a list. " + ", ".join(rows) + ". " + closing
     )
+
+
+_TRAINING_CLOSING = (
+    "Ask for everything you need in ONE call: metrics that share a source cost "
+    "a single Garmin request together, and three of these come from one payload."
+)
+
+_HEALTH_CLOSING = (
+    "Ask for everything you need in ONE call: the three HRV metrics come from "
+    "one payload, so all three together cost a single Garmin request. `spo2` is "
+    "answerable and will tell you this watch does not measure it -- which is a "
+    "better answer than silence."
+)
 
 
 class MetricReading(BaseModel):
@@ -162,6 +183,53 @@ class TrainingReadings(BaseModel):
     readings: list[MetricReading]
 
 
+DATE_BASIS = (
+    "UTC calendar date. Garmin's dates are device-local, so a run near midnight "
+    "in another timezone can land on the adjacent day."
+)
+
+
+def _read_group(
+    group: str, keys: list[str], date: str | None
+) -> tuple[str, list[MetricReading]]:
+    """Guard the keys against their group, then run the seam.
+
+    Checked here rather than relying on the schema's enum. The enum stops a
+    compliant client, and this stops everything else -- including a health
+    metric asked of the training tool, which `metric_map.BY_KEY` would happily
+    resolve. Mirrors `probe --explain`: name the valid keys rather than just
+    refusing, because a "no" that does not say what would work costs the agent
+    another round trip to find out.
+
+    Shared by both metric tools rather than copied into each: a second copy of
+    a guard is how one tool ends up accepting a key the other refuses.
+    """
+    allowed = metric_map.keys_for_group(group)
+    unknown = [key for key in keys if key not in allowed]
+    if unknown or not keys:
+        raise ToolError(
+            f"unknown or empty metrics {unknown!r}. Valid metrics: {', '.join(allowed)}"
+        )
+
+    try:
+        measured_on, readings = source_readings.metrics_for(keys, date)
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return measured_on, [
+        MetricReading(
+            metric=r.metric,
+            value=r.value,
+            unit=r.unit,
+            verdict=r.verdict,
+            source=r.source,
+            measured_on=r.measured_on,
+            note=r.note,
+        )
+        for r in readings
+    ]
+
+
 @mcp.tool(
     title="Garmin training metrics",
     annotations=ToolAnnotations(
@@ -169,7 +237,10 @@ class TrainingReadings(BaseModel):
     ),
 )
 def garmin_training(
-    metrics: Annotated[list[MetricKey], Field(description=_metrics_help())],
+    metrics: Annotated[
+        list[MetricKey],
+        Field(description=_metrics_help("training", _TRAINING_CLOSING)),
+    ],
     date: Annotated[
         str | None,
         Field(description="YYYY-MM-DD. Defaults to today's UTC calendar date."),
@@ -186,40 +257,59 @@ def garmin_training(
     Ask for several metrics at once. `training_status`, `load_balance` and
     `vo2_max` all come out of one payload, so together they cost one request.
     """
-    # Checked here rather than relying on the schema's enum. The enum stops a
-    # compliant client, and this stops everything else -- including a health
-    # metric asked of the training tool, which `metrics.BY_KEY` would happily
-    # resolve. Mirrors `probe --explain`: name the valid keys rather than just
-    # refusing, because a "no" that does not say what would work costs the
-    # agent another round trip to find out.
-    allowed = metric_map.keys_for_group("training")
-    unknown = [key for key in metrics if key not in allowed]
-    if unknown or not metrics:
-        raise ToolError(
-            f"unknown or empty metrics {unknown!r}. Valid metrics: {', '.join(allowed)}"
-        )
-
-    try:
-        measured_on, readings = source_readings.metrics_for(list(metrics), date)
-    except GarminSourceError as exc:
-        raise ToolError(str(exc)) from exc
-
+    measured_on, readings = _read_group("training", list(metrics), date)
     return TrainingReadings(
-        date=measured_on,
-        date_basis=(
-            "UTC calendar date. Garmin's dates are device-local, so a run near "
-            "midnight in another timezone can land on the adjacent day."
-        ),
-        readings=[
-            MetricReading(
-                metric=r.metric,
-                value=r.value,
-                unit=r.unit,
-                verdict=r.verdict,
-                source=r.source,
-                measured_on=r.measured_on,
-                note=r.note,
-            )
-            for r in readings
-        ],
+        date=measured_on, date_basis=DATE_BASIS, readings=readings
+    )
+
+
+# --------------------------------------------------------------------------
+# Health metrics (docs/SCOPE.md §5, v1.5)
+# --------------------------------------------------------------------------
+
+
+class HealthReadings(BaseModel):
+    date: str = Field(description="The date the readings are for.")
+    date_basis: str = Field(
+        description="What that date means, since Garmin's own dates are device-local."
+    )
+    readings: list[MetricReading]
+
+
+@mcp.tool(
+    title="Garmin health metrics",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True
+    ),
+)
+def garmin_health(
+    metrics: Annotated[
+        list[HealthMetricKey],
+        Field(description=_metrics_help("health", _HEALTH_CLOSING)),
+    ],
+    date: Annotated[
+        str | None,
+        Field(description="YYYY-MM-DD. Defaults to today's UTC calendar date."),
+    ] = None,
+) -> HealthReadings:
+    """Read Garmin's own overnight and resting measurements for a date.
+
+    Returns measurements, not advice. Whether a low HRV means back off or means
+    the watch slipped is a judgement that needs things no endpoint holds -- how
+    the legs feel, what else happened that night -- so it belongs in the
+    conversation, not here (docs/SCOPE.md §1).
+
+    `hrv_last_night`, `hrv_weekly` and `hrv_status` all come out of one payload,
+    so asking for all three costs one request. Ask for `hrv_weekly` alongside
+    `hrv_last_night` rather than instead of it: a single night against no
+    baseline is close to unreadable.
+
+    **An empty answer is not an incapable watch.** A night the watch was not
+    worn returns `no_data`, and `unsupported` means this account or device
+    cannot answer at all -- `spo2` is the standing example, measured as
+    unsupported on this watch rather than quietly dropped.
+    """
+    measured_on, readings = _read_group("health", list(metrics), date)
+    return HealthReadings(
+        date=measured_on, date_basis=DATE_BASIS, readings=readings
     )
