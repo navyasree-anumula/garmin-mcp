@@ -24,11 +24,12 @@ upstream's.** A named exercise measured in *time* -- 40 seconds of Goblet Squat
 REPS and takes no duration, and `create_strength_rest_step` is timed but names
 nothing. `_build_exercise` combines them, from the library's own enum members,
 and **Garmin accepted the combination** on 2026-10-31 — workout 1746708075,
-uploaded, scheduled, and visible on the watch. It was the open question of v1.6
-and it is now answered yes; what is still unconfirmed is narrower, namely
-whether each step's exercise NAME renders on the watch mid-session. Every other
-strength piece is upstream's: the `StrengthWorkout` model, the rest step, and
-the `category`/`exerciseName` catalogue.
+uploaded, scheduled, and **confirmed end to end on the watch**: each exercise
+name, its duration and the rounds all show as planned. It was the open question
+of v1.6, it is answered yes, and nothing about it is left unmeasured -- the
+reps-based fallback is not needed. Every other strength piece is upstream's: the
+`StrengthWorkout` model, the rest step, and the `category`/`exerciseName`
+catalogue.
 
 **What this module does not do is design the session.** It composes what it is
 told. Which distance, how many reps, how long the recovery -- those need how the
@@ -328,13 +329,12 @@ def _build_exercise(step: Step, order: int) -> Any:
     same enum members the library's own builders use rather than from literals
     of ours.
 
-    **Garmin accepts it.** CONFIRMED by the first live create, 2026-10-31:
-    workout 1746708075, uploaded and scheduled with no warnings and visible on
-    the watch. Every field was one upstream writes somewhere and the combination
-    was ours; the combination is now measured rather than hoped. Still
-    unconfirmed, and narrower: whether the exercise NAME renders on the watch
-    during the session. (docs/SCOPE.md §5 -- the v1.6 amendment covering
-    strength remains drafted, not yet ratified.)
+    **Garmin accepts it, and the watch shows it.** CONFIRMED end to end by the
+    first live create, 2026-10-31: workout 1746708075, uploaded and scheduled
+    with no warnings, and the watch displays each exercise name, its duration
+    and the rounds as planned. Every field was one upstream writes somewhere and
+    the combination was ours; the combination is now measured rather than hoped,
+    and the reps-based fallback is not needed. (docs/SCOPE.md §5, v1.6.)
     """
     if step.distance_m is not None:
         raise ComposeError(

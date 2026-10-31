@@ -2767,13 +2767,12 @@ instead, in the comment above each list.
 this id and nothing else: `throwaway test` 1821895273 (27 Oct, from a build with
 no `id_keys`), `Runner strength 30` 1825661241 (31 Oct).
 
-**The exercise names render.** Cross-checked in the Connect app on the phone:
-the steps read `Goblet Squat`, `Hip Raise` and the rest, as composed. So the
-`category`/`exerciseName` pair on a TIME-ended step is not merely accepted, it
-is **displayed**. That was the last of the three outcomes still open, and it is
-the good one. Strictly, what is measured is Connect's rendering on a phone; the
-watch's own mid-session display was not observed separately, and the honest
-version of this claim says so.
+**The exercise names render, on the watch.** First cross-checked in the Connect
+app, then **confirmed on the watch itself**: each exercise name, its 40-second
+duration and the rounds all show as planned. So the `category`/`exerciseName`
+pair on a TIME-ended step is not merely accepted, it is **displayed by the
+device**. That was the last of the three outcomes still open and it is the good
+one: **the reps-based fallback is not needed and the claim needs no hedge.**
 
 **The flat form is a real finding too, not only a workaround.** A 24-step flat
 circuit was accepted and scheduled, so the repeat group is not required for a
@@ -2844,13 +2843,56 @@ which is also where an agent reads it. Asserted, so the two cannot drift apart.
 
 Tests: 593 -> 638.
 
+## 2026-10-31 (SCOPE v1.6) — ratified, and the deferral that stopped being one
+
+**v1.6 is ratified.** Approved on a diff summary rather than a full re-read, which is the
+honest description and is what the header now says. The draft had asserted its own ratification
+in its version line before Mahi had seen it — the same shape as the laptop pin that #40
+withdrew, caught this time before it was committed rather than five days after.
+
+**Three decisions were taken at the gate, not during the walk**, so §15.15 records them
+separately rather than letting §15.2–§15.14 look as though the ten dimensions had produced
+them. The walk of record is still the one in §15.
+
+**Durable ids: option 2, the lookup.** The scheduled id is read back from Garmin's calendar at
+undo time; there is no ledger. It keeps account data off the tokens volume, which was the
+objection that killed option 1, and it says the same thing v1.5 said when it made the calendar
+the store for plan continuity. Option 3 — a `garmin_last_write` tool answering from process
+memory — is rejected outright, because Desktop runs two containers and the tool fails after
+exactly the restart that makes it necessary. **Unschedule-by-lookup is v1.7.** The v1.7 plan
+inherits two findings rather than rediscovering them: `get_scheduled_workouts` takes a calendar
+month and not a date window, so a lookup near a month boundary reads two months or misses one;
+and when the entry is already gone the lookup must refuse and name the date, because a silent
+success reads as evidence that the undo happened.
+
+**The three carried debts are committed to v1.7, firmly** — §7's client wiring, §7a's bind
+address, §9's location exposure via activity detail. Twice they were deferred as a scope
+decision; a third deferral would have been a debt, and the header says so in those words. What
+makes the commitment different from the two promises before it is that **v1.7 now has a code
+item** — unschedule-by-lookup — so it is no longer the docs-only version that slips because
+nothing in it is blocking.
+
+**The deferral was checked before it was granted, not after.** "Carry it to the next version" is
+only a scope decision if the current version does not depend on it, so each of the three was
+read against pace targets first: §7 touches no module, §7a is prose about a port on a web UI
+with no composer path through it, and §9 is a read path that pace targets add no request to.
+The one adjacency anywhere in §15 is A.5 and 4.b, and both point at the id question — which is
+decision 2 and already v1.7. Recorded because the answer being *no* is what made the commitment
+free, and a later reader deserves the check rather than the conclusion.
+
+**No fresh ten-dimension walk is owed for these three**, and that is said out loud rather than
+skipped quietly: decisions 1 and 3 are scope statements, and decision 2's mechanism is v1.7,
+where it gets its own ten plus A and B before any code is written.
+
+Tests: 638, unchanged — this session wrote documents, not code.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **585 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **638 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -2900,8 +2942,9 @@ annotated rather than narrowed. The method is the part worth keeping: the field
 was returned and summarised away, and **asking for it by name in one sentence
 retrieved it in full.** Do that every time.
 
-**~~3b. Whether the names show.~~ DONE** — they do, cross-checked in the Connect
-app. The watch's own mid-session render was not separately observed.
+**~~3b. Whether the names show.~~ DONE AND CLOSED** — they do, on the watch:
+name, duration and rounds as planned. Verified in SCOPE v1.6 as the strength
+named-by-time item. No reps fallback needed.
 
 The original item, kept because the expectation it set was met exactly:
 Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
@@ -2937,12 +2980,12 @@ though `tests/test_runtime_lock.py` already lists it as dev-only.
 
 **7. Decisions waiting on Mahi, none blocking:**
 
-- **Ratify or reject the SCOPE v1.6 §5 amendment** — strength as a second sport,
-  with the timed-exercise shape labelled unverified. The code is written and
-  every reference to the amendment says it is unratified. Per the standing
-  orders a SCOPE amendment wants the 10-dimension walk plus passes A and B
-  before it is committed; that was not done this session and is the reason the
-  amendment is a draft rather than a commit.
+- **~~Ratify or reject the SCOPE v1.6 §5 amendment.~~ RATIFIED 2026-10-31** —
+  strength is a second sport, and the timed-exercise shape is no longer labelled
+  unverified: it is confirmed on the watch. The ten dimensions plus passes A and
+  B were walked before the commit, in §15, which is what the standing orders ask
+  and what the draft was waiting on. The order was still wrong — the code shipped
+  first and §15.1 says so.
 - **Ratify or reject the §5 tool-split deviation** — `garmin_workouts` (preview,
   read-only) and `garmin_workout_create` (write) as two tools, because
   `ToolAnnotations` are per tool and §5 asks for per-action honesty. If rejected,
@@ -3100,9 +3143,12 @@ confirmed the first workout, not the response.
   decision, not a cleanup.
 - **The GHA cache export flakes** (`failed to reserve cache`) when two runs are in flight;
   `ignore-error=true` on `cache-to` would make it a warning instead of a red check.
-- **SCOPE v1.6 owes** §7's Connectors-not-Developer and per-user Docker path, §7a's bind address
-  for the web UI, §9's location exposure via activity detail — and now the §5 tool-split
-  deviation, if Mahi ratifies it.
+- **SCOPE v1.7 owes** §7's Connectors-not-Developer and per-user Docker path, §7a's bind address
+  for the web UI, §9's location exposure via activity detail — **committed, not carried**, by the
+  ratification decision of 2026-10-31 — plus unschedule-by-lookup (§15.13 option 2). The §5
+  tool-split deviation is **still undecided**: `garmin_workouts` and `garmin_workout_create`
+  ship as two tools and §5 does not mention the split, so the code and the document disagree on
+  a point v1.6's ratification did not touch.
 
 **A `login` should not be run casually.** Both mobile login paths took a 429 on 2026-10-11 and a
 fallback carried it, so the login path is IP-rate-limited. The data path has been fine across
