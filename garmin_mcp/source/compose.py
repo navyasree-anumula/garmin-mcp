@@ -12,11 +12,20 @@ imports nothing from `client.py`, and `tests/test_compose.py` asserts that by
 walking the AST -- "makes no requests" is a claim that rots the first time
 somebody adds a convenient lookup.
 
-**v0 is time and distance with no target.** `TargetType` offers only zone-based
-targets, `get_heart_rate_zones` has never been run against this account, and
-absolute ranges through `ExecutableStep`'s `extra="allow"` are unverified
-against what Garmin accepts. So a target is refused rather than guessed, and the
-first live cycle confirms one unknown instead of three.
+**v1.6 allows one target: an explicit pace range on a running step.** v0
+refused every target, and the reason given was that every `TargetType` Garmin
+offers is zone-based and this account's zones have never been fetched. The
+second half is still true; the first half was too broad. **An explicit pace
+range is a pair of absolute speeds** -- it needs no zone, no heart-rate data and
+no profile read -- so the refusal narrows rather than disappearing. Heart-rate
+targets, pace *zones*, power, cadence and resistance stay refused, and so does
+any target on a strength step.
+
+**Garmin's side of a pace target is one constant, `PACE_CONTRACT`, and almost
+all of it is unverified.** The target *id* is upstream's `TargetType.PACE_ZONE`;
+the key string, the display order, the unit and which of the two values carries
+the faster bound are community convention. They live in one place so that a
+wrong one is wrong once (§9's risk row, accepted for one session).
 
 **v1.6 adds a strength circuit, and one shape in it is ours rather than
 upstream's.** A named exercise measured in *time* -- 40 seconds of Goblet Squat
@@ -24,11 +33,12 @@ upstream's.** A named exercise measured in *time* -- 40 seconds of Goblet Squat
 REPS and takes no duration, and `create_strength_rest_step` is timed but names
 nothing. `_build_exercise` combines them, from the library's own enum members,
 and **Garmin accepted the combination** on 2026-10-31 — workout 1746708075,
-uploaded, scheduled, and visible on the watch. It was the open question of v1.6
-and it is now answered yes; what is still unconfirmed is narrower, namely
-whether each step's exercise NAME renders on the watch mid-session. Every other
-strength piece is upstream's: the `StrengthWorkout` model, the rest step, and
-the `category`/`exerciseName` catalogue.
+uploaded, scheduled, and **confirmed end to end on the watch**: each exercise
+name, its duration and the rounds all show as planned. It was the open question
+of v1.6, it is answered yes, and nothing about it is left unmeasured -- the
+reps-based fallback is not needed. Every other strength piece is upstream's: the
+`StrengthWorkout` model, the rest step, and the `category`/`exerciseName`
+catalogue.
 
 **What this module does not do is design the session.** It composes what it is
 told. Which distance, how many reps, how long the recovery -- those need how the
@@ -41,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -86,11 +97,22 @@ TIME_BUILDERS = {
     "cooldown": create_cooldown_step,
 }
 
-#: A strength circuit's timed rest. The work step is `exercise`, which is not
-#: here because it needs a name as well as a duration and so does not fit the
-#: `builder(seconds, order)` shape -- `_build_exercise` makes that one.
+#: A strength circuit's timed steps that carry no exercise name. The work step
+#: is `exercise`, which is not here because it needs a name as well as a
+#: duration and so does not fit the `builder(seconds, order)` shape --
+#: `_build_exercise` makes that one.
+#:
+#: `warmup` and `cooldown` arrive after the first live strength session had to
+#: drop them: v1.6 offered `exercise` and `rest` only, so a real 30-minute
+#: session came out as a bare circuit and the human was told to warm up on
+#: their own. The builders are upstream's and generic across sports, but
+#: **Garmin's acceptance of a warmup step inside a `strength_training` workout
+#: is unverified** -- the next live strength create settles it, and it is cheap
+#: because that create was going to happen anyway.
 STRENGTH_TIME_BUILDERS = {
+    "warmup": create_warmup_step,
     "rest": create_strength_rest_step,
+    "cooldown": create_cooldown_step,
 }
 
 TIME_BUILDERS_BY_SPORT = {
@@ -136,6 +158,53 @@ NO_TARGET_KEY = "no.target"
 NO_TARGET_ID = 1
 
 
+@dataclass(frozen=True)
+class PaceContract:
+    """Garmin's side of a pace target: every part of it a claim, in one place.
+
+    The **id** is the only part that is not a guess -- it is upstream's
+    `TargetType.PACE_ZONE`, read rather than written as a literal. The key
+    string, the display order, the unit and **which of the two values carries
+    the faster bound** are community convention, and the library writes none of
+    them: it writes `"no.target"` and nothing else.
+
+    **[Mahi-verify]** by building one pace step in Connect and reading it back:
+    the key string, the unit, the `displayOrder`, and which value Garmin expects
+    first. Until that read-back all four are unverified. They are one constant
+    rather than four literals at four call sites because the failure this guards
+    is a swapped bound -- the watch alerting continuously, the easy end becoming
+    the hard end -- and a wrong constant is wrong in one place.
+    """
+
+    target_key: str
+    target_id: int
+    display_order: int
+    faster_bound_field: str
+    slower_bound_field: str
+    unit: str
+
+
+PACE_CONTRACT = PaceContract(
+    target_key="pace.zone",
+    target_id=TargetType.PACE_ZONE,
+    display_order=6,
+    faster_bound_field="targetValueOne",
+    slower_bound_field="targetValueTwo",
+    unit="m/s",
+)
+
+#: The band a pace must fall inside, in seconds per kilometre. Faster than
+#: 2:30/km is quicker than anybody has run a marathon and slower than 12:00/km
+#: is slower than walking, so a value outside it is a typo or a unit mistake
+#: rather than a session. Mahi set the band.
+PACE_FASTEST_SECS_PER_KM = 150.0
+PACE_SLOWEST_SECS_PER_KM = 720.0
+
+#: `mm:ss`, two digits of seconds, no fraction. Strictness is the point: see
+#: `parse_pace_min_km`.
+_PACE_FORMAT = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
 class ComposeError(GarminSourceError):
     """A session we refuse to compose, or a structure we refuse to call valid.
 
@@ -154,6 +223,11 @@ class Step:
     `"repeat"` and neither measure is set. `exercise` belongs to an `exercise`
     step and nothing else; on any other kind it is refused rather than dropped,
     because a dropped name is one the watch silently will not show.
+
+    `pace_min_km` is a two-element range, faster bound first, on a **running**
+    step only. On a strength step and on a repeat group it is refused rather
+    than dropped, for the same reason as `exercise`: Garmin stores a target per
+    step, so a target put anywhere else disappears without complaint.
     """
 
     kind: str
@@ -162,6 +236,7 @@ class Step:
     iterations: int | None = None
     repeat: tuple["Step", ...] = field(default_factory=tuple)
     exercise: str | None = None
+    pace_min_km: tuple[str, str] | None = None
 
 
 def _positive(value: float, what: str) -> None:
@@ -176,6 +251,143 @@ def _positive(value: float, what: str) -> None:
         raise ComposeError(f"{what} must be a finite number, not {value!r}.")
     if value <= 0:
         raise ComposeError(f"{what} must be greater than zero, not {value!r}.")
+
+
+def _format_pace(secs_per_km: float) -> str:
+    """Seconds per kilometre as `m:ss`, which is the only unit a human sees.
+
+    Rendering from the number rather than echoing the input string is what makes
+    the preview and the payload two readings of one value. `"04:20"` comes back
+    as `4:20` because the canonical form is the one the conversion produced.
+    """
+    whole = int(round(secs_per_km))
+    return f"{whole // 60}:{whole % 60:02d}"
+
+
+def parse_pace_min_km(text: Any) -> float:
+    """Seconds per kilometre, from `mm:ss` as a human writes a pace.
+
+    Strict on purpose, in both directions it could be loose. `"4:75"` parses
+    arithmetically to 5:15 and is not what anybody meant; `"4:20.5"` is a
+    precision no watch displays. Both are refused rather than normalised,
+    because a pace quietly moved is a pace the human approved in words that no
+    longer describe the workout.
+    """
+    if not isinstance(text, str):
+        raise ComposeError(
+            f"a pace is written as mm:ss per kilometre, not {text!r}."
+        )
+    match = _PACE_FORMAT.match(text.strip())
+    if match is None:
+        raise ComposeError(
+            f"{text!r} is not a pace. Write it as mm:ss per kilometre -- "
+            "'4:20' -- with two digits of seconds and no fractional part."
+        )
+    minutes, seconds = int(match.group(1)), int(match.group(2))
+    if seconds >= 60:
+        raise ComposeError(
+            f"{text!r} has {seconds} seconds in it. A pace is mm:ss, so the "
+            f"seconds must be under 60: as written it would mean "
+            f"{_format_pace(minutes * 60 + seconds)}, which is not what it "
+            "looks like."
+        )
+    total = float(minutes * 60 + seconds)
+    if not PACE_FASTEST_SECS_PER_KM <= total <= PACE_SLOWEST_SECS_PER_KM:
+        raise ComposeError(
+            f"{text!r} is outside the pace band this server composes "
+            f"({_format_pace(PACE_FASTEST_SECS_PER_KM)} to "
+            f"{_format_pace(PACE_SLOWEST_SECS_PER_KM)} per km). A pace outside "
+            "it is a typo or a unit mistake rather than a session."
+        )
+    return total
+
+
+@dataclass(frozen=True)
+class PaceTarget:
+    """One pace range, converted once, read by everything that needs it.
+
+    Holds both units because they have different audiences and must not be
+    computed twice: the human approves **min/km** and the payload carries
+    **m/s**. If the summary re-parsed the input string while the structure used
+    the conversion, the two could disagree and the human would approve the right
+    words over the wrong workout (Pass A.1).
+
+    The m/s values are rounded at construction, which is **upstream of the
+    approval marker** -- rounding later would make the preview's marker and the
+    create's marker disagree over the same session (Pass B.1).
+    """
+
+    faster_secs_per_km: float
+    slower_secs_per_km: float
+    faster_m_s: float
+    slower_m_s: float
+
+    @property
+    def rendered(self) -> str:
+        """The range in min/km. A human is never shown m/s."""
+        return (
+            f"{_format_pace(self.faster_secs_per_km)}-"
+            f"{_format_pace(self.slower_secs_per_km)}/km"
+        )
+
+    def target_block(self) -> dict[str, Any]:
+        """Garmin's `targetType` block, entirely from `PACE_CONTRACT`."""
+        return {
+            "workoutTargetTypeId": PACE_CONTRACT.target_id,
+            "workoutTargetTypeKey": PACE_CONTRACT.target_key,
+            "displayOrder": PACE_CONTRACT.display_order,
+        }
+
+    def target_values(self) -> dict[str, float]:
+        """The two speeds, keyed by the fields `PACE_CONTRACT` names.
+
+        `ExecutableStep` declares neither field, and its `extra="allow"` is what
+        lets them through -- the same mechanism `_build_exercise` uses, and the
+        only part of a pace step that is not upstream's.
+        """
+        return {
+            PACE_CONTRACT.faster_bound_field: self.faster_m_s,
+            PACE_CONTRACT.slower_bound_field: self.slower_m_s,
+        }
+
+
+def pace_target(bounds: Any) -> PaceTarget:
+    """A pace range, validated and converted -- the one conversion in the path.
+
+    Refuses an inverted range rather than sorting it. Sorting would be kinder to
+    a caller that typed the bounds backwards and would hide a caller that has
+    understood the field backwards, which is the one of the two worth finding.
+    """
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+        raise ComposeError(
+            "a pace target is a range of two paces in min/km, faster bound "
+            "first -- ['4:20', '4:40']. A single pace is not a range."
+        )
+
+    faster = parse_pace_min_km(bounds[0])
+    slower = parse_pace_min_km(bounds[1])
+
+    if faster == slower:
+        raise ComposeError(
+            f"a pace range needs two different bounds, not "
+            f"{_format_pace(faster)} twice. A zero-width range is not a range, "
+            "and what Garmin does with one has never been measured."
+        )
+    if faster > slower:
+        raise ComposeError(
+            f"a pace range is written faster bound first: "
+            f"['{_format_pace(slower)}', '{_format_pace(faster)}'], not "
+            f"['{_format_pace(faster)}', '{_format_pace(slower)}']. It is "
+            "refused rather than sorted, because sorting would hide a caller "
+            "that has the two fields the wrong way round."
+        )
+
+    return PaceTarget(
+        faster_secs_per_km=faster,
+        slower_secs_per_km=slower,
+        faster_m_s=round(1000.0 / faster, 3),
+        slower_m_s=round(1000.0 / slower, 3),
+    )
 
 
 #: How many candidates a refusal lists before it says "and N more". A refusal
@@ -224,8 +436,8 @@ def resolve_exercise(term: str | None) -> dict[str, str]:
         raise ComposeError(
             f"no Garmin exercise is named {wanted!r}. Garmin stores an exercise as "
             "a category and a name from its own catalogue, so a name it does not "
-            "hold cannot be written. Try a broader word -- 'squat', 'press', "
-            "'plank', 'row' -- and the refusal will list what it matches."
+            "hold cannot be written. Search the catalogue for a broader word -- "
+            "'squat', 'press', 'plank', 'row' -- rather than guessing again."
         )
 
     shown = ", ".join(repr(entry["name"]) for entry in matches[:_MAX_CANDIDATES])
@@ -233,9 +445,77 @@ def resolve_exercise(term: str | None) -> dict[str, str]:
     more = f", and {extra} more" if extra > 0 else ""
     raise ComposeError(
         f"{wanted!r} matches {len(matches)} Garmin exercises: {shown}{more}. Name "
-        "one exactly. Picking the nearest would put a different exercise on the "
-        "watch than the one that was approved."
+        "one exactly, or search the catalogue to see them all. Picking the "
+        "nearest would put a different exercise on the watch than the one that "
+        "was approved."
     )
+
+
+#: How many matches a search returns unless asked for more. Enough to show a
+#: category's worth of variants, short enough that an agent reads it rather
+#: than summarising it -- the same reasoning as `_MAX_CANDIDATES`, one step up.
+DEFAULT_SEARCH_LIMIT = 25
+
+
+def search_exercises(
+    term: str, limit: int = DEFAULT_SEARCH_LIMIT
+) -> tuple[tuple[dict[str, str], ...], int]:
+    """Catalogue entries matching every word in `term`, best first, and the total.
+
+    Discovery, not commitment. `resolve_exercise` refuses an ambiguous term
+    because committing to a guess puts the wrong exercise on a watch -- and
+    until now there was no way to resolve that ambiguity except to guess again.
+    The first live session spent three turns on it. This is the looking, at the
+    cost of **zero Garmin requests**: the catalogue is a constant in the
+    library, not an endpoint.
+
+    **Every name this returns resolves unambiguously.** It returns catalogue
+    display names, and `resolve_exercise`'s exact pass matches one of those by
+    definition -- so a name read out of a search can be handed straight back to
+    a step. That property is the whole reason the search is worth having, and
+    it is asserted rather than assumed.
+
+    All words must appear, in any order, so "squat goblet" finds what "goblet
+    squat" finds. Deliberately more permissive than `resolve_exercise`: looking
+    should be easy and committing should be strict.
+
+    Returns the total beside the capped list. A truncated list that does not say
+    it is truncated is the silent partial this project refuses everywhere else
+    -- it reads as "these are the only ones", which is how a human ends up
+    believing an exercise does not exist.
+    """
+    words = [word for word in (term or "").lower().split() if word]
+    if not words:
+        raise ComposeError(
+            "a search needs something to search for. Try a movement word -- "
+            "'squat', 'lunge', 'press', 'plank'."
+        )
+    if limit < 1:
+        raise ComposeError(f"limit must be at least 1, not {limit}.")
+
+    matches = [
+        entry
+        for entry in EXERCISES
+        if all(word in entry["name"].lower() for word in words)
+    ]
+
+    needle = " ".join(words)
+
+    def rank(entry: dict[str, str]) -> tuple[int, str]:
+        """Exact name, then names that start with the term, then the rest.
+
+        Alphabetical within each band, so the order does not depend on the
+        catalogue's own ordering and the same search twice reads the same.
+        """
+        name = entry["name"].lower()
+        if name == needle:
+            return (0, name)
+        if name.startswith(needle):
+            return (1, name)
+        return (2, name)
+
+    matches.sort(key=rank)
+    return tuple(matches[:limit]), len(matches)
 
 
 def _build_exercise(step: Step, order: int) -> Any:
@@ -249,13 +529,12 @@ def _build_exercise(step: Step, order: int) -> Any:
     same enum members the library's own builders use rather than from literals
     of ours.
 
-    **Garmin accepts it.** CONFIRMED by the first live create, 2026-10-31:
-    workout 1746708075, uploaded and scheduled with no warnings and visible on
-    the watch. Every field was one upstream writes somewhere and the combination
-    was ours; the combination is now measured rather than hoped. Still
-    unconfirmed, and narrower: whether the exercise NAME renders on the watch
-    during the session. (docs/SCOPE.md §5 -- the v1.6 amendment covering
-    strength remains drafted, not yet ratified.)
+    **Garmin accepts it, and the watch shows it.** CONFIRMED end to end by the
+    first live create, 2026-10-31: workout 1746708075, uploaded and scheduled
+    with no warnings, and the watch displays each exercise name, its duration
+    and the rounds as planned. Every field was one upstream writes somewhere and
+    the combination was ours; the combination is now measured rather than hoped,
+    and the reps-based fallback is not needed. (docs/SCOPE.md §5, v1.6.)
     """
     if step.distance_m is not None:
         raise ComposeError(
@@ -295,6 +574,29 @@ def _build_exercise(step: Step, order: int) -> Any:
     )
 
 
+def _with_target(built: Any, target_values: dict[str, float]) -> Any:
+    """A built step, plus the two target values if there are any.
+
+    Its callers pass the target block as a third argument **only when there is
+    one**, which is not fussiness: `create_strength_rest_step` takes two
+    arguments and has no `target_type` parameter at all, so handing it a `None`
+    third argument is a `TypeError`. §15's 3.b read the five *running* builders
+    and generalised to "every upstream builder"; the strength rest step is the
+    counter-example, and it is a second reason the per-sport refusal has to come
+    first -- by the time a builder is chosen, a pace in a strength session is
+    already a crash rather than a wrong workout.
+
+    `targetValueOne` and `targetValueTwo` are not parameters of any upstream
+    builder and are not declared on `ExecutableStep`; they arrive through its
+    `extra="allow"`, which `model_copy` carries into `model_dump`. Measured, not
+    assumed -- and the empty case returns the step untouched, so a session with
+    no targets composes byte-for-byte what it composed before pace existed.
+    """
+    if not target_values:
+        return built
+    return built.model_copy(update=target_values)
+
+
 def _build_step(step: Step, order: int, sport: str) -> Any:
     """One step, built by the builder its shape names.
 
@@ -320,6 +622,24 @@ def _build_step(step: Step, order: int, sport: str) -> Any:
             "A step ends one way or the other, never both."
         )
 
+    # Checked here, above the `exercise` return, because a pace on an exercise
+    # step would otherwise be dropped rather than refused -- the failure this
+    # project keeps paying for.
+    target_block: dict[str, Any] | None = None
+    target_values: dict[str, float] = {}
+    if step.pace_min_km is not None:
+        if sport != "running":
+            raise ComposeError(
+                f"step {order} ({step.kind}): a pace target is for a running "
+                f"step, and this is a {sport} session, which is prescribed by "
+                "time. This is refused by sport rather than being impossible to "
+                f"build: a {sport} warmup is made by running's own builder, "
+                "which does accept a target."
+            )
+        target = pace_target(step.pace_min_km)
+        target_block = target.target_block()
+        target_values = target.target_values()
+
     if step.kind == "exercise":
         return _build_exercise(step, order)
 
@@ -337,7 +657,9 @@ def _build_step(step: Step, order: int, sport: str) -> Any:
                 f"unknown step kind {step.kind!r}. Valid kinds: {', '.join(kinds)}."
             )
         _positive(step.duration_secs, f"step {order} ({step.kind}) duration_secs")
-        return builder(step.duration_secs, order)
+        if target_block is None:
+            return builder(step.duration_secs, order)
+        return _with_target(builder(step.duration_secs, order, target_block), target_values)
 
     if step.distance_m is not None:
         distance_builders = DISTANCE_BUILDERS_BY_SPORT[sport]
@@ -354,7 +676,9 @@ def _build_step(step: Step, order: int, sport: str) -> Any:
                 "instead."
             )
         _positive(step.distance_m, f"step {order} ({step.kind}) distance_m")
-        return builder(step.distance_m, order)
+        if target_block is None:
+            return builder(step.distance_m, order)
+        return _with_target(builder(step.distance_m, order, target_block), target_values)
 
     raise ComposeError(
         f"step {order} ({step.kind}) has neither duration_secs nor distance_m. "
@@ -369,6 +693,12 @@ def _build_repeat(step: Step, order: int, sport: str) -> tuple[Any, int]:
     across the segment, not per-group -- so this returns the counter it consumed
     rather than letting the caller guess.
     """
+    if step.pace_min_km is not None:
+        raise ComposeError(
+            f"step {order}: a repeat group carries no target of its own. Put the "
+            "pace on the steps inside it -- Garmin stores a target per step, so "
+            "a pace on the group would vanish without being refused."
+        )
     if step.iterations is None:
         raise ComposeError(f"step {order}: a repeat group needs iterations.")
     if step.iterations < 2:
@@ -531,6 +861,16 @@ def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
     number in a field the calendar may display, so a distance step contributes
     zero and the basis says so.
 
+    **A pace target does not change that, and the basis stops saying there is no
+    pace when one is present.** A target is a *prescription* -- what the athlete
+    has been told to run -- not a measurement of what they do run. Estimating
+    from it would turn an instruction into a measurement and put a computed
+    number in the same displayed field the paragraph above refuses to invent
+    one for. So a paced distance step still contributes zero, and the basis says
+    which of the two reasons applies. This is the narrower of the two readings
+    of §5's "must stop claiming there is no pace", and it is the one ratified
+    (option (a), 2026-10-31): the sentence changes, the arithmetic does not.
+
     That means an all-distance session estimates 0, which reads as broken unless
     the basis is read with it. The two are returned together for exactly that
     reason, and `estimated_duration_secs` is never surfaced without its basis.
@@ -550,8 +890,17 @@ def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
         elif step.distance_m is not None:
             distance_steps += 1
 
+    paced = _paced_count(steps)
+
     basis = "Sum of the time-based steps."
-    if distance_steps:
+    if paced and not distance_steps:
+        basis = (
+            f"Sum of the time-based steps. {paced} step(s) carry an explicit "
+            "pace target, which is not used to estimate anything: a target is "
+            "what the athlete was told to run, not a measurement of what they "
+            "do run."
+        )
+    elif distance_steps and not paced:
         basis = (
             f"Sum of the time-based steps only. {distance_steps} distance step(s) "
             "contribute 0: this account has no measured pace, and assuming one "
@@ -559,7 +908,33 @@ def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
             "Garmin may recompute this on upload -- unverified until the "
             "supervised live cycle."
         )
+    elif distance_steps and paced:
+        basis = (
+            f"Sum of the time-based steps only. {distance_steps} distance step(s) "
+            f"contribute 0. {paced} step(s) carry an explicit pace target, so it "
+            "is no longer true that there is no pace here -- but a target is a "
+            "prescription rather than a measured pace, and estimating from one "
+            "would turn an instruction into a number in a field the calendar may "
+            "display. It is deliberately not used. Garmin may recompute this on "
+            "upload -- unverified until the supervised live cycle."
+        )
     return int(timed), basis
+
+
+def _paced_count(steps: tuple[Step, ...]) -> int:
+    """How many steps carry a pace target, counting a repeat's children once.
+
+    Once, not once per iteration: the basis sentence says how many steps of the
+    session were written with a target, which is a fact about the prescription
+    and not about how much of it is distance the estimate had to skip.
+    """
+    total = 0
+    for step in steps:
+        if step.kind == "repeat":
+            total += sum(1 for child in step.repeat if child.pace_min_km is not None)
+        elif step.pace_min_km is not None:
+            total += 1
+    return total
 
 
 def _repeat_totals(step: Step) -> tuple[float, int]:
@@ -670,13 +1045,51 @@ def validate_structure(structure: dict[str, Any]) -> None:
                 "A rest step is exempt: it names no exercise by design."
             )
 
+        # The relaxation is per sport AND per target type. A global loosening
+        # would re-permit a target on a strength step, which is the refusal the
+        # whole strength path depends on arriving by the back door (§15 3.a).
         target = item.get("targetType") or {}
         key = target.get("workoutTargetTypeKey")
-        if key != NO_TARGET_KEY or target.get("workoutTargetTypeId") != NO_TARGET_ID:
+        target_id = target.get("workoutTargetTypeId")
+        faster = item.get(PACE_CONTRACT.faster_bound_field)
+        slower = item.get(PACE_CONTRACT.slower_bound_field)
+        where = f"step {item.get('stepOrder')}"
+
+        if key == NO_TARGET_KEY and target_id == NO_TARGET_ID:
+            if faster is not None or slower is not None:
+                raise ComposeError(
+                    f"{where} carries no target type but holds "
+                    f"{PACE_CONTRACT.faster_bound_field}/"
+                    f"{PACE_CONTRACT.slower_bound_field}. A target value with no "
+                    "target type is a number the watch has no rule for."
+                )
+        elif key == PACE_CONTRACT.target_key and target_id == PACE_CONTRACT.target_id:
+            if sport_key != _sport_type("running")["sportTypeKey"]:
+                raise ComposeError(
+                    f"{where} carries a pace target in a {sport_key!r} session. "
+                    "Pace targets are running only (§5, v1.6); every other sport "
+                    "is prescribed by time."
+                )
+            if faster is None or slower is None:
+                raise ComposeError(
+                    f"{where} carries a pace target with only one bound. A pace "
+                    f"range needs both {PACE_CONTRACT.faster_bound_field} and "
+                    f"{PACE_CONTRACT.slower_bound_field}."
+                )
+            _positive(float(faster), f"{where} {PACE_CONTRACT.faster_bound_field}")
+            _positive(float(slower), f"{where} {PACE_CONTRACT.slower_bound_field}")
+            if float(faster) <= float(slower):
+                raise ComposeError(
+                    f"{where}: {PACE_CONTRACT.faster_bound_field} carries the "
+                    f"faster bound, so in {PACE_CONTRACT.unit} it must be the "
+                    f"larger number -- got {faster} against {slower}."
+                )
+        else:
             raise ComposeError(
-                f"step {item.get('stepOrder')} carries target {key!r}. v0 composes "
-                "no targets: every TargetType Garmin offers is zone-based, and this "
-                "account's zones have never been fetched."
+                f"{where} carries target {key!r}. v1.6 composes an explicit pace "
+                "range on a running step and nothing else: every other TargetType "
+                "Garmin offers is zone-based, and this account's zones have never "
+                "been fetched."
             )
 
         value = item.get("endConditionValue")

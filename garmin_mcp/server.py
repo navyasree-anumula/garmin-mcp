@@ -345,6 +345,120 @@ def garmin_health(
 
 
 # --------------------------------------------------------------------------
+# The exercise catalogue -- a lookup, not an endpoint (docs/SCOPE.md §5)
+# --------------------------------------------------------------------------
+
+
+class ExerciseMatch(BaseModel):
+    """One catalogue entry. `name` is the field to pass back to a step."""
+
+    name: str = Field(
+        description=(
+            "Garmin's display name, and the value to give a step's `exercise`. "
+            "Every name returned here resolves unambiguously, so it can be "
+            "copied straight into a workout."
+        )
+    )
+    category: str = Field(description="Garmin's category, e.g. SQUAT.")
+    exercise: str = Field(description="Garmin's exercise key, e.g. GOBLET_SQUAT.")
+
+
+class ExerciseSearch(BaseModel):
+    """What matched, how many there were, and whether the list was cut short."""
+
+    search: str = Field(description="The term that was searched for.")
+    matches: list[ExerciseMatch] = Field(
+        description="The matches, best first: exact name, then names starting with the term, then the rest."
+    )
+    shown: int = Field(description="How many matches are in this response.")
+    total_matches: int = Field(
+        description=(
+            "How many matched in total. Compare with `shown`: a larger total "
+            "means the list was capped and there are more."
+        )
+    )
+    truncated: bool = Field(
+        description="True when `total_matches` exceeds `shown`. Raise `limit` or narrow the search."
+    )
+    requests_made: int = Field(
+        description="Garmin requests this call made. Always 0 -- the catalogue ships in the library."
+    )
+    note: str = Field(description="What this call did and did not do.")
+
+
+_EXERCISE_NOTE = (
+    "Nothing was sent to Garmin: the exercise catalogue is a constant that ships "
+    "inside the library, so this call reaches no endpoint, spends no request "
+    "budget and cannot hit a rate limit. Use it when `garmin_workout_create` or "
+    "a preview refuses an exercise name as ambiguous -- pass one of the `name` "
+    "values back verbatim and it will resolve."
+)
+
+
+@mcp.tool(
+    title="Search Garmin's exercise catalogue",
+    annotations=ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    ),
+)
+def garmin_exercises(
+    search: Annotated[
+        str,
+        Field(
+            description=(
+                "Words to look for in the exercise name. All of them must "
+                "appear, in any order, so 'squat goblet' finds the same entry "
+                "as 'goblet squat'. Case does not matter."
+            )
+        ),
+    ],
+    limit: Annotated[
+        int, Field(description="How many matches to return. Default 25.")
+    ] = source_compose.DEFAULT_SEARCH_LIMIT,
+) -> ExerciseSearch:
+    """Look up what Garmin calls an exercise, without touching Garmin.
+
+    **Zero requests.** The catalogue is 1527 entries compiled into the library,
+    not an endpoint, so this is free, cannot fail on a rate limit and costs
+    nothing to run repeatedly.
+
+    **This exists because refusing was not enough.** A strength step must name
+    one catalogue entry, and an ambiguous name is refused rather than resolved
+    to the nearest match -- the right call, since a guess puts a different
+    exercise on the watch under a name that reads correct. But the first live
+    strength session then had no way to resolve the ambiguity except to guess
+    again, and spent three turns doing it. This is the looking.
+
+    Every `name` returned resolves unambiguously, so the answer to a refusal is
+    to search, show the human the options, and pass a `name` back verbatim.
+    """
+    try:
+        matches, total = source_compose.search_exercises(search, limit)
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    if not matches:
+        raise ToolError(
+            f"no Garmin exercise name contains all of {search!r}. The catalogue "
+            "holds 1527 entries; try one broader movement word, such as 'squat', "
+            "'lunge', 'press', 'row' or 'plank'."
+        )
+
+    return ExerciseSearch(
+        search=search,
+        matches=[ExerciseMatch(**entry) for entry in matches],
+        shown=len(matches),
+        total_matches=total,
+        truncated=total > len(matches),
+        requests_made=0,
+        note=_EXERCISE_NOTE,
+    )
+
+
+# --------------------------------------------------------------------------
 # Workouts -- preview only (docs/SCOPE.md §5, v1.5)
 # --------------------------------------------------------------------------
 
@@ -411,7 +525,9 @@ class WorkoutStep(BaseModel):
             "against Garmin's own catalogue, which is what it stores -- 'goblet "
             "squat', 'push-up', 'mountain climber'. An ambiguous term is refused "
             "with the candidates listed rather than resolved to the nearest "
-            "match, so name one exactly if asked."
+            "match. When that happens, call `garmin_exercises` to search the "
+            "catalogue -- it makes no Garmin requests -- and pass one of its "
+            "`name` values back verbatim."
         ),
     )
     duration_secs: float | None = Field(
@@ -419,6 +535,20 @@ class WorkoutStep(BaseModel):
     )
     distance_m: float | None = Field(
         default=None, description="How far this step runs, in metres. Interval only."
+    )
+    pace_min_km: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional target pace range for a RUNNING step, in min/km, as two "
+            "strings with the faster bound first -- ['4:20', '4:40']. Refused "
+            "rather than adjusted if the bounds are equal or the wrong way "
+            "round, if the seconds are 60 or more, if the seconds have a "
+            "fraction, or if either bound is outside 2:30-12:00 per km. A pace "
+            "on a strength step, or on a repeat group instead of the steps "
+            "inside it, is refused. Heart-rate, power, cadence and zone-based "
+            "targets are not available: they depend on a profile this account "
+            "has never been read for."
+        ),
     )
     iterations: int | None = Field(
         default=None, description="How many times a repeat group repeats. Minimum 2."
@@ -522,9 +652,26 @@ def _as_compose_steps(steps: list[WorkoutStep]) -> tuple[source_compose.Step, ..
             iterations=step.iterations,
             repeat=_as_compose_steps(step.repeat),
             exercise=step.exercise,
+            pace_min_km=(
+                tuple(step.pace_min_km) if step.pace_min_km is not None else None
+            ),
         )
         for step in steps
     )
+
+
+def _pace_suffix(step: WorkoutStep) -> str:
+    """` @ 4:20-4:40/km`, or nothing -- rendered by the one converter.
+
+    **Not re-parsed from the argument.** The words a human approves and the
+    bytes Garmin stores have to be two renderings of one value; computing them
+    separately is how somebody approves the right pace on the wrong workout
+    (SCOPE §15, Pass A.1 and B.3). So this calls `pace_target` -- the same
+    function the structure was built from -- and shows what it produced.
+    """
+    if step.pace_min_km is None:
+        return ""
+    return f" @ {source_compose.pace_target(step.pace_min_km).rendered}"
 
 
 def _summarise(steps: list[WorkoutStep]) -> list[str]:
@@ -549,9 +696,9 @@ def _summarise(steps: list[WorkoutStep]) -> list[str]:
                 f"[{entry['category']}/{entry['exercise']}]"
             )
         elif step.duration_secs is not None:
-            lines.append(f"{step.kind}: {step.duration_secs:g}s")
+            lines.append(f"{step.kind}: {step.duration_secs:g}s{_pace_suffix(step)}")
         elif step.distance_m is not None:
-            lines.append(f"{step.kind}: {step.distance_m:g}m")
+            lines.append(f"{step.kind}: {step.distance_m:g}m{_pace_suffix(step)}")
         else:
             # Unreachable through the composer, which refuses this -- but a
             # summary that silently dropped a step would be worse than one that
@@ -613,10 +760,21 @@ def garmin_workouts(
     is and what hurts, which no Garmin endpoint holds. They belong in the
     conversation (docs/SCOPE.md §1).
 
-    **No pace or heart-rate target, in either sport.** Every target Garmin
-    offers is zone-based and this account's zones have never been fetched, so a
-    target is refused rather than guessed. Ask for a target and the refusal says
-    this.
+    **One target, and only on a running step: an explicit pace range.** Give a
+    step `pace_min_km` as two paces in min/km with the faster bound first --
+    `["4:20", "4:40"]` -- and the preview shows the range in min/km while the
+    structure carries it in metres per second, both from one conversion. **Every
+    other target is still refused**: heart rate, power, cadence, resistance and
+    pace *zones* all depend on a profile this account has never been read for,
+    and a pace on a strength step is refused because a circuit is prescribed by
+    time. Ask for one of those and the refusal says which it is.
+
+    **Garmin's side of a pace target is unverified.** The target id is the
+    library's own; the key string, the unit, the display order and which of the
+    two values carries the faster bound are community convention, confined to
+    one constant, and settle on a read-back from Connect. The first live pace
+    session is the check -- run outside the range on purpose and see whether the
+    watch alerts, and in which direction.
 
     **A strength session is a circuit.** Put the round in a repeat group --
     exercise, rest, exercise, rest -- and give the group its iterations. Each

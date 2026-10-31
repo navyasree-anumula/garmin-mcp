@@ -2767,13 +2767,12 @@ instead, in the comment above each list.
 this id and nothing else: `throwaway test` 1821895273 (27 Oct, from a build with
 no `id_keys`), `Runner strength 30` 1825661241 (31 Oct).
 
-**The exercise names render.** Cross-checked in the Connect app on the phone:
-the steps read `Goblet Squat`, `Hip Raise` and the rest, as composed. So the
-`category`/`exerciseName` pair on a TIME-ended step is not merely accepted, it
-is **displayed**. That was the last of the three outcomes still open, and it is
-the good one. Strictly, what is measured is Connect's rendering on a phone; the
-watch's own mid-session display was not observed separately, and the honest
-version of this claim says so.
+**The exercise names render, on the watch.** First cross-checked in the Connect
+app, then **confirmed on the watch itself**: each exercise name, its 40-second
+duration and the rounds all show as planned. So the `category`/`exerciseName`
+pair on a TIME-ended step is not merely accepted, it is **displayed by the
+device**. That was the last of the three outcomes still open and it is the good
+one: **the reps-based fallback is not needed and the claim needs no hedge.**
 
 **The flat form is a real finding too, not only a workaround.** A 24-step flat
 circuit was accepted and scheduled, so the repeat group is not required for a
@@ -2782,13 +2781,182 @@ strength session. The repeat-group path remains **unexercised live** in strength
 
 Tests: 590 -> 593.
 
+## 2026-10-31 (later) — looking up an exercise, and warming up before one
+
+Two gaps from the first live strength session, both of them friction the session
+actually hit rather than anything found by reading the code.
+
+**`garmin_exercises` — a lookup that reaches nothing.** Three of the session's
+six exercise names were refused as ambiguous, and the agent's only recovery was
+to guess again; it spent three turns doing it. The refusal was right —
+committing to a nearest match puts a different exercise on the watch under a
+name that reads correct — but **refusing without offering a way to look is half
+a design.** The catalogue is 1527 entries compiled into `garminconnect`, not an
+endpoint, so the search costs **zero Garmin requests**, cannot hit a rate limit
+and is free to run repeatedly. `open_world_hint=False` is the honest annotation
+and the only tool here that earns it.
+
+Search matches **all words in any order**, so "squat goblet" finds what "goblet
+squat" finds — deliberately more permissive than `resolve_exercise`, because
+looking should be easy and committing should be strict. Ranking is exact name,
+then names starting with the term, then the rest, alphabetical within each band
+so the same question reads the same twice. "Squat" is a display name *and* a
+substring of 125 others, so without the exact band the commonest input would
+return a wall.
+
+**The load-bearing test is `test_every_name_a_search_returns_resolves`.** The
+tool is worth having only if its output can be handed straight back to a step,
+and that is two functions agreeing rather than either being correct on its own.
+Parameterised over eight movement words, it would catch `resolve_exercise`
+growing stricter or the search starting to return something that is not a
+catalogue display name.
+
+**The truncation is reported, not hidden.** `shown`, `total_matches` and
+`truncated` come back together. A capped list that does not say it is capped
+reads as "these are the only ones", which is how a human concludes an exercise
+does not exist.
+
+**Strength sessions can warm up now.** v1.6 offered `exercise` and `rest` only,
+so the live 30-minute session came out as a bare circuit and the human was told
+to warm up unaided. `warmup` and `cooldown` join `STRENGTH_TIME_BUILDERS` using
+upstream's own generic builders. **Garmin's acceptance of a warmup step inside a
+`strength_training` workout is unverified** — the next live strength create
+settles it, and that create was going to happen anyway, so the unknown is free.
+
+**The published enum did not change, and that is the point.** `warmup` and
+`cooldown` were already in `STEP_KINDS` from running, so the flat enum is
+untouched and the per-sport rule does all the work. That was the arrangement the
+flat enum was accepted on, and this is the first change that tested it.
+
+**Two tests changed premise rather than being loosened.** `warmup` was the
+invalid kind in `test_the_refusal_lists_that_sports_kinds`; it is now valid in
+strength, so the test moved to `recovery` rather than having its assertion
+widened. And the category-exemption check is asserted in **both** directions —
+a warmup exempt, an unnamed work step still caught — because an exemption too
+narrow refuses every session with a warmup and one too broad re-permits the bug
+the check was written for.
+
+**One layering note.** The refusal cannot name `garmin_exercises`: §11 says
+`source/` does not know MCP exists. So `compose.py` says "search the catalogue"
+and the pointer to the actual tool lives in the `exercise` field's description,
+which is also where an agent reads it. Asserted, so the two cannot drift apart.
+
+Tests: 593 -> 638.
+
+## 2026-10-31 (SCOPE v1.6) — ratified, and the deferral that stopped being one
+
+**v1.6 is ratified.** Approved on a diff summary rather than a full re-read, which is the
+honest description and is what the header now says. The draft had asserted its own ratification
+in its version line before Mahi had seen it — the same shape as the laptop pin that #40
+withdrew, caught this time before it was committed rather than five days after.
+
+**Three decisions were taken at the gate, not during the walk**, so §15.15 records them
+separately rather than letting §15.2–§15.14 look as though the ten dimensions had produced
+them. The walk of record is still the one in §15.
+
+**Durable ids: option 2, the lookup.** The scheduled id is read back from Garmin's calendar at
+undo time; there is no ledger. It keeps account data off the tokens volume, which was the
+objection that killed option 1, and it says the same thing v1.5 said when it made the calendar
+the store for plan continuity. Option 3 — a `garmin_last_write` tool answering from process
+memory — is rejected outright, because Desktop runs two containers and the tool fails after
+exactly the restart that makes it necessary. **Unschedule-by-lookup is v1.7.** The v1.7 plan
+inherits two findings rather than rediscovering them: `get_scheduled_workouts` takes a calendar
+month and not a date window, so a lookup near a month boundary reads two months or misses one;
+and when the entry is already gone the lookup must refuse and name the date, because a silent
+success reads as evidence that the undo happened.
+
+**The three carried debts are committed to v1.7, firmly** — §7's client wiring, §7a's bind
+address, §9's location exposure via activity detail. Twice they were deferred as a scope
+decision; a third deferral would have been a debt, and the header says so in those words. What
+makes the commitment different from the two promises before it is that **v1.7 now has a code
+item** — unschedule-by-lookup — so it is no longer the docs-only version that slips because
+nothing in it is blocking.
+
+**The deferral was checked before it was granted, not after.** "Carry it to the next version" is
+only a scope decision if the current version does not depend on it, so each of the three was
+read against pace targets first: §7 touches no module, §7a is prose about a port on a web UI
+with no composer path through it, and §9 is a read path that pace targets add no request to.
+The one adjacency anywhere in §15 is A.5 and 4.b, and both point at the id question — which is
+decision 2 and already v1.7. Recorded because the answer being *no* is what made the commitment
+free, and a later reader deserves the check rather than the conclusion.
+
+**No fresh ten-dimension walk is owed for these three**, and that is said out loud rather than
+skipped quietly: decisions 1 and 3 are scope statements, and decision 2's mechanism is v1.7,
+where it gets its own ten plus A and B before any code is written.
+
+Tests: 638, unchanged — this session wrote documents, not code.
+
+## 2026-10-31 (pace targets) — the refusal narrowed, and three claims with it
+
+**v0 refused every target for a reason that was half true.** "Every `TargetType` Garmin offers
+is zone-based and this account's zones have never been fetched" — the second half still holds,
+the first half was too broad. An explicit pace *range* is a pair of absolute speeds: no zone, no
+heart-rate data, no profile read. So the refusal narrowed to one target instead of disappearing,
+and heart rate, power, cadence, resistance and pace *zones* are all still refused.
+
+**One converter, two audiences.** `pace_target` parses min/km, refuses what it should, converts
+to m/s rounded to 3 decimals, and hands back an object that renders **both** units. The
+structure reads `faster_m_s`; the preview reads `rendered`. The whole guarantee is that the words
+a human approves and the bytes Garmin stores are two renderings of one value — if the summary had
+re-parsed the input string, the two could disagree and **the human would approve the right words
+over the wrong workout.** `tests/test_garmin_workouts.py` asserts it the hard way: it takes the
+pace out of the summary line, converts it again, and finds those numbers in the payload.
+
+**The rendering is canonical, which is the proof.** `"04:20"` comes back as `4:20`, because the
+string is built from the parsed number rather than echoed. An echo would have passed a laxer test.
+
+**Three claims in the freshly-ratified §15 were wrong or too strong, and all three were found by
+doing the work rather than by re-reading the document.**
+
+- **2.a said the library "holds no pace key at all".** It defines `class TargetType` with
+  `PACE_ZONE = 6`. The **id is upstream's** and is now read from it instead of written as a
+  literal; what stays community convention is narrower — the key string, the `displayOrder`, the
+  unit, and which value carries the faster bound. That is what `PACE_CONTRACT` holds, and it is
+  one constant so that a wrong part is wrong once.
+- **3.b said "every upstream builder accepts a third `target_type`".** It read the five *running*
+  builders and generalised. `create_strength_rest_step(duration_seconds, step_order)` takes no
+  target at all, so passing one — even `None` — is a `TypeError`. **A test caught it**, which is
+  the part worth keeping: the first full-suite run after the plumbing went in failed thirteen
+  strength tests with `takes 2 positional arguments but 3 were given`. The third argument is now
+  passed only when a target exists, so an untargeted session composes byte-for-byte what it
+  composed before.
+- **1.d was treated as belt-and-braces and is load-bearing.** Strength's `warmup` and `cooldown`
+  are built by *running's* builders, which do accept a target — so a pace in a circuit is
+  expressible, and by the time a builder is chosen it is a crash rather than a wrong workout. The
+  per-sport refusal also has to sit **above** the `exercise` builder's early return, or a pace on
+  an exercise step is dropped instead of refused. It was written below it first.
+
+**The estimate keeps its arithmetic and loses its false sentence (option (a), Mahi's call).** A
+paced distance step still contributes 0. A target is what the athlete was *told* to run, not a
+measurement of what they do run, so estimating from it would turn an instruction into a computed
+number in exactly the displayed field the original rule exists to keep invented numbers out of.
+What changes is the basis: it no longer says "this account has no measured pace" when a pace is
+sitting in the payload. Both halves are asserted, so a later reading cannot quietly promote the
+prescription to a measurement.
+
+**What is still unverified, and the check that settles it.** Garmin's side of the contract. The
+live check is **not** "the workout exists" — it is to run **outside** the range on purpose and
+see whether the watch alerts, and in which direction. A swapped pair composes, uploads and
+schedules happily, and only the watch can tell you the easy end became the hard end. There is no
+`probe-pace` in `probe.py`; the settle path is a read-back from Connect of one hand-built pace
+step.
+
+**README was four tools and one phase behind**, claiming three tools and "the workout write path
+comes next" when six are registered and the path reaches Garmin. Corrected, with the test count
+and what the two skips actually are — the first version of that line said they were
+platform-specific locking tests, which was wrong; they are two metric-map rows.
+
+Tests: 638 -> 684. Nothing removed. Two tests changed premise rather than being loosened: a
+heart-rate zone is still refused, but the refusal no longer says "no targets", so they now assert
+the reason and that the message names what IS allowed.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **585 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **684 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -2819,6 +2987,12 @@ is not read for a timed step); rejected outright. The fallback for the last two
 is reps-based sets, which upstream supports and which loses the work time.
 **This call also settles `id_keys` for free** — see check 3.
 
+**~~2a. An exercise lookup, and strength warm-ups.~~ DONE 2026-10-31** —
+`garmin_exercises` searches the catalogue for zero Garmin requests, and a
+strength session may now hold a timed `warmup` and `cooldown`. Carries ONE new
+unverified claim to settle on the next strength create, for free: whether Garmin
+accepts a warmup step inside a `strength_training` workout.
+
 **2. Send a repeat group to Garmin.** Composed and tested since v1.6, never
 sent — the first two strength sessions could not build one and the first write
 went in flat. Now that `REPEAT_GROUP_EXAMPLE` is in the prose the agent reads,
@@ -2826,14 +3000,30 @@ ask for a circuit and check the preview's `step_summary` shows `4x:` with the
 steps indented beneath it rather than twenty-four flat lines. Then write it. It
 is the last composed-but-unsent shape in the write path.
 
+**2b. Settle Garmin's pace contract, which takes one workout and one run.**
+Composed and tested since 2026-10-31, never sent. Four things are community
+convention and live in `PACE_CONTRACT`: the key string `"pace.zone"`, the
+`displayOrder`, the unit (m/s), and **which of `targetValueOne`/`targetValueTwo`
+carries the faster bound.** The id is upstream's, so it is not in question.
+Two ways to settle it, cheapest first:
+1. **Read it back from Connect.** Build one pace step by hand in Connect, fetch
+   the workout, and read the four values off the payload. No guessing, no run.
+2. **Run it.** Write a paced session, then run **outside** the range on purpose
+   and watch which way the watch complains. This is the only check that catches
+   a swapped pair, because a swapped pair composes, uploads and schedules
+   happily — it just turns the easy end of the range into the hard end. "The
+   workout exists" settles nothing here.
+Do (1) first. If the bound order is wrong, exactly one constant changes.
+
 **~~3. `id_keys`.~~ DONE 2026-10-31** — `workoutId` and `workoutScheduleId`,
 measured, with the fixtures promoted to `# recorded:` and the candidate lists
 annotated rather than narrowed. The method is the part worth keeping: the field
 was returned and summarised away, and **asking for it by name in one sentence
 retrieved it in full.** Do that every time.
 
-**~~3b. Whether the names show.~~ DONE** — they do, cross-checked in the Connect
-app. The watch's own mid-session render was not separately observed.
+**~~3b. Whether the names show.~~ DONE AND CLOSED** — they do, on the watch:
+name, duration and rounds as planned. Verified in SCOPE v1.6 as the strength
+named-by-time item. No reps fallback needed.
 
 The original item, kept because the expectation it set was met exactly:
 Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
@@ -2869,12 +3059,12 @@ though `tests/test_runtime_lock.py` already lists it as dev-only.
 
 **7. Decisions waiting on Mahi, none blocking:**
 
-- **Ratify or reject the SCOPE v1.6 §5 amendment** — strength as a second sport,
-  with the timed-exercise shape labelled unverified. The code is written and
-  every reference to the amendment says it is unratified. Per the standing
-  orders a SCOPE amendment wants the 10-dimension walk plus passes A and B
-  before it is committed; that was not done this session and is the reason the
-  amendment is a draft rather than a commit.
+- **~~Ratify or reject the SCOPE v1.6 §5 amendment.~~ RATIFIED 2026-10-31** —
+  strength is a second sport, and the timed-exercise shape is no longer labelled
+  unverified: it is confirmed on the watch. The ten dimensions plus passes A and
+  B were walked before the commit, in §15, which is what the standing orders ask
+  and what the draft was waiting on. The order was still wrong — the code shipped
+  first and §15.1 says so.
 - **Ratify or reject the §5 tool-split deviation** — `garmin_workouts` (preview,
   read-only) and `garmin_workout_create` (write) as two tools, because
   `ToolAnnotations` are per tool and §5 asks for per-action honesty. If rejected,
@@ -3016,6 +3206,10 @@ confirmed the first workout, not the response.
 
 **Still open:**
 
+- **Garmin's pace contract is unverified** — the key string, the display order, the unit and
+  the bound order, all inside `PACE_CONTRACT` so a wrong one is wrong once. The target *id* is
+  upstream's `TargetType.PACE_ZONE` and is not in question. A swapped bound order is invisible
+  everywhere except on the watch, mid-run. See check 2b.
 - **Four unverified metric rows** — `training_status`, `load_balance`, `readiness`,
   `recovery_time`. All settleable the free way `hrv_status` was: compare the row's output against
   what the Garmin Connect app displays for the same day. **`probe --explain` cannot do it** — it
@@ -3032,9 +3226,12 @@ confirmed the first workout, not the response.
   decision, not a cleanup.
 - **The GHA cache export flakes** (`failed to reserve cache`) when two runs are in flight;
   `ignore-error=true` on `cache-to` would make it a warning instead of a red check.
-- **SCOPE v1.6 owes** §7's Connectors-not-Developer and per-user Docker path, §7a's bind address
-  for the web UI, §9's location exposure via activity detail — and now the §5 tool-split
-  deviation, if Mahi ratifies it.
+- **SCOPE v1.7 owes** §7's Connectors-not-Developer and per-user Docker path, §7a's bind address
+  for the web UI, §9's location exposure via activity detail — **committed, not carried**, by the
+  ratification decision of 2026-10-31 — plus unschedule-by-lookup (§15.13 option 2). The §5
+  tool-split deviation is **still undecided**: `garmin_workouts` and `garmin_workout_create`
+  ship as two tools and §5 does not mention the split, so the code and the document disagree on
+  a point v1.6's ratification did not touch.
 
 **A `login` should not be run casually.** Both mobile login paths took a 429 on 2026-10-11 and a
 fallback carried it, so the login path is IP-rate-limited. The data path has been fine across

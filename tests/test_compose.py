@@ -218,8 +218,11 @@ def test_v5_control_a_small_positive_duration_passes():
 
 
 def test_v6_a_target_other_than_no_target_is_refused():
-    """The reason is in the message: every TargetType Garmin offers is
-    zone-based and this account's zones have never been fetched."""
+    """**Premise changed at v1.6, not loosened.** A pace range is now allowed,
+    so this can no longer assert the old "no targets" wording -- but a
+    heart-rate zone is still refused, and for the reason v0 gave: this
+    account's zones have never been fetched. The refusal must also say what IS
+    allowed, or a reader learns only that it was told no."""
     structure = compose.compose("Easy 40", EASY_RUN)
     steps_of(structure)[0]["targetType"] = {
         "workoutTargetTypeId": 4,
@@ -227,18 +230,23 @@ def test_v6_a_target_other_than_no_target_is_refused():
         "displayOrder": 4,
     }
 
-    with pytest.raises(ComposeError, match="no targets"):
+    with pytest.raises(ComposeError) as caught:
         compose.validate_structure(structure)
+
+    message = str(caught.value)
+    assert "heart.rate.zone" in message
+    assert "zone-based" in message
+    assert "pace range" in message
 
 
 def test_v6_a_missing_target_is_refused_too():
     """Not the same case as a wrong target, and worth its own assertion: an
     absent `targetType` is what an upstream change to the builders' default
-    would produce."""
+    would produce. It must not fall through the pace branch into acceptance."""
     structure = compose.compose("Easy 40", EASY_RUN)
     del steps_of(structure)[0]["targetType"]
 
-    with pytest.raises(ComposeError, match="no targets"):
+    with pytest.raises(ComposeError, match="zone-based"):
         compose.validate_structure(structure)
 
 
@@ -760,8 +768,15 @@ def test_a_strength_kind_in_a_running_session_is_refused():
 
 
 def test_the_refusal_lists_that_sports_kinds():
-    with pytest.raises(ComposeError, match="Valid kinds: exercise, rest"):
-        compose.compose("Bad", (Step("warmup", duration_secs=600.0),), sport="strength")
+    """`recovery` is a running kind and means nothing in a circuit. `warmup`
+    used to stand here and no longer can, because a strength session may now
+    have one -- the test moved rather than being loosened."""
+    with pytest.raises(
+        ComposeError, match="Valid kinds: exercise, warmup, rest, cooldown"
+    ):
+        compose.compose(
+            "Bad", (Step("recovery", duration_secs=120.0),), sport="strength"
+        )
 
 
 def test_a_strength_step_measured_in_distance_is_refused():
@@ -849,5 +864,517 @@ def test_the_step_kind_union_covers_both_sports_and_nothing_else():
         "exercise",
         "rest",
     }
-    assert set(compose.STEP_KINDS_BY_SPORT["strength"]) == {"exercise", "rest"}
+    assert set(compose.STEP_KINDS_BY_SPORT["strength"]) == {
+        "exercise",
+        "warmup",
+        "rest",
+        "cooldown",
+    }
     assert "exercise" not in compose.STEP_KINDS_BY_SPORT["running"]
+    # The union did not change when strength gained warmup and cooldown: both
+    # were already in it from running. So the published enum is untouched, and
+    # the per-sport rule is doing all the work -- which is the arrangement the
+    # flat enum was accepted on.
+    assert "recovery" not in compose.STEP_KINDS_BY_SPORT["strength"]
+    assert "interval" not in compose.STEP_KINDS_BY_SPORT["strength"]
+
+
+# --------------------------------------------------------------------------
+# A strength session may now warm up and cool down (§5)
+#
+# v1.6 offered `exercise` and `rest` only, so the first live 30-minute session
+# came out as a bare circuit and the human was told to warm up on their own.
+# The builders are upstream's and generic across sports; **Garmin's acceptance
+# of a warmup step inside a strength_training workout is unverified** until the
+# next live strength create, which was going to happen anyway.
+# --------------------------------------------------------------------------
+
+FULL_SESSION = (
+    Step("warmup", duration_secs=300.0),
+    Step(
+        "repeat",
+        iterations=3,
+        repeat=(
+            Step("exercise", duration_secs=40.0, exercise="goblet squat"),
+            Step("rest", duration_secs=20.0),
+        ),
+    ),
+    Step("cooldown", duration_secs=180.0),
+)
+
+
+def test_a_strength_session_composes_with_a_warmup_and_cooldown():
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+    steps = steps_of(structure)
+
+    assert steps[0]["stepType"]["stepTypeKey"] == "warmup"
+    assert steps[0]["endConditionValue"] == 300.0
+    assert steps[-1]["stepType"]["stepTypeKey"] == "cooldown"
+    assert steps[-1]["endConditionValue"] == 180.0
+
+
+def test_the_full_session_numbers_its_steps_contiguously():
+    """Warmup, the group, its two children, cooldown."""
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+
+    assert flat_orders(structure) == [1, 2, 3, 4, 5]
+
+
+def test_the_category_check_exempts_a_warmup_and_a_cooldown():
+    """They name no exercise by design, like a rest. An exemption that was too
+    narrow would refuse every session with a warmup; one too broad would
+    re-permit the unnamed work step the check exists to catch -- so both
+    directions are asserted, here and in the test below."""
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+
+    compose.validate_structure(structure)
+
+
+def test_the_category_check_still_catches_an_unnamed_work_step():
+    """The other direction. Adding warmup and cooldown to the exempt set must
+    not have widened it to the step that matters."""
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+    broken = copy.deepcopy(structure)
+    group = broken["workoutSegments"][0]["workoutSteps"][1]
+    group["workoutSteps"][0]["category"] = ""
+
+    with pytest.raises(ComposeError, match="no exercise category"):
+        compose.validate_structure(broken)
+
+
+def test_the_estimate_counts_the_warmup_and_cooldown():
+    """300 + 3 x (40 + 20) + 180."""
+    estimated, _ = compose.estimate_duration(FULL_SESSION)
+
+    assert estimated == 660
+
+
+def test_a_strength_warmup_carrying_an_exercise_name_is_refused():
+    """Garmin would drop the name and the watch would show a nameless step --
+    the same silent partial an exercise name on a rest step is refused for."""
+    bad = (Step("warmup", duration_secs=300.0, exercise="goblet squat"),)
+
+    with pytest.raises(ComposeError, match="carries an exercise name"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+def test_a_strength_warmup_measured_in_distance_is_refused():
+    bad = (Step("warmup", distance_m=1000.0),)
+
+    with pytest.raises(ComposeError, match="measured in time, not distance"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+# ------------------------- the catalogue search ---------------------------
+
+
+def test_the_search_returns_its_matches_and_the_total():
+    """The total is returned beside the capped list rather than inferred from
+    its length, because the two differ and only one of them is the answer to
+    "is that all of them"."""
+    rows, total = compose.search_exercises("press", limit=3)
+
+    assert len(rows) == 3
+    assert total > 3
+
+
+def test_the_search_returns_everything_when_it_fits():
+    rows, total = compose.search_exercises("goblet squat", limit=25)
+
+    assert len(rows) == total
+
+
+def test_the_search_finds_nothing_without_raising():
+    """An empty result is an answer, not an error -- the tool layer decides
+    how to present it. Refusing here would make "does this exist?" unaskable."""
+    rows, total = compose.search_exercises("nonsense exercise xyz")
+
+    assert rows == ()
+    assert total == 0
+
+
+@pytest.mark.parametrize("term", [None, "", "   "])
+def test_a_search_with_no_words_is_refused(term):
+    with pytest.raises(ComposeError, match="needs something to search for"):
+        compose.search_exercises(term)
+
+
+@pytest.mark.parametrize("limit", [0, -5])
+def test_a_search_limit_below_one_is_refused(limit):
+    with pytest.raises(ComposeError, match="at least 1"):
+        compose.search_exercises("squat", limit=limit)
+
+
+def test_the_search_is_a_pure_lookup_over_the_catalogue():
+    """Asserted against the catalogue itself: every row the search returns is
+    an entry that was already there, so the search cannot invent a name that
+    `resolve_exercise` would then refuse."""
+    rows, _ = compose.search_exercises("squat", limit=40)
+
+    for row in rows:
+        assert row in compose.EXERCISES
+
+
+# --------------------------------------------------------------------------
+# Pace targets (§5/§8, v1.6). The one target v1.6 allows, and the many it
+# does not. Every refusal below is paired with the valid variant composing,
+# because a validator only ever seen to refuse might be refusing everything.
+# --------------------------------------------------------------------------
+
+
+PACED_RUN = (
+    Step("warmup", duration_secs=600.0),
+    Step("interval", distance_m=5000.0, pace_min_km=("4:20", "4:40")),
+    Step("cooldown", duration_secs=300.0),
+)
+
+
+def paced_step_of(structure, order=2):
+    for item, _ in compose._flatten(steps_of(structure)):
+        if item.get("stepOrder") == order:
+            return item
+    raise AssertionError(f"no step with stepOrder {order}")
+
+
+def test_the_pace_conversion_is_pinned_to_literals():
+    """**Pinned on purpose, both directions** (§8, v1.6). The conversion is one
+    line of arithmetic -- 1000 / seconds-per-km, rounded to 3 decimals -- which
+    is exactly the kind of line a refactor changes without anybody noticing. If
+    these numbers move, what a pace MEANS has moved, and the watch would alert
+    against a speed nobody approved."""
+    target = compose.pace_target(["4:20", "4:40"])
+
+    # min/km in, m/s out: the bytes Garmin stores.
+    assert target.faster_m_s == 3.846
+    assert target.slower_m_s == 3.571
+
+    # and back out as min/km: the words a human approves.
+    assert target.rendered == "4:20-4:40/km"
+
+
+def test_the_conversion_rounds_before_anything_reads_it():
+    """Pass A.3 / B.1: the rounding has to happen upstream of the approval
+    marker. If the structure carried 3.8461538... and the marker were computed
+    over a rounded copy, the preview's marker and the create's would disagree
+    about the same session."""
+    target = compose.pace_target(["4:20", "4:40"])
+
+    assert target.faster_m_s == round(target.faster_m_s, 3)
+    assert target.slower_m_s == round(target.slower_m_s, 3)
+
+    structure = compose.compose("Pinned", PACED_RUN)
+    step = paced_step_of(structure)
+    assert step[compose.PACE_CONTRACT.faster_bound_field] == 3.846
+    assert step[compose.PACE_CONTRACT.slower_bound_field] == 3.571
+
+
+def test_the_approval_marker_survives_a_float_round_trip():
+    """The `600.0`-vs-`600` bug generalised, and the regression test Mahi asked
+    for. A preview's marker is computed here; a create's is computed over the
+    structure after it has been through JSON. A non-whole float is the case the
+    old bug never covered -- measured stable, and now asserted so it stays
+    that way."""
+    structure = compose.compose("Round trip", PACED_RUN)
+
+    before = compose.approval_for(structure)
+    after = compose.approval_for(json.loads(json.dumps(structure)))
+
+    assert before == after
+    assert paced_step_of(json.loads(json.dumps(structure)))[
+        compose.PACE_CONTRACT.faster_bound_field
+    ] == 3.846
+
+
+def test_a_paced_step_carries_the_whole_contract_from_one_constant():
+    """Every part of Garmin's pace contract is unverified, so every part of it
+    comes out of `PACE_CONTRACT` -- the point being that a wrong one is wrong
+    in a single place."""
+    structure = compose.compose("Tempo", PACED_RUN)
+    step = paced_step_of(structure)
+
+    assert step["targetType"] == {
+        "workoutTargetTypeId": compose.PACE_CONTRACT.target_id,
+        "workoutTargetTypeKey": compose.PACE_CONTRACT.target_key,
+        "displayOrder": compose.PACE_CONTRACT.display_order,
+    }
+    assert compose.PACE_CONTRACT.target_id == 6
+    assert compose.PACE_CONTRACT.target_key == "pace.zone"
+
+
+def test_the_faster_bound_is_the_larger_speed():
+    """The one that would be invisible if it were wrong: a swapped pair still
+    composes, still uploads, and turns the easy end of the range into the hard
+    end on the watch. Asserted through the constant, so it keeps holding when
+    the read-back settles which field Garmin wants first."""
+    structure = compose.compose("Tempo", PACED_RUN)
+    step = paced_step_of(structure)
+
+    faster = step[compose.PACE_CONTRACT.faster_bound_field]
+    slower = step[compose.PACE_CONTRACT.slower_bound_field]
+
+    assert faster > slower
+
+
+def test_a_pace_target_works_inside_a_repeat_group():
+    """§15's 7.b was a claim, not an observation: a repeat group's children go
+    through the same builder, so a pace inside one should need no extra code.
+    This is the observation."""
+    steps = (
+        Step("warmup", duration_secs=600.0),
+        Step(
+            "repeat",
+            iterations=4,
+            repeat=(
+                Step("interval", distance_m=800.0, pace_min_km=("4:00", "4:10")),
+                Step("recovery", duration_secs=120.0),
+            ),
+        ),
+    )
+    structure = compose.compose("Intervals", steps)
+
+    inner = paced_step_of(structure, order=3)
+    assert inner["targetType"]["workoutTargetTypeKey"] == "pace.zone"
+    assert inner[compose.PACE_CONTRACT.faster_bound_field] == 4.167
+
+    recovery = paced_step_of(structure, order=4)
+    assert recovery["targetType"]["workoutTargetTypeKey"] == compose.NO_TARGET_KEY
+    assert compose.PACE_CONTRACT.faster_bound_field not in recovery
+
+
+def test_a_repeat_group_itself_cannot_carry_a_pace():
+    """Garmin stores a target per step, so a pace on the group would be dropped
+    without being refused -- the same failure as an exercise name on the wrong
+    kind, and refused the same way."""
+    steps = (
+        Step(
+            "repeat",
+            iterations=3,
+            repeat=(Step("interval", distance_m=400.0),),
+            pace_min_km=("4:00", "4:10"),
+        ),
+    )
+
+    with pytest.raises(ComposeError, match="no target of its own"):
+        compose.compose("Bad", steps)
+
+
+def test_a_session_with_no_pace_composes_exactly_what_it_did_before():
+    """The relaxation must not change an untargeted session by one byte. A
+    strength rest step is the sharp case: its builder has no `target_type`
+    parameter at all, so a `None` target passed down to it would be a
+    TypeError rather than a wrong workout."""
+    structure = compose.compose("Easy 40", EASY_RUN)
+    step = steps_of(structure)[0]
+
+    assert step["targetType"]["workoutTargetTypeKey"] == compose.NO_TARGET_KEY
+    assert compose.PACE_CONTRACT.faster_bound_field not in step
+
+    strength = compose.compose(
+        "Circuit",
+        (
+            Step("exercise", duration_secs=40.0, exercise="Goblet Squat"),
+            Step("rest", duration_secs=20.0),
+        ),
+        sport="strength",
+    )
+    assert len(steps_of(strength)) == 2
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["warmup", "rest", "cooldown"],
+)
+def test_a_pace_on_a_strength_step_is_refused(kind):
+    """1.d, and it is load-bearing rather than belt-and-braces: strength's
+    `warmup` and `cooldown` are built by RUNNING's builders, which do accept a
+    target, so a pace in a circuit is expressible and has to be stopped by
+    sport."""
+    steps = (Step(kind, duration_secs=60.0, pace_min_km=("4:20", "4:40")),)
+
+    with pytest.raises(ComposeError, match="pace target is for a running step"):
+        compose.compose("Bad", steps, sport="strength")
+
+
+def test_a_pace_on_a_strength_exercise_step_is_refused_not_dropped():
+    """Checked separately because `exercise` returns from its own builder
+    early: if the sport check sat below that return, a pace here would vanish
+    silently instead of being refused."""
+    steps = (
+        Step(
+            "exercise",
+            duration_secs=40.0,
+            exercise="Goblet Squat",
+            pace_min_km=("4:20", "4:40"),
+        ),
+    )
+
+    with pytest.raises(ComposeError, match="pace target is for a running step"):
+        compose.compose("Bad", steps, sport="strength")
+
+
+def test_the_same_strength_session_composes_without_the_pace():
+    """The control for the refusals above. A validator only seen to refuse
+    might be refusing the session rather than the pace."""
+    structure = compose.compose(
+        "Circuit",
+        (
+            Step("warmup", duration_secs=60.0),
+            Step("exercise", duration_secs=40.0, exercise="Goblet Squat"),
+            Step("rest", duration_secs=20.0),
+        ),
+        sport="strength",
+    )
+
+    assert len(steps_of(structure)) == 3
+
+
+@pytest.mark.parametrize(
+    ("bounds", "expected"),
+    [
+        (["4:75", "5:00"], "seconds must be under 60"),
+        (["4:20.5", "4:40"], "not a pace"),
+        (["4:30", "4:30"], "two different bounds"),
+        (["4:40", "4:20"], "faster bound first"),
+        (["2:00", "4:40"], "outside the pace band"),
+        (["4:20", "15:00"], "outside the pace band"),
+        (["4:20"], "range of two paces"),
+        ([], "range of two paces"),
+        ("4:20", "range of two paces"),
+        ([260, 280], "written as mm:ss"),
+    ],
+)
+def test_a_pace_range_is_refused_rather_than_repaired(bounds, expected):
+    """All five of §15's edge cases, plus the shapes that are not a range at
+    all. Refused, never normalised: a pace quietly moved is one the human
+    approved in words that no longer describe the workout."""
+    with pytest.raises(ComposeError, match=expected):
+        compose.pace_target(bounds)
+
+
+def test_an_inverted_range_is_not_silently_sorted():
+    """Spelled out as its own test because sorting is the tempting fix. It
+    would be kinder to a caller that typed the bounds backwards and would hide
+    a caller that has UNDERSTOOD the field backwards, which is the one worth
+    finding."""
+    with pytest.raises(ComposeError) as caught:
+        compose.pace_target(["4:40", "4:20"])
+
+    assert "['4:20', '4:40']" in str(caught.value)
+
+
+def test_a_pace_renders_from_the_conversion_not_from_the_input():
+    """Pass A.1's guarantee, at the level it is made: the rendering comes back
+    canonical, which is only possible if it was produced from the parsed number
+    rather than echoed from the string."""
+    target = compose.pace_target(["04:20", "4:40"])
+
+    assert target.rendered == "4:20-4:40/km"
+
+
+def test_the_basis_stops_claiming_there_is_no_pace():
+    """3.e / A.2. `estimate_duration` cannot see targets at all, so its basis
+    sentence was false the moment a pace could exist. Option (a), ratified
+    2026-10-31: the sentence changes and the arithmetic does not -- a target is
+    what the athlete was told to run, not a measurement of what they do run."""
+    unpaced = (
+        Step("warmup", duration_secs=600.0),
+        Step("interval", distance_m=5000.0),
+    )
+    paced_secs, paced_basis = compose.estimate_duration(PACED_RUN)
+    plain_secs, plain_basis = compose.estimate_duration(unpaced)
+
+    assert "this account has no measured pace" in plain_basis
+    assert "this account has no measured pace" not in paced_basis
+    assert "prescription rather than a measured pace" in paced_basis
+    assert paced_secs == 900
+    assert plain_secs == 600
+
+
+def test_a_pace_does_not_change_the_estimate_itself():
+    """The other half of option (a), asserted so a later reading of §5 cannot
+    quietly turn the prescription into a measurement: the number is the same
+    with the pace and without it."""
+    unpaced = tuple(
+        Step(s.kind, duration_secs=s.duration_secs, distance_m=s.distance_m)
+        for s in PACED_RUN
+    )
+
+    assert compose.estimate_duration(PACED_RUN)[0] == (
+        compose.estimate_duration(unpaced)[0]
+    )
+
+
+def test_an_all_timed_paced_session_says_the_pace_is_unused():
+    """The basis must say it in the case where nothing was skipped either,
+    because the claim being corrected is about the pace and not about the
+    distance steps."""
+    steps = (Step("interval", duration_secs=1200.0, pace_min_km=("4:20", "4:40")),)
+
+    _, basis = compose.estimate_duration(steps)
+
+    assert "not used to estimate" in basis
+
+
+def test_a_hand_built_pace_target_in_a_strength_session_is_refused():
+    """The relaxation is per sport AND per target type. A structure that came
+    back from a conversation rather than from the composer is exactly the path
+    `create` takes, and a global loosening would let a strength pace through."""
+    structure = compose.compose(
+        "Circuit",
+        (
+            Step("exercise", duration_secs=40.0, exercise="Goblet Squat"),
+            Step("rest", duration_secs=20.0),
+        ),
+        sport="strength",
+    )
+    step = steps_of(structure)[0]
+    step["targetType"] = compose.pace_target(["4:20", "4:40"]).target_block()
+    step.update(compose.pace_target(["4:20", "4:40"]).target_values())
+
+    with pytest.raises(ComposeError, match="running only"):
+        compose.validate_structure(structure)
+
+
+def test_a_target_value_with_no_target_type_is_refused():
+    """Half a target is not a target. A value the watch has no rule for is
+    worse than no value, because it reads as a prescription in the payload."""
+    structure = compose.compose("Easy 40", EASY_RUN)
+    steps_of(structure)[0][compose.PACE_CONTRACT.faster_bound_field] = 3.846
+
+    with pytest.raises(ComposeError, match="no target type"):
+        compose.validate_structure(structure)
+
+
+def test_a_pace_target_missing_one_bound_is_refused():
+    structure = compose.compose("Tempo", PACED_RUN)
+    del paced_step_of(structure)[compose.PACE_CONTRACT.slower_bound_field]
+
+    with pytest.raises(ComposeError, match="only one bound"):
+        compose.validate_structure(structure)
+
+
+def test_a_swapped_pair_is_refused_by_the_validator():
+    """The composer cannot produce this -- it sorts nothing and refuses an
+    inverted range -- so it is reached the way `create` would reach it, from a
+    structure built somewhere else."""
+    structure = compose.compose("Tempo", PACED_RUN)
+    step = paced_step_of(structure)
+    step[compose.PACE_CONTRACT.faster_bound_field] = 3.571
+    step[compose.PACE_CONTRACT.slower_bound_field] = 3.846
+
+    with pytest.raises(ComposeError, match="must be the larger number"):
+        compose.validate_structure(structure)
+
+
+@pytest.mark.parametrize("word", ["squat", "press", "curl", "raise", "row"])
+def test_every_name_the_search_returns_resolves_unambiguously(word):
+    """§8, v1.6. The search is only useful if its output can be handed straight
+    back to a step, and that is two functions agreeing rather than either being
+    right on its own: `search_exercises` must not return a name that
+    `resolve_exercise` would then refuse as ambiguous."""
+    rows, _ = compose.search_exercises(word, limit=40)
+
+    assert rows
+    for row in rows:
+        resolved = compose.resolve_exercise(row["name"])
+        assert resolved["name"] == row["name"]

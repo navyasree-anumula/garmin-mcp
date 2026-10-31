@@ -1,23 +1,42 @@
 # garmin-mcp — Scope
 
 **Status:** pass 1 shipped and proven live on the target laptop. Pass 2 in progress.
-**Version:** 1.5 · 2026-10-16
+**Version:** 1.6 · 2026-10-31 — **RATIFIED by Mahi, 2026-10-31**, on the diff summary,
+with three decisions taken at ratification: §15.15.
 **Ratification:** this document is the artifact to approve before any code is written.
 **v1.3** stress-tested across all 10 dimensions of `sop/stress-test-10-dimensions.md`;
 audit trail in §12. **v1.4** walked the same ten plus adversarial passes A and B; §13.
-**v1.5** the same ten plus A and B; §14.
+**v1.5** the same ten plus A and B; §14. **v1.6** the same ten plus A and B; §15.
 
 **v1.5 settles who does the thinking.** It covers the division of labour between the server
 and the conversation, where the athlete's own context lives, what ships of §6's cache, and the
 shape of the write path — the four things that block phase 5 and everything after it. Sections
 touched: the decision log, §1, §5, §6, §8, §9, §11.
 
-**The items v1.4 said would ride in v1.5 are carried again, to v1.6** — §7's client-wiring
+**v1.6 settles how hard, and what an exercise is called.** Three things, two of them already
+built and proven live before this document caught up with them — which is the wrong order and
+is recorded as such in §15.1:
+
+- **(a) A named strength exercise measured by time.** Built, written live on 2026-10-31, and
+  **confirmed end to end**: Garmin accepted it and the watch shows each exercise name, its
+  duration and the rounds as planned. No reps fallback is needed.
+- **(b) Timed warm-up and cool-down steps in a strength session.** Built; Garmin's acceptance
+  of a warm-up inside a `strength_training` workout is the one thing still unmeasured.
+- **(c) Explicit pace-range targets for running.** Not built. This is the part this version
+  exists to authorise, and it **deliberately reverses a v0 decision** — see §5.
+
+Sections touched: the decision log, §5, §8, §9, §15.
+
+**The items v1.4 said would ride in v1.5, and v1.5 said would ride in v1.6 are now committed
+to v1.7 — firmly, by Mahi's ratification decision of 2026-10-31.** They are §7's client-wiring
 corrections (Connectors not Developer, the per-user Docker path), §7a's bind-address
-correction, and §9's GPS/location exposure via activity detail. That is a scope decision, not
-an oversight: they are deployment and privacy corrections with no bearing on the write path,
-and bundling them would push one review past the time a review can actually be given. §14.1
-records it. §7a's prose stays knowingly wrong for a second version.
+correction, and §9's GPS/location exposure via activity detail. Carrying them twice was a
+scope decision; a third deferral would have been a debt, and §15.1 says so rather than
+repeating v1.5's reasoning as if it were still fresh. What changes here is that they stop being
+*carried* and become v1.7 **scope**, alongside unschedule-by-lookup (§15.13) — which gives v1.7
+a code item and so stops it being the docs-only version that slips a fourth time. None of the
+three bears on pace targets: two are documentation, one is a read path, and §15.15 records the
+check. §7a's prose is knowingly wrong for a third version and for no more than that.
 
 ---
 
@@ -47,6 +66,11 @@ records it. §7a's prose stays knowingly wrong for a second version.
 | Cycle data | **Opt-in, read-only, never swept by the probe** | v1.5 |
 | §6 cache | **The seam now, the store with the second consumer** | v1.5 |
 | A write reaches Garmin | **Only after a preview the human approved** | v1.5 |
+| Sports composed | **Running and strength.** Strength is a circuit of named exercises held for a time | v1.6 |
+| An exercise's identity | **Garmin's catalogue pair**, never free text; ambiguity refused, never guessed | v1.6 |
+| Targets | **Explicit pace ranges only.** Zone-based targets stay refused | v1.6 |
+| Reps and weight | **Not built.** Strength is prescribed by time in v1.6 | v1.6 |
+| Undoing a schedule | **Look the scheduled id up on Garmin's calendar at undo time.** No ledger, no second store | v1.6, ships v1.7 |
 
 ---
 
@@ -537,6 +561,89 @@ testable without a network (§8).
 
 ---
 
+### Strength, and how hard (v1.6)
+
+#### A strength session is a circuit of named exercises held for a time
+
+Garmin stores an exercise as a `category`/`exerciseName` pair from a fixed catalogue of 1527
+entries. It is never free text, so **a name the catalogue does not hold cannot be written at
+all.** Resolution is exact display name before substring, case-insensitive; an ambiguous term
+is **refused with its candidates listed, never resolved to the nearest match.** The failure
+directions are not symmetric: refusing costs one conversational turn, guessing puts a different
+exercise on the watch under a name that reads correct in the preview.
+
+Refusing is only half a design, so `garmin_exercises` searches the catalogue. It reaches no
+endpoint — the catalogue is a constant compiled into the library — so it spends no request
+budget and cannot hit a rate limit. Every name it returns resolves unambiguously, which is the
+property that makes it worth having and is asserted as such.
+
+**A named exercise measured in *time* is a shape the library does not build.**
+`create_strength_exercise_step` ends on REPS and takes no duration; `create_strength_rest_step`
+is timed and names nothing. The combination is this project's, assembled from the library's own
+enum members through `ExecutableStep`'s `extra="allow"`. **CONFIRMED live 2026-10-31** — workout
+1746708075: Garmin accepted it and the watch shows each exercise name, its duration and the
+rounds as planned.
+
+A circuit's rounds are one repeat group, and **a repeat group cannot vary by iteration**, so the
+rest after the final round cannot be dropped while keeping the rests between rounds. The preview
+states that rather than letting it appear on the watch. Writing the rounds out flat is equally
+valid and is what the first live session did.
+
+Timed `warmup` and `cooldown` steps are allowed in a strength session. They carry no exercise
+name by design and are exempt from the category check. **Garmin's acceptance of a warm-up step
+inside a `strength_training` workout is unverified** and settles on the next live strength
+create.
+
+**Reps and weight are deliberately not built.** Both are expressible upstream; neither was
+asked for, and every kind offered is a kind the live cycle has to confirm.
+
+#### Pace targets — and why this reverses v0
+
+v0 refused every target, and the reason given was that *"every TargetType Garmin offers is
+zone-based and this account's zones have never been fetched."* The second half is still true.
+The first half was **too broad**: an explicit pace *range* is a pair of absolute speeds and
+needs no zone fetched, no heart-rate data and no profile read. So the refusal narrows rather
+than disappears.
+
+**What v1.6 allows:** an explicit pace range on a running step.
+**What stays refused:** heart-rate targets, pace *zones*, power, cadence and resistance — every
+target whose meaning depends on a profile this account has never been read for.
+
+The rules:
+
+- **Input is min/km, as a range, faster bound first** — `["4:20", "4:40"]`. A human approves
+  min/km and must never be shown m/s.
+- **Converted to m/s** as `1000 / seconds-per-km`, **rounded to 3 decimals before the approval
+  marker is computed.** Rounding after the marker would make preview and create disagree. The
+  `600.0`-vs-`600` class of mismatch does **not** apply to a non-whole float — measured, not
+  assumed — but one converter feeding both the structure and the summary is what guarantees it.
+- **Garmin's side is `workoutTargetTypeKey` `"pace.zone"` (id 6) with `targetValueOne` and
+  `targetValueTwo`.** Every part of that sentence is community convention: the library writes
+  only `"no.target"` and holds no pace key at all. **[Mahi-verify]** by building one pace step
+  in Connect and reading it back — the key string, the unit, the `displayOrder`, and **which
+  value Garmin expects first.** Until that read-back, the ordering lives in one named constant.
+- **Refused:** an empty range; bounds equal; the slower bound first; `mm:ss` with seconds ≥ 60;
+  fractional seconds; any pace outside roughly 2:30–12:00 per km.
+- **A pace target on a strength step is refused.** Every upstream builder accepts a target, so
+  this is expressible and must be stopped by sport rather than by hope.
+- **The preview shows min/km and the structure carries m/s**, and both come from one conversion.
+  The words and the bytes being two renderings of one value is the whole guarantee; re-parsing
+  the input string for the summary would let the human approve the right words over the wrong
+  workout.
+- **`estimated_duration_basis` must stop claiming there is no pace** for a step that now carries
+  one. The sentence was true when written and becomes false the moment this ships. **Settled
+  2026-10-31, option (a):** the sentence changes and **the arithmetic does not**. A paced distance
+  step still contributes 0, and the basis says why — a target is what the athlete was *told* to
+  run, not a measurement of what they do run, so estimating from it would turn an instruction into
+  a computed number in the same displayed field this rule exists to keep invented numbers out of.
+  Option (b), estimating from the range's midpoint, was considered and rejected on that ground.
+- **An out-of-band edit in Connect is overwritten.** The update path reads a workout's name and
+  id and never its stored target, so a pace changed by hand in Connect is replaced by the next
+  re-prescription. Consistent with "the calendar wins", and stated here because the losing side
+  is now a value a human may have deliberately set.
+
+---
+
 ## §6 Account safety
 
 **Client-side rate limit, deliberately conservative.**
@@ -802,6 +909,29 @@ they were written — never their contents.
   context between sessions is a property of a client this repo does not own. It is recorded as
   an assumption (§14.3), not as a coverage gap, and the design's answer to it being false is
   that the plan still lives on Garmin's calendar.
+**Added at v1.6:**
+
+- **The approval marker must be proven to survive a float round trip.** A preview→create test
+  serialises the structure with `json.dumps`, parses it back, and asserts the marker is
+  unchanged. This is the regression test for the `600.0`-vs-`600` bug generalised: measured
+  stable for non-whole floats, and now asserted so it stays that way.
+- **The m/s conversion is pinned to literals**, both directions, so a refactor cannot quietly
+  change what a pace means: 4:40/km → 3.571 m/s, 4:20/km → 3.846 m/s.
+- **The summary and the structure are asserted to agree.** One conversion, two readers — the
+  test is what stops them becoming two conversions.
+- **A pace target inside a repeat group** has a test, because a repeat group's children go
+  through the same builder and that is a claim rather than an observation.
+- **A pace target on a strength step is refused**, with a test, and the control that the same
+  session composes without it.
+- **`estimated_duration_basis` changes** when a step carries a pace, asserted on the sentence.
+- **Every name `garmin_exercises` returns resolves unambiguously**, parameterised over several
+  movement words. The search is only useful if its output can be handed straight back, and that
+  is two functions agreeing rather than either being right alone.
+- **Baseline for v1.6 work: 638 tests, 2 skipped.** **After pace targets: 684 passed, 2
+  skipped** (2026-10-31), +46. Nothing removed; two tests in `test_compose.py` changed premise
+  rather than being loosened, because a heart-rate zone is still refused but the refusal's wording
+  is no longer "no targets".
+
 - **Baseline: 0 tests.** This repo starts empty. That is the reference point for every
   later count. **Pass 1: 10. v1.3 phase 1: 26.**
 
@@ -823,6 +953,8 @@ they were written — never their contents.
 | Password enters a browser | Certain once §7a ships | Password managers, autofill, extensions and devtools see the field | **Accepted for UX.** A real regression against `getpass`; CLI bootstrap retained as the tighter path (§4) |
 | Two containers, one token file | **Observed** 2026-08-30 | Concurrent refresh could lose an update | Cross-process file lock around refresh. Structural risk; not yet observed to bite |
 | Single-maintainer bus factor | Low now | Fork treadmill | Accepted. MIT means forking is at least possible |
+| A pace range written with its bounds swapped (v1.6) | Medium until `[Mahi-verify]` closes | The watch alerts continuously and the easy end becomes the hard end | **Accepted for one session.** Which of `targetValueOne`/`Two` Garmin expects first is unmeasured, so the ordering lives in **one named constant**, is read back from Connect before the first live pace write, and is wrong in only one place if wrong at all |
+| An important id exists only in a tool response (v1.6) | **Observed five times** | `unschedule_workout` takes the scheduled id and nothing else, so a calendar entry becomes removable only by hand in Connect | **Decided 2026-10-31: no ledger.** The id is looked up from Garmin's calendar at undo time (§15.13 option 2), so a dropped id is *recoverable* rather than stored twice. A returned field is not a delivered one — summarising clients dropped `server_version`, the provenance note, the refusal distinction, the write's ids and `id_keys` — which is why the answer is a lookup and not a louder response. Unschedule-by-lookup is **v1.7 scope**; until it ships, an undo is still by hand in Connect, and the residual risk is accepted for that window |
 | Datacenter-IP flag | **Resolved** | — | Eliminated by the laptop decision (§7) |
 
 ---
@@ -1443,3 +1575,278 @@ conversation** — which is a consumer, and in this amendment the most important
 | 10.a, 10.b | §9 | Two new risk rows: a valid-but-wrong workout, and the agent as sole guard |
 | 2.a | §14.3 | `[Mahi-verify]`: Desktop context retention is assumed, not verified |
 | 10.d | §14.1 | §7, §7a and §9's location finding carried to v1.6; §7a knowingly stale |
+
+---
+
+## §15 v1.6 10-dimension stress-test absorption notes
+
+### §15.1 Coverage gap rationale, and an order that was wrong
+
+v1.5 walked all ten plus A and B. No dimension was skipped, so there is no coverage gap to
+explain. There is a **process** gap, and it belongs at the top of this section rather than
+buried in it: **two of v1.6's three items were built and merged before this document authorised
+them.** Named strength exercises measured by time (#39, #42) and strength warm-ups (#43) shipped
+across 2026-10-31 while §5 still described a running-only composer. Every forward reference in
+the code said "amendment drafted, NOT yet ratified", so the gap was visible rather than hidden —
+but visible is not the same as correct. The ten dimensions below are therefore walked against
+**(c) pace targets as a plan**, and against **(a) and (b) as shipped code**, which is the honest
+framing and is why #3's findings are unusually concrete.
+
+### §15.2 #1 Edge cases — 6 findings, 5 actionable
+
+- 1.a: `mm:ss` with seconds ≥ 60 — `"4:75"` parses arithmetically to 5:15 and is not what a
+  human meant — **ACTIONABLE §5**, refuse.
+- 1.b: bounds equal — `["4:30","4:30"]` is a zero-width range and Garmin's handling is unknown —
+  **ACTIONABLE §5**, refuse and ask for a range.
+- 1.c: bounds inverted — `["4:40","4:20"]` — **ACTIONABLE §5**, refuse naming the expected order
+  rather than silently sorting, because sorting would hide a caller that misunderstands the field.
+- 1.d: a pace target is expressible on a **strength** step, since every upstream builder accepts
+  a `target_type` — **ACTIONABLE §5**, refuse by sport. **Sharpened 2026-10-31, during
+  implementation:** it is load-bearing rather than belt-and-braces, because strength's `warmup`
+  and `cooldown` are built by **running's** `create_warmup_step` / `create_cooldown_step`, which
+  do take a target. The refusal must also come **before** the `exercise` builder's early return,
+  or a pace on an exercise step is dropped instead of refused.
+- 1.e: paces outside ~2:30–12:00/km — **ACTIONABLE §5**, refuse (Mahi specified the band).
+- 1.f: fractional seconds — `"4:20.5"` — no separate action; 1.a's parser is strict and rejects it.
+
+### §15.3 #2 Unverified assumptions — 5 findings, 4 `[Mahi-verify]`
+
+- 2.a: **`"pace.zone"` as the key string.** Checked the library: it writes `"no.target"` and
+  writes no pace target anywhere. Entirely community convention — `[Mahi-verify]` via a read-back
+  from Connect. **CORRECTED 2026-10-31, during implementation:** this said the library "holds no
+  pace key at all", which is too strong. `garminconnect/workout.py` defines `class TargetType`
+  with `PACE_ZONE = 6`, so **the id is upstream's** and is read from it rather than written as a
+  literal. What stays unverified is narrower and is what `PACE_CONTRACT` holds: the key *string*,
+  the `displayOrder`, the unit, and which value carries the faster bound.
+- 2.b: pace stored as **m/s** — plausible, unmeasured — `[Mahi-verify]`.
+- 2.c: **which of `targetValueOne`/`targetValueTwo` is the faster bound** — unmeasured, and Mahi
+  flagged it himself — `[Mahi-verify]`. Confined to one named constant (§15.11, A.1).
+- 2.d: the target block's `displayOrder`. The `no.target` block uses `displayOrder: 1`, equal to
+  its id, so `6` for pace is an inference from one sample — `[Mahi-verify]`.
+- 2.e: Garmin accepting a **warm-up step inside `strength_training`** — shipped in #43, unmeasured.
+  Settles free on the next live strength create. No action beyond saying so.
+
+### §15.4 #3 Actual code checks — 5 findings, 4 actionable
+
+Source read, not inferred.
+
+- 3.a: `validate_structure` refuses **any** target that is not `no.target`
+  (`compose.py`, the `carries target` branch). The relaxation must be **per sport and per target
+  type**, not a global loosening — **ACTIONABLE §5**. A global relax would silently re-permit
+  targets on strength steps, which is 1.d arriving by the back door.
+- 3.b: `_build_step` calls `builder(duration, order)` with two arguments, and **every** upstream
+  builder — warmup, interval, recovery, cooldown, distance-interval — already accepts a third
+  `target_type`. So the plumbing exists upstream and only our call site needs changing. No
+  `extra="allow"` assembly is needed for the step itself, only for the two target values.
+  **CORRECTED 2026-10-31, by a failing test:** "every upstream builder" reads the five *running*
+  builders and over-generalises. `create_strength_rest_step(duration_seconds, step_order)` takes
+  **no `target_type` at all**, so passing one — even `None` — is a `TypeError`. The third
+  argument is therefore passed only when a target exists, which also keeps an untargeted session
+  composing byte-for-byte what it composed before pace shipped.
+- 3.c: `WorkoutStep` sets `extra="forbid"` (#41), so an undeclared `pace_per_km` would be refused
+  with "Extra inputs are not permitted" and the feature would be unreachable — **ACTIONABLE §5**,
+  the schema field ships in the same change as the composer.
+- 3.d: `approval_for` / `_numeric_canonical` — **measured** stable across `json.dumps`/`loads`
+  for non-whole floats, so the `600.0`-vs-`600` class does not apply to pace values. Mahi's
+  concern is retired by measurement rather than by argument — **ACTIONABLE §8** as a regression
+  test, no code change.
+- 3.e: `estimate_duration` returns 0 for a distance step and its basis says *"this account has no
+  measured pace"*. With a pace target on that step the sentence is **false** — **ACTIONABLE §5/§8**.
+
+### §15.5 #4 Security — 3 findings, 1 actionable (deferred)
+
+- 4.a: pace targets add no secret, no endpoint, no persistence and no new dependency. A pace is
+  not health data. No action.
+- 4.b: the **durable-id proposal** (§15.13) would add persistence, and a file of workout ids on
+  the tokens volume is account data at rest, inside the one backup copy that has none of the
+  token file's protections — the exact argument that kept athlete context out of the volume at
+  v1.5. **ACTIONABLE §9** as an open decision; deliberately not folded into v1.6.
+- 4.c: no logging change. `_configure_logging`'s `force=True` and its regression test already
+  cover the rule that tool arguments and responses are never logged at debug.
+
+### §15.6 #5 Vision alignment — 2 findings, 0 actionable
+
+- 5.a: §1 forbids the server designing the session. A pace **range supplied by the conversation**
+  is an input the server converts and validates; it never chooses one. Consistent — and the
+  distinction is worth keeping sharp, because "pace targets" sounds like prescription.
+- 5.b: pace targets advance v1.4's "planning and adjusting running training" more than any other
+  open item, since a running workout could previously say how far and how long and **never how
+  hard**.
+
+### §15.7 #6 Architecture consistency — 2 findings, 2 actionable
+
+- 6.a: pace parsing and conversion belong in `source/compose.py` beside `resolve_exercise`; §11
+  says `source/` does not know MCP exists. The min/km **rendering** is a server-layer concern —
+  **ACTIONABLE §5**, and the numbers it renders must come from the same conversion, not from
+  re-parsing the input.
+- 6.b: one function builds the target block, so the structure and the summary cannot disagree —
+  **ACTIONABLE §5**. Two call sites computing the same conversion is the DRY violation that
+  matters here, because the two outputs are read by different audiences.
+
+### §15.8 #7 Impact on other features — 4 findings, 2 actionable. **State sub-analysis triggered → Pass A**
+
+- 7.a: the strength path depends on `no.target` being enforced; see 3.a — **ACTIONABLE §5**.
+- 7.b: a repeat group's children go through `_build_step`, so a pace target inside a repeat works
+  with no extra code. That is a claim, not an observation — **ACTIONABLE §8**, test it.
+- 7.c: "a step's target" is a new **state** a step moves through — sub-analysis triggered, §15.11.
+- 7.d: an **older build** handed a pace structure refuses it at `validate_structure` rather than
+  writing something wrong. A graceful refusal, and worth knowing given the laptop has drifted
+  twice. No action.
+
+### §15.9 #8 Test coverage — 7 findings, 7 actionable
+
+All seven are recorded in §8 under "Added at v1.6" rather than repeated here. Baseline captured:
+**638 passed, 2 skipped** before any pace work.
+
+### §15.10 #9 Deployment & rollback — 3 findings, 1 actionable
+
+- 9.a: reaches the laptop by a re-pin; rollback is re-pinning the previous tag. The re-pin script
+  now matches whatever reference is in the config rather than a hardcoded expected tag, so a
+  rollback cannot be blocked by this repo's own notes being stale. No action.
+- 9.b: **re-pinning does not roll back a workout already on Garmin's calendar.** The only undo is
+  `unschedule_workout` with the scheduled id — which is precisely the id that keeps being dropped
+  from summaries — **ACTIONABLE §9**, and the reason §15.13 exists.
+- 9.c: no migration, no schema, no process manager. Nothing to roll back but an image tag.
+
+### §15.11 Pass A — states, producers and consumers (matrix + 6 findings, 5 actionable)
+
+The new state is **a step's target**: absent (`no.target`) or an explicit pace range. The
+surfaces that exist in this repo — there is no HTTP API, no web UX for workouts, no eval surface
+and no tracing:
+
+| State | Producers | Consumers |
+|---|---|---|
+| step target block (`no.target` \| `pace.zone`) | `compose._pace_target` (new); upstream builders' default | `validate_structure`; `approval_for` (whole structure); Garmin; the **watch** |
+| pace range as min/km | the MCP tool argument | the preview's `step_summary` (**human-facing**) |
+| pace as m/s, 3dp | one converter (new) | the `structure` field; the payload Garmin stores |
+| which bound is `targetValueOne` | one named constant (new) | the payload; **the watch's alert direction** |
+| `estimated_duration_basis` | `estimate_duration` | the preview response; the human |
+| the written ids | `write.py` `_first_id_with_key` | the tool response **only** — nothing persists them |
+
+- A.1: the pace range would have **two producers** if the summary re-parsed the input string
+  while the structure used the converted value. They can disagree, and the human would approve
+  the right words over the wrong workout — **ACTIONABLE §5**, one converter, both read it.
+- A.2: `estimate_duration` is a consumer of distance steps that **cannot see targets at all**, so
+  its basis sentence lies the moment a pace exists — **ACTIONABLE §5/§8** (same as 3.e).
+- A.3: `approval_for` consumes the whole structure, so the **rounding must happen upstream of it**
+  or preview and create disagree — **ACTIONABLE §5**.
+- A.4: the **watch** is a consumer with no test surface. The only evidence is a live run, which is
+  why the live check is "run outside the range and see whether it alerts" rather than "the
+  workout exists". No action beyond scheduling that check.
+- A.5: **nothing persists.** The target exists in the response and on Garmin, which is fine for a
+  pace — but it is the same shape as the id gap: *a mechanism whose output never leaves the
+  response is not durable* — **ACTIONABLE §9**, §15.13.
+- A.6: the **MCP schema is a consumer**, and `extra="forbid"` means an undeclared field is
+  refused. The schema and the composer must ship together or the feature is unreachable —
+  **ACTIONABLE §5** (same as 3.c, reached from the other direction, which is what A is for).
+
+### §15.12 Pass B — the lifecycles (5 findings, 2 actionable)
+
+- B.1: **request lifecycle.** preview → approve → create. The marker must be computed from the
+  **rounded** values; rounding at serialisation time only would mismatch — **ACTIONABLE §5**
+  (A.3 from the lifecycle side).
+- B.2: **the update path recomposes nothing** — it carries the approved structure through, so a
+  re-prescribed pace workout keeps its target. No finding.
+- B.3: **chat/session lifecycle, and Pass B's characteristic shape.** The human approves
+  `4:20–4:40` in words while the bytes carry `3.846`/`3.571`. Not a wrong value but a **wrong
+  rendering of the right one** if the two are computed separately. Covered by A.1; recorded here
+  because this is the lifecycle where it would be noticed too late.
+- B.4: **deployment lifecycle.** A reader on the old build meeting a pace structure refuses
+  gracefully (7.d). The reverse — a new build reading an old workout — reads only name and id.
+  No finding.
+- B.5: **artifact lifecycle.** A workout's pace edited by hand in Connect is **silently
+  overwritten** by the next re-prescription, because the update path never reads the stored
+  target. Consistent with "the calendar wins", but the losing side is now a value a human may
+  have set on purpose — **ACTIONABLE §5**, state it.
+
+### §15.13 Making an important id durable — **RATIFIED: option 2**, a lookup and no ledger
+
+Mahi's ask. Drafted as a proposal and **ratified on 2026-10-31** with v1.6; the implementation
+is v1.7. The problem is measured: a returned field is not a delivered one, and five have been
+dropped by summarising clients. Asking by name retrieves them; nothing makes them durable, and
+`unschedule_workout` takes an id that nothing stores.
+
+Three options, with the objection to each:
+
+1. **A JSON ledger on the tokens volume** (`/data/workout_ids.json`): workout id, scheduled id,
+   name, date, build. Cheap, survives restarts, and both containers can write it under the
+   existing cross-process lock. **Objection:** §4's volume holds the credential and has exactly
+   one backup copy; adding account data to it is the argument v1.5 used to keep athlete context
+   out. It is also a second store of a fact Garmin already holds.
+2. **Garmin's calendar is already the ledger** — the scheduled id is readable from
+   `get_scheduled_workouts` for a month, so undo needs a **read**, not a store. **Objection:**
+   one extra request per undo, and it only works while the entry is still on the calendar.
+   **This is the option most consistent with the v1.5 decision that Garmin's calendar is the
+   store for plan continuity.**
+3. **Return it harder** — a dedicated `garmin_last_write` tool reporting the most recent write's
+   ids from process memory. **Objection:** per-process, and Desktop runs two containers, so it
+   answers from whichever one is asked. Fails exactly when it is needed, after a restart.
+
+**Ratified: option 2.** Option 1 stays as a fallback, to be reached for only if a read-based
+undo proves unreliable in use; option 3 is rejected outright, because it fails after exactly the
+restart that makes it necessary. Option 2 adds no store, contradicts no earlier decision, and
+the request cost is paid only on an undo, which is rare. What it needs is an `unschedule` path
+that *finds* the id rather than being handed it — **committed to v1.7**, not built in v1.6.
+
+Two things the v1.7 plan inherits and must walk in its own ten dimensions rather than assume
+here: `get_scheduled_workouts` takes a **calendar month**, not a date window (§14.2's 1.a), so a
+lookup near a month boundary reads two months or misses; and the lookup's failure mode when the
+entry is already gone must be a **bounded refusal naming the date**, not a silent no-op, because
+a silent success reads as evidence the undo happened.
+
+### §15.14 Net v1.6 changes
+
+| Finding | Section updated | Change |
+|---|---|---|
+| — (the decision itself) | log, §5 | Running and strength are both composed; strength is a timed circuit of named exercises |
+| — (the decision itself) | log, §5 | An exercise is Garmin's catalogue pair, never free text; ambiguity refused |
+| — (the decision itself) | log, §5 | Explicit pace ranges allowed; zone-based targets stay refused |
+| — (the decision itself) | log, §5 | Reps and weight not built in v1.6 |
+| 1.a–1.e | §5 | Five pace refusals: seconds ≥ 60, equal bounds, inverted bounds, strength steps, out-of-band paces |
+| 2.a–2.d | §5 | The whole Garmin-side pace contract marked `[Mahi-verify]`; ordering confined to one constant |
+| 3.a, 7.a, 1.d | §5 | The target relaxation is per sport and per target type, never global |
+| 3.c, A.6 | §5 | The schema field ships with the composer, or `extra="forbid"` makes the feature unreachable |
+| 3.e, A.2 | §5, §8 | `estimated_duration_basis` stops claiming there is no pace |
+| 6.a, 6.b, A.1, B.1, B.3, A.3 | §5 | One converter; the summary renders min/km from it; rounding precedes the marker |
+| B.5 | §5 | An out-of-band pace edit in Connect is overwritten, and that is now stated |
+| 3.d, 7.b, and §8's list | §8 | Seven test requirements, incl. the float round-trip marker test Mahi asked for |
+| 2.c, 10.a-equivalent | §9 | New risk row: a swapped pace bound, accepted for one session, confined to one constant |
+| 4.b, 9.b, A.5 | §9, §15.13 | New risk row: an important id exists only in a response. **Option 2 ratified** — lookup, no ledger; implementation is v1.7 |
+| 10.d-equivalent | header, §15.1, §15.15 | §7, §7a and §9's location debts **committed to v1.7**, not carried a third time |
+| — | §15.1 | Recorded that (a) and (b) shipped before this document authorised them |
+
+### §15.15 Decisions taken at ratification (2026-10-31)
+
+Three decisions were taken at the moment of approval rather than during the walk, so they are
+recorded here rather than folded into §15.2–§15.14 as if the walk had produced them.
+
+1. **v1.6 is ratified as drafted, pace targets included.** The ten dimensions plus passes A and
+   B in §15.2–§15.12 are the walk of record. (a) and (b) were already shipped and are ratified
+   after the fact, which §15.1 names as the wrong order; (c) is authorised before any code, which
+   is the right one.
+2. **Durable ids: option 2** — look the scheduled id up on Garmin's calendar at undo time, no
+   ledger. §15.13 holds the reasoning and what v1.7 inherits. This keeps the tokens volume free
+   of account data, which was 4.b's objection.
+3. **The three carried debts are committed to v1.7**, firmly: §7's client wiring, §7a's bind
+   address, §9's location exposure via activity detail.
+
+**Whether any of the three blocks pace targets — checked, and no.** Asked before the commitment
+was made, because "commit it to the next version" is only a scope decision if the current
+version does not depend on it:
+
+- **§7 client wiring** is a documentation correction about the Desktop config surface. It touches
+  no module. Pace targets reach the laptop by a re-pin, which 9.a already covers.
+- **§7a bind address** is prose about a port on the web UI. There is no pace surface there and no
+  composer path through it. The prose is wrong about a port, not about a target.
+- **§9 location exposure** is a read path, `get_activity_details` and its polylines. Pace targets
+  add no request, no endpoint and no persistence — 4.a — and §15.11's state matrix has no row
+  that reaches activity detail.
+
+The one adjacency anywhere is A.5 and 4.b, and those point at the **id** question, which is
+decision 2 above and already v1.7 scope. So the deferral costs v1.6 nothing.
+
+**No new ten-dimension walk is owed for these three decisions.** They add no state to v1.6 and
+no consumer of state: decisions 1 and 3 are scope statements, and decision 2's mechanism is
+explicitly v1.7, where it gets its own ten plus A and B before any code — with §15.13's two
+inherited findings as its starting point. Said explicitly, per the SOP, rather than skipped
+quietly.
