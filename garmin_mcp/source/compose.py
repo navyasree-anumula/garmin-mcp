@@ -875,8 +875,18 @@ def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
     the basis is read with it. The two are returned together for exactly that
     reason, and `estimated_duration_secs` is never surfaced without its basis.
 
-    Whether Garmin recomputes this on upload is **unverified** -- the supervised
-    live cycle settles it, and until then the basis says that too.
+    **Garmin does not recompute it on upload. MEASURED 2026-10-31** --
+    workout 1746800115 ("6x300m", scheduled 1825752591): the server computed
+    27:30, and Connect displays 27:30 unchanged. So this number is not a
+    provisional one that Garmin corrects; **it is the number the calendar
+    shows, and nothing downstream fixes it.** The claim was carried as
+    unverified from v0 and is now closed.
+
+    That makes the sentence above a bigger deal than it was when it was written.
+    While the recompute was an open question, a distance step contributing 0
+    could be hoped to be temporary. It is not: the understatement is permanent,
+    and the basis explaining it **does not travel to Connect** -- the calendar
+    shows the bare number with no sentence beside it.
     """
     timed = 0.0
     distance_steps = 0
@@ -904,9 +914,9 @@ def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
         basis = (
             f"Sum of the time-based steps only. {distance_steps} distance step(s) "
             "contribute 0: this account has no measured pace, and assuming one "
-            "would put an invented number in a field the calendar may display. "
-            "Garmin may recompute this on upload -- unverified until the "
-            "supervised live cycle."
+            "would put an invented number in a field the calendar displays. "
+            "Garmin does not recompute it on upload (measured 2026-10-31), so "
+            "this is the number the calendar will show."
         )
     elif distance_steps and paced:
         basis = (
@@ -914,9 +924,10 @@ def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
             f"contribute 0. {paced} step(s) carry an explicit pace target, so it "
             "is no longer true that there is no pace here -- but a target is a "
             "prescription rather than a measured pace, and estimating from one "
-            "would turn an instruction into a number in a field the calendar may "
-            "display. It is deliberately not used. Garmin may recompute this on "
-            "upload -- unverified until the supervised live cycle."
+            "would turn an instruction into a number in a field the calendar "
+            "displays. It is deliberately not used. Garmin does not recompute "
+            "it on upload (measured 2026-10-31), so this is the number the "
+            "calendar will show and the shortfall is permanent."
         )
     return int(timed), basis
 

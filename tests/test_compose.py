@@ -348,13 +348,19 @@ def test_an_all_time_session_estimates_the_sum():
 
 def test_an_all_distance_session_estimates_zero_and_says_why():
     """A bare 0 reads as broken, so the number is never returned without its
-    basis -- and the basis has to explain the 0, not just describe the method."""
+    basis -- and the basis has to explain the 0, not just describe the method.
+
+    **Premise changed 2026-10-31, not loosened.** This asserted the basis said
+    "unverified", which was right while Garmin's recomputing was an open
+    question. Workout 1746800115 settled it -- Garmin does not recompute -- so
+    the basis now has to say the opposite, and saying nothing would be the
+    regression."""
     seconds, basis = compose.estimate_duration((Step("interval", distance_m=10000.0),))
 
     assert seconds == 0
     assert "contribute 0" in basis
     assert "no measured pace" in basis
-    assert "unverified" in basis
+    assert "does not recompute" in basis
 
 
 def test_a_repeat_multiplies_its_time_by_its_iterations():
@@ -1378,3 +1384,23 @@ def test_every_name_the_search_returns_resolves_unambiguously(word):
     for row in rows:
         resolved = compose.resolve_exercise(row["name"])
         assert resolved["name"] == row["name"]
+
+
+def test_the_basis_no_longer_hedges_about_garmin_recomputing():
+    """**Settled live on 2026-10-31**, workout 1746800115: the server computed
+    27:30 and Connect displayed 27:30 unchanged, so Garmin does not recompute
+    `estimatedDurationInSecs` on upload. The hedge is asserted gone rather than
+    just deleted, because an unverified claim that comes back is how a measured
+    fact gets un-measured -- and the consequence matters: the number the
+    calendar shows is ours and final."""
+    with_distance = (
+        Step("warmup", duration_secs=600.0),
+        Step("interval", distance_m=5000.0),
+    )
+
+    for steps in (with_distance, PACED_RUN):
+        _, basis = compose.estimate_duration(steps)
+
+        assert "may recompute" not in basis
+        assert "unverified" not in basis
+        assert "does not recompute" in basis

@@ -2950,13 +2950,57 @@ Tests: 638 -> 684. Nothing removed. Two tests changed premise rather than being 
 heart-rate zone is still refused, but the refusal no longer says "no targets", so they now assert
 the reason and that the message names what IS allowed.
 
+## 2026-10-31 (live) — Garmin does not recompute the duration, and that reopens a decision
+
+**The measurement.** Workout **1746800115**, "6x300m", scheduled **1825752591**. Distance steps
+confirmed on the watch: 300 m, 6 reps, 90 s recoveries, as composed. And the one that closes a
+claim carried since v0: **Connect displays 27:30, which is exactly what the server computed.**
+`estimatedDurationInSecs` is **not** recomputed on upload.
+
+**What that closes.** `estimate_duration`'s basis has said "Garmin may recompute this on upload
+-- unverified until the supervised live cycle" since v0. Gone, in the docstring and in both
+basis sentences, replaced by the measured fact with its date. A test asserts the hedge is
+**absent** and the settled phrasing present, because an unverified claim that creeps back is how
+a measured fact gets un-measured. One existing test changed premise rather than being loosened:
+it asserted the basis contained "unverified", which was correct until today and is now the
+regression.
+
+**What that reopens, and it is Mahi's call.** The basis decision of this morning -- option (a),
+the sentence changes and the arithmetic does not -- leaned on the recompute being an open
+question. While Garmin might have fixed the number on upload, a distance step contributing 0
+could be read as provisional. It cannot now. **The number on the calendar is ours and final, and
+the basis sentence explaining it does not travel to Connect** -- Garmin shows the bare number
+with nothing beside it, which is precisely the condition the original docstring said made a 0
+"read as broken".
+
+**The arithmetic, on today's own session.** 1800 m of running contributed 0. At roughly
+4:30/km that is about 8 minutes, so a session Connect will now permanently call 27:30 is nearer
+35:30 in fact.
+
+**But today's session does not itself indict (a)**, and the honest version says so: it carried no
+pace target, so option (b) would have computed nothing for it either and it would read 27:30
+under both. What changed is the stakes for a **paced** session. Under (a), a 6x800 m at
+4:20-4:40/km -- where the server was told the exact speed -- would still display several minutes
+short, permanently, with no explanation attached. Under (b) it would display the arithmetic on
+the pace the human approved.
+
+**The argument for (a) is unchanged and still good:** a target is a prescription, not a
+measurement, and computing from one puts an invented-looking number in a displayed field. The
+argument against it got sharper today: the alternative is not "no number", it is "a number that
+is wrong by eight minutes with no sentence beside it".
+
+Recorded in SCOPE §15 as **REOPENED (open, for Mahi)**. No behaviour changed: the ratified
+option is still (a), and it stays (a) until Mahi says otherwise.
+
+Tests: 684 -> 685.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **684 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **685 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---

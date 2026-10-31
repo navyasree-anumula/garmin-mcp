@@ -637,6 +637,16 @@ The rules:
   run, not a measurement of what they do run, so estimating from it would turn an instruction into
   a computed number in the same displayed field this rule exists to keep invented numbers out of.
   Option (b), estimating from the range's midpoint, was considered and rejected on that ground.
+  **REOPENED by measurement, 2026-10-31 (open, for Mahi).** Workout 1746800115 ("6x300m",
+  scheduled 1825752591) settled a claim this decision leaned on: **Garmin does not recompute
+  `estimatedDurationInSecs` on upload** -- the server computed 27:30 and Connect displays 27:30
+  unchanged. The old basis sentence hedged that Garmin "may recompute", which made a distance
+  step's 0 look provisional. It is not: the number is ours and final, **and the basis sentence
+  that explains it does not travel to Connect**, where the bare number sits on the calendar with
+  nothing beside it. This does not change what an unpaced session displays -- (b) computes only
+  where a pace was given -- but it changes the stakes for a *paced* one, which would permanently
+  display several minutes short of a session the server was told the exact speed of. Recorded
+  here as an open question rather than acted on; the ratified behaviour is still (a).
 - **An out-of-band edit in Connect is overwritten.** The update path reads a workout's name and
   id and never its stored target, so a pace changed by hand in Connect is replaced by the next
   re-prescription. Consistent with "the calendar wins", and stated here because the losing side
