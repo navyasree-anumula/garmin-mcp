@@ -536,6 +536,20 @@ class WorkoutStep(BaseModel):
     distance_m: float | None = Field(
         default=None, description="How far this step runs, in metres. Interval only."
     )
+    pace_min_km: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional target pace range for a RUNNING step, in min/km, as two "
+            "strings with the faster bound first -- ['4:20', '4:40']. Refused "
+            "rather than adjusted if the bounds are equal or the wrong way "
+            "round, if the seconds are 60 or more, if the seconds have a "
+            "fraction, or if either bound is outside 2:30-12:00 per km. A pace "
+            "on a strength step, or on a repeat group instead of the steps "
+            "inside it, is refused. Heart-rate, power, cadence and zone-based "
+            "targets are not available: they depend on a profile this account "
+            "has never been read for."
+        ),
+    )
     iterations: int | None = Field(
         default=None, description="How many times a repeat group repeats. Minimum 2."
     )
@@ -638,9 +652,26 @@ def _as_compose_steps(steps: list[WorkoutStep]) -> tuple[source_compose.Step, ..
             iterations=step.iterations,
             repeat=_as_compose_steps(step.repeat),
             exercise=step.exercise,
+            pace_min_km=(
+                tuple(step.pace_min_km) if step.pace_min_km is not None else None
+            ),
         )
         for step in steps
     )
+
+
+def _pace_suffix(step: WorkoutStep) -> str:
+    """` @ 4:20-4:40/km`, or nothing -- rendered by the one converter.
+
+    **Not re-parsed from the argument.** The words a human approves and the
+    bytes Garmin stores have to be two renderings of one value; computing them
+    separately is how somebody approves the right pace on the wrong workout
+    (SCOPE §15, Pass A.1 and B.3). So this calls `pace_target` -- the same
+    function the structure was built from -- and shows what it produced.
+    """
+    if step.pace_min_km is None:
+        return ""
+    return f" @ {source_compose.pace_target(step.pace_min_km).rendered}"
 
 
 def _summarise(steps: list[WorkoutStep]) -> list[str]:
@@ -665,9 +696,9 @@ def _summarise(steps: list[WorkoutStep]) -> list[str]:
                 f"[{entry['category']}/{entry['exercise']}]"
             )
         elif step.duration_secs is not None:
-            lines.append(f"{step.kind}: {step.duration_secs:g}s")
+            lines.append(f"{step.kind}: {step.duration_secs:g}s{_pace_suffix(step)}")
         elif step.distance_m is not None:
-            lines.append(f"{step.kind}: {step.distance_m:g}m")
+            lines.append(f"{step.kind}: {step.distance_m:g}m{_pace_suffix(step)}")
         else:
             # Unreachable through the composer, which refuses this -- but a
             # summary that silently dropped a step would be worse than one that
@@ -729,10 +760,21 @@ def garmin_workouts(
     is and what hurts, which no Garmin endpoint holds. They belong in the
     conversation (docs/SCOPE.md §1).
 
-    **No pace or heart-rate target, in either sport.** Every target Garmin
-    offers is zone-based and this account's zones have never been fetched, so a
-    target is refused rather than guessed. Ask for a target and the refusal says
-    this.
+    **One target, and only on a running step: an explicit pace range.** Give a
+    step `pace_min_km` as two paces in min/km with the faster bound first --
+    `["4:20", "4:40"]` -- and the preview shows the range in min/km while the
+    structure carries it in metres per second, both from one conversion. **Every
+    other target is still refused**: heart rate, power, cadence, resistance and
+    pace *zones* all depend on a profile this account has never been read for,
+    and a pace on a strength step is refused because a circuit is prescribed by
+    time. Ask for one of those and the refusal says which it is.
+
+    **Garmin's side of a pace target is unverified.** The target id is the
+    library's own; the key string, the unit, the display order and which of the
+    two values carries the faster bound are community convention, confined to
+    one constant, and settle on a read-back from Connect. The first live pace
+    session is the check -- run outside the range on purpose and see whether the
+    watch alerts, and in which direction.
 
     **A strength session is a circuit.** Put the round in a repeat group --
     exercise, rest, exercise, rest -- and give the group its iterations. Each

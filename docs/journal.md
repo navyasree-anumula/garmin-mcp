@@ -2886,13 +2886,77 @@ where it gets its own ten plus A and B before any code is written.
 
 Tests: 638, unchanged — this session wrote documents, not code.
 
+## 2026-10-31 (pace targets) — the refusal narrowed, and three claims with it
+
+**v0 refused every target for a reason that was half true.** "Every `TargetType` Garmin offers
+is zone-based and this account's zones have never been fetched" — the second half still holds,
+the first half was too broad. An explicit pace *range* is a pair of absolute speeds: no zone, no
+heart-rate data, no profile read. So the refusal narrowed to one target instead of disappearing,
+and heart rate, power, cadence, resistance and pace *zones* are all still refused.
+
+**One converter, two audiences.** `pace_target` parses min/km, refuses what it should, converts
+to m/s rounded to 3 decimals, and hands back an object that renders **both** units. The
+structure reads `faster_m_s`; the preview reads `rendered`. The whole guarantee is that the words
+a human approves and the bytes Garmin stores are two renderings of one value — if the summary had
+re-parsed the input string, the two could disagree and **the human would approve the right words
+over the wrong workout.** `tests/test_garmin_workouts.py` asserts it the hard way: it takes the
+pace out of the summary line, converts it again, and finds those numbers in the payload.
+
+**The rendering is canonical, which is the proof.** `"04:20"` comes back as `4:20`, because the
+string is built from the parsed number rather than echoed. An echo would have passed a laxer test.
+
+**Three claims in the freshly-ratified §15 were wrong or too strong, and all three were found by
+doing the work rather than by re-reading the document.**
+
+- **2.a said the library "holds no pace key at all".** It defines `class TargetType` with
+  `PACE_ZONE = 6`. The **id is upstream's** and is now read from it instead of written as a
+  literal; what stays community convention is narrower — the key string, the `displayOrder`, the
+  unit, and which value carries the faster bound. That is what `PACE_CONTRACT` holds, and it is
+  one constant so that a wrong part is wrong once.
+- **3.b said "every upstream builder accepts a third `target_type`".** It read the five *running*
+  builders and generalised. `create_strength_rest_step(duration_seconds, step_order)` takes no
+  target at all, so passing one — even `None` — is a `TypeError`. **A test caught it**, which is
+  the part worth keeping: the first full-suite run after the plumbing went in failed thirteen
+  strength tests with `takes 2 positional arguments but 3 were given`. The third argument is now
+  passed only when a target exists, so an untargeted session composes byte-for-byte what it
+  composed before.
+- **1.d was treated as belt-and-braces and is load-bearing.** Strength's `warmup` and `cooldown`
+  are built by *running's* builders, which do accept a target — so a pace in a circuit is
+  expressible, and by the time a builder is chosen it is a crash rather than a wrong workout. The
+  per-sport refusal also has to sit **above** the `exercise` builder's early return, or a pace on
+  an exercise step is dropped instead of refused. It was written below it first.
+
+**The estimate keeps its arithmetic and loses its false sentence (option (a), Mahi's call).** A
+paced distance step still contributes 0. A target is what the athlete was *told* to run, not a
+measurement of what they do run, so estimating from it would turn an instruction into a computed
+number in exactly the displayed field the original rule exists to keep invented numbers out of.
+What changes is the basis: it no longer says "this account has no measured pace" when a pace is
+sitting in the payload. Both halves are asserted, so a later reading cannot quietly promote the
+prescription to a measurement.
+
+**What is still unverified, and the check that settles it.** Garmin's side of the contract. The
+live check is **not** "the workout exists" — it is to run **outside** the range on purpose and
+see whether the watch alerts, and in which direction. A swapped pair composes, uploads and
+schedules happily, and only the watch can tell you the easy end became the hard end. There is no
+`probe-pace` in `probe.py`; the settle path is a read-back from Connect of one hand-built pace
+step.
+
+**README was four tools and one phase behind**, claiming three tools and "the workout write path
+comes next" when six are registered and the path reaches Garmin. Corrected, with the test count
+and what the two skips actually are — the first version of that line said they were
+platform-specific locking tests, which was wrong; they are two metric-map rows.
+
+Tests: 638 -> 684. Nothing removed. Two tests changed premise rather than being loosened: a
+heart-rate zone is still refused, but the refusal no longer says "no targets", so they now assert
+the reason and that the message names what IS allowed.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **638 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **684 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -2935,6 +2999,21 @@ went in flat. Now that `REPEAT_GROUP_EXAMPLE` is in the prose the agent reads,
 ask for a circuit and check the preview's `step_summary` shows `4x:` with the
 steps indented beneath it rather than twenty-four flat lines. Then write it. It
 is the last composed-but-unsent shape in the write path.
+
+**2b. Settle Garmin's pace contract, which takes one workout and one run.**
+Composed and tested since 2026-10-31, never sent. Four things are community
+convention and live in `PACE_CONTRACT`: the key string `"pace.zone"`, the
+`displayOrder`, the unit (m/s), and **which of `targetValueOne`/`targetValueTwo`
+carries the faster bound.** The id is upstream's, so it is not in question.
+Two ways to settle it, cheapest first:
+1. **Read it back from Connect.** Build one pace step by hand in Connect, fetch
+   the workout, and read the four values off the payload. No guessing, no run.
+2. **Run it.** Write a paced session, then run **outside** the range on purpose
+   and watch which way the watch complains. This is the only check that catches
+   a swapped pair, because a swapped pair composes, uploads and schedules
+   happily — it just turns the easy end of the range into the hard end. "The
+   workout exists" settles nothing here.
+Do (1) first. If the bound order is wrong, exactly one constant changes.
 
 **~~3. `id_keys`.~~ DONE 2026-10-31** — `workoutId` and `workoutScheduleId`,
 measured, with the fixtures promoted to `# recorded:` and the candidate lists
@@ -3127,6 +3206,10 @@ confirmed the first workout, not the response.
 
 **Still open:**
 
+- **Garmin's pace contract is unverified** — the key string, the display order, the unit and
+  the bound order, all inside `PACE_CONTRACT` so a wrong one is wrong once. The target *id* is
+  upstream's `TargetType.PACE_ZONE` and is not in question. A swapped bound order is invisible
+  everywhere except on the watch, mid-run. See check 2b.
 - **Four unverified metric rows** — `training_status`, `load_balance`, `readiness`,
   `recovery_time`. All settleable the free way `hrv_status` was: compare the row's output against
   what the Garmin Connect app displays for the same day. **`probe --explain` cannot do it** — it

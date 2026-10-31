@@ -642,3 +642,157 @@ def test_the_exercise_field_points_at_the_search_tool():
     described = schema["$defs"]["WorkoutStep"]["properties"]["exercise"]["description"]
 
     assert "garmin_exercises" in described
+
+
+# --------------------------------------------------------------------------
+# Pace targets at the tool layer (§5/§8, v1.6). The composer's own pace tests
+# are in `test_compose.py`; what matters here is that the words a human
+# approves and the bytes Garmin would store are two renderings of one value.
+# --------------------------------------------------------------------------
+
+
+PACED_SESSION = [
+    WorkoutStep(kind="warmup", duration_secs=600.0),
+    WorkoutStep(
+        kind="interval", distance_m=5000.0, pace_min_km=["4:20", "4:40"]
+    ),
+    WorkoutStep(kind="cooldown", duration_secs=300.0),
+]
+
+
+def test_the_preview_shows_the_pace_in_min_per_km():
+    """A human approves min/km and must never be shown m/s. The structure
+    carries 3.846 and the summary says 4:20 -- same value, two audiences."""
+    preview = garmin_workouts(action="preview", name="Tempo 5k", steps=PACED_SESSION)
+
+    assert preview.step_summary == [
+        "warmup: 600s",
+        "interval: 5000m @ 4:20-4:40/km",
+        "cooldown: 300s",
+    ]
+    assert preview.requests_made == 0
+
+
+def test_the_summary_and_the_structure_cannot_disagree():
+    """**The §8 requirement this whole feature turns on** (Pass A.1, B.3). One
+    conversion, two readers. If the summary re-parsed the argument while the
+    structure used the converted value, they could drift -- and the human would
+    approve the right words over the wrong workout. Asserted by converting the
+    words in the summary back and finding the numbers in the payload."""
+    preview = garmin_workouts(action="preview", name="Tempo 5k", steps=PACED_SESSION)
+
+    line = next(line for line in preview.step_summary if "@" in line)
+    shown = line.split("@")[1].strip().removesuffix("/km")
+    faster_shown, slower_shown = shown.split("-")
+
+    contract = compose_module.PACE_CONTRACT
+    step = next(
+        item
+        for item in preview.structure["workoutSegments"][0]["workoutSteps"]
+        if (item.get("targetType") or {}).get("workoutTargetTypeKey")
+        == contract.target_key
+    )
+
+    expected = compose_module.pace_target([faster_shown, slower_shown])
+    assert step[contract.faster_bound_field] == expected.faster_m_s
+    assert step[contract.slower_bound_field] == expected.slower_m_s
+
+
+def test_the_approval_marker_covers_the_pace():
+    """A marker that did not change with the pace would let a human approve a
+    session at one pace and a create carry another."""
+    paced = garmin_workouts(action="preview", name="Tempo 5k", steps=PACED_SESSION)
+    unpaced = garmin_workouts(
+        action="preview",
+        name="Tempo 5k",
+        steps=[
+            WorkoutStep(kind="warmup", duration_secs=600.0),
+            WorkoutStep(kind="interval", distance_m=5000.0),
+            WorkoutStep(kind="cooldown", duration_secs=300.0),
+        ],
+    )
+
+    assert paced.approval != unpaced.approval
+
+
+def test_the_basis_in_the_preview_stops_claiming_there_is_no_pace():
+    """The basis is read by the human, not by a test of `estimate_duration`,
+    so the sentence is asserted where it is actually surfaced."""
+    preview = garmin_workouts(action="preview", name="Tempo 5k", steps=PACED_SESSION)
+
+    assert "this account has no measured pace" not in preview.estimated_duration_basis
+    assert "prescription" in preview.estimated_duration_basis
+    assert preview.estimated_duration_secs == 900
+
+
+def test_a_pace_in_a_strength_session_refuses_at_the_tool():
+    """The refusal has to arrive as a `ToolError` an agent can read, not as a
+    traceback -- and it must name the reason, because the agent's next move is
+    to drop the pace rather than to guess another field."""
+    with pytest.raises(ToolError, match="pace target is for a running step"):
+        garmin_workouts(
+            action="preview",
+            name="Circuit",
+            sport="strength",
+            steps=[
+                WorkoutStep(kind="warmup", duration_secs=300.0, pace_min_km=["4:20", "4:40"]),
+                WorkoutStep(kind="exercise", duration_secs=40.0, exercise="goblet squat"),
+                WorkoutStep(kind="rest", duration_secs=20.0),
+            ],
+        )
+
+
+def test_the_same_strength_session_previews_without_the_pace():
+    """The control. The refusal above must be about the pace and not about the
+    session."""
+    preview = garmin_workouts(
+        action="preview",
+        name="Circuit",
+        sport="strength",
+        steps=[
+            WorkoutStep(kind="warmup", duration_secs=300.0),
+            WorkoutStep(kind="exercise", duration_secs=40.0, exercise="goblet squat"),
+            WorkoutStep(kind="rest", duration_secs=20.0),
+        ],
+    )
+
+    assert preview.step_summary == [
+        "warmup: 300s",
+        "exercise: Goblet Squat 40s [SQUAT/GOBLET_SQUAT]",
+        "rest: 20s",
+    ]
+
+
+def test_a_malformed_pace_refuses_at_the_tool_with_the_reason():
+    with pytest.raises(ToolError, match="seconds must be under 60"):
+        garmin_workouts(
+            action="preview",
+            name="Bad",
+            steps=[
+                WorkoutStep(kind="interval", distance_m=1000.0, pace_min_km=["4:75", "5:00"])
+            ],
+        )
+
+
+def test_the_pace_field_is_published_with_its_rules():
+    """`extra="forbid"` means an undeclared field is refused, so the schema
+    field and the composer had to ship together (§15 3.c / A.6). This asserts
+    the field is actually published AND that its description carries the shape
+    -- a declared field nobody can see the format of is unreachable in
+    practice."""
+    schema = registered_tool("garmin_workouts").input_schema
+    described = schema["$defs"]["WorkoutStep"]["properties"]["pace_min_km"][
+        "description"
+    ]
+
+    assert "min/km" in described
+    assert "faster bound first" in described
+    assert "4:20" in described
+
+
+def test_an_undeclared_target_field_is_still_refused():
+    """The pace field is the one target input that exists. A client guessing
+    `heart_rate_zone` must be told the field is wrong rather than having it
+    dropped, which is the failure that cost a live session on 2026-10-31."""
+    with pytest.raises(Exception, match="heart_rate_zone"):
+        WorkoutStep(kind="interval", duration_secs=600.0, heart_rate_zone=3)

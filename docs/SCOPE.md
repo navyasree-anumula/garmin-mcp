@@ -631,7 +631,12 @@ The rules:
   the input string for the summary would let the human approve the right words over the wrong
   workout.
 - **`estimated_duration_basis` must stop claiming there is no pace** for a step that now carries
-  one. The sentence was true when written and becomes false the moment this ships.
+  one. The sentence was true when written and becomes false the moment this ships. **Settled
+  2026-10-31, option (a):** the sentence changes and **the arithmetic does not**. A paced distance
+  step still contributes 0, and the basis says why — a target is what the athlete was *told* to
+  run, not a measurement of what they do run, so estimating from it would turn an instruction into
+  a computed number in the same displayed field this rule exists to keep invented numbers out of.
+  Option (b), estimating from the range's midpoint, was considered and rejected on that ground.
 - **An out-of-band edit in Connect is overwritten.** The update path reads a workout's name and
   id and never its stored target, so a pace changed by hand in Connect is replaced by the next
   re-prescription. Consistent with "the calendar wins", and stated here because the losing side
@@ -922,7 +927,10 @@ they were written — never their contents.
 - **Every name `garmin_exercises` returns resolves unambiguously**, parameterised over several
   movement words. The search is only useful if its output can be handed straight back, and that
   is two functions agreeing rather than either being right alone.
-- **Baseline for v1.6 work: 638 tests, 2 skipped.**
+- **Baseline for v1.6 work: 638 tests, 2 skipped.** **After pace targets: 684 passed, 2
+  skipped** (2026-10-31), +46. Nothing removed; two tests in `test_compose.py` changed premise
+  rather than being loosened, because a heart-rate zone is still refused but the refusal's wording
+  is no longer "no targets".
 
 - **Baseline: 0 tests.** This repo starts empty. That is the reference point for every
   later count. **Pass 1: 10. v1.3 phase 1: 26.**
@@ -1593,14 +1601,23 @@ framing and is why #3's findings are unusually concrete.
 - 1.c: bounds inverted — `["4:40","4:20"]` — **ACTIONABLE §5**, refuse naming the expected order
   rather than silently sorting, because sorting would hide a caller that misunderstands the field.
 - 1.d: a pace target is expressible on a **strength** step, since every upstream builder accepts
-  a `target_type` — **ACTIONABLE §5**, refuse by sport.
+  a `target_type` — **ACTIONABLE §5**, refuse by sport. **Sharpened 2026-10-31, during
+  implementation:** it is load-bearing rather than belt-and-braces, because strength's `warmup`
+  and `cooldown` are built by **running's** `create_warmup_step` / `create_cooldown_step`, which
+  do take a target. The refusal must also come **before** the `exercise` builder's early return,
+  or a pace on an exercise step is dropped instead of refused.
 - 1.e: paces outside ~2:30–12:00/km — **ACTIONABLE §5**, refuse (Mahi specified the band).
 - 1.f: fractional seconds — `"4:20.5"` — no separate action; 1.a's parser is strict and rejects it.
 
 ### §15.3 #2 Unverified assumptions — 5 findings, 4 `[Mahi-verify]`
 
 - 2.a: **`"pace.zone"` as the key string.** Checked the library: it writes `"no.target"` and
-  **holds no pace key at all**. Entirely community convention — `[Mahi-verify]` via `probe-pace`.
+  writes no pace target anywhere. Entirely community convention — `[Mahi-verify]` via a read-back
+  from Connect. **CORRECTED 2026-10-31, during implementation:** this said the library "holds no
+  pace key at all", which is too strong. `garminconnect/workout.py` defines `class TargetType`
+  with `PACE_ZONE = 6`, so **the id is upstream's** and is read from it rather than written as a
+  literal. What stays unverified is narrower and is what `PACE_CONTRACT` holds: the key *string*,
+  the `displayOrder`, the unit, and which value carries the faster bound.
 - 2.b: pace stored as **m/s** — plausible, unmeasured — `[Mahi-verify]`.
 - 2.c: **which of `targetValueOne`/`targetValueTwo` is the faster bound** — unmeasured, and Mahi
   flagged it himself — `[Mahi-verify]`. Confined to one named constant (§15.11, A.1).
@@ -1621,6 +1638,11 @@ Source read, not inferred.
   builder — warmup, interval, recovery, cooldown, distance-interval — already accepts a third
   `target_type`. So the plumbing exists upstream and only our call site needs changing. No
   `extra="allow"` assembly is needed for the step itself, only for the two target values.
+  **CORRECTED 2026-10-31, by a failing test:** "every upstream builder" reads the five *running*
+  builders and over-generalises. `create_strength_rest_step(duration_seconds, step_order)` takes
+  **no `target_type` at all**, so passing one — even `None` — is a `TypeError`. The third
+  argument is therefore passed only when a target exists, which also keeps an untargeted session
+  composing byte-for-byte what it composed before pace shipped.
 - 3.c: `WorkoutStep` sets `extra="forbid"` (#41), so an undeclared `pace_per_km` would be refused
   with "Extra inputs are not permitted" and the feature would be unreachable — **ACTIONABLE §5**,
   the schema field ships in the same change as the composer.

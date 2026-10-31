@@ -3,8 +3,9 @@
 An MCP server over one person's Garmin Connect account — reads, plus structured workout
 creation and calendar scheduling.
 
-**Status: pass 2, phase 5.** Three tools — `garmin_auth_status`, `garmin_training` and
-`garmin_health` — plus a local web UI for signing in and checking the machine's state. The
+**Status: pass 2, phase 5.** Six tools — `garmin_auth_status`, `garmin_training`,
+`garmin_health`, `garmin_exercises`, `garmin_workouts` and `garmin_workout_create` — plus a
+local web UI for signing in and checking the machine's state. The
 two metric tools read Garmin's own measurements through the metric→source map, which exists
 because in four of nine known cases the endpoint named after a metric is not the one that
 answers it. They return measurements and never advice: what they mean for a given week
@@ -19,8 +20,19 @@ this watch measures none, which is a better answer than silence.
 
 Body battery is measured but deliberately unmapped. It arrives inside the stress payload as
 a descriptor-indexed positional array, which needs a decoder that resolves a descriptor key
-to a position, and a row written before that decoder exists would be a guess. The workout
-write path comes next.
+to a position, and a row written before that decoder exists would be a guess.
+
+**The write path reaches Garmin.** `garmin_workouts` composes a running or strength session
+and previews it without sending anything; `garmin_workout_create` uploads and schedules the
+structure a human approved, never a recomposed one. A strength session is a circuit of named
+exercises held for a time, and `garmin_exercises` searches Garmin's own catalogue of 1527
+entries to find what a movement is called — a constant compiled into the library, so it costs
+no request. A running step may carry **one** target: an explicit pace range in min/km, faster
+bound first. Heart-rate, power, cadence and zone-based targets are refused, because every one
+of them depends on a profile this account has never been read for. Garmin's side of the pace
+contract — the key string, the unit, the display order, and which value holds the faster
+bound — is community convention confined to one constant and is **unverified** until it is
+read back from Connect.
 
 Read [`docs/SCOPE.md`](docs/SCOPE.md) before adding to it.
 
@@ -164,6 +176,12 @@ unauthenticated endpoint serving your health data. That work gets its own plan.
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest tests/ -q
 ```
+
+**684 passed, 2 skipped** as of 2026-10-31. Both skips are in `tests/test_metrics_map.py`,
+which parameterises over the metric map: one row has no source endpoint and is covered by
+its own test, and one carries no reading and so has no unit to check. A count below 684
+means something was removed, which `docs/SCOPE.md` §8 treats as needing a reason rather
+than a shrug.
 
 ## CI
 
