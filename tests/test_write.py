@@ -27,17 +27,21 @@ from garmin_mcp.source.write import WriteRefused
 
 DAY = "2026-11-05"
 
-# recorded in part: 2026-10-27, the first real write. The live call returned a
-# readable `workout_id` (1742892340), so SOME key in WORKOUT_ID_KEYS is right and
-# the value is a plain int. WHICH key is still unknown -- the raw response is
-# attached only on a miss, so a success taught nothing. `_first_id_with_key` now
-# records it, and the next create settles this line.
+# recorded: 2026-10-31, the second real write (`Runner strength 30`, workout
+# 1746708075). `id_keys` reported `"workout_id": "workoutId"`, so `upload_workout`
+# carries the id under **workoutId** -- the first candidate in WORKOUT_ID_KEYS,
+# guessed right and now measured. The value is a plain int. Promoted from
+# `# recorded in part:` because the thing that was partial -- which key -- is the
+# thing that is now known.
 UPLOAD_OK = {"workoutId": 12345, "workoutName": "Thu threshold"}
 
-# recorded in part: same call, `scheduled_workout_id` 1821895273 -- so a key in
-# SCHEDULE_ID_KEYS is right and undo is reachable in principle. Which of the
-# three carried it is unknown for the same reason. This is the line that matters
-# most: `unschedule_workout` takes this id and nothing else.
+# recorded: same 2026-10-31 call. `id_keys` reported
+# `"scheduled_workout_id": "workoutScheduleId"`, so `schedule_workout` carries it
+# under **workoutScheduleId** -- again the first candidate. This is the line that
+# matters most: `unschedule_workout` takes this id and nothing else, so undo is
+# now reachable by a key we have measured rather than one of three we hoped for.
+# Live schedule ids so far: 1821895273 (throwaway test, 27 Oct), 1825661241
+# (Runner strength 30, 31 Oct).
 SCHEDULE_OK = {"workoutScheduleId": 98765, "date": DAY}
 
 # invented: the calendar month. The container key is the part that decides

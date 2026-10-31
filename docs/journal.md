@@ -2737,15 +2737,43 @@ so the example is a module constant, `REPEAT_GROUP_EXAMPLE`, and three tests
 parse that exact published string and compose it: one through the typed model,
 one against the published schema, one through the raw wire path.
 
-**`id_keys` is STILL unknown, for the fifth time.** The create returned it and
-the agent reported only the workout id. `scheduled_workout_id` did not reach the
-human either — the id that `unschedule_workout` needs, without which the
-calendar entry can only be removed in Connect. This is the rule this file
-already carries, failing again: **a field is not a channel.** Returning a field
-does not deliver it; a summarising client drops whatever the human did not ask
-for by name. Five occurrences now: `server_version`, the provenance note, the
-refusal distinction, the write's ids, and now `id_keys`. The next create must be
-asked, in words, for `id_keys` and `scheduled_workout_id`.
+**`id_keys` is SETTLED, and the way it was settled is the finding.** The create
+returned it; the agent's summary dropped it and reported only the workout id —
+the fifth time a deliberately returned field has not reached the human, after
+`server_version`, the provenance note, the refusal distinction and the write's
+own ids. **A field is not a channel.** But asked for by name, in one sentence,
+it came back in full:
+
+```json
+"workout_id": 1746708075,
+"scheduled_workout_id": 1825661241,
+"id_keys": {"workout_id": "workoutId", "scheduled_workout_id": "workoutScheduleId"}
+```
+
+So `upload_workout` carries its id under **`workoutId`** and `schedule_workout`
+under **`workoutScheduleId`** — the first candidate in each of `_first_id`'s
+lists. Guessed right, and now measured rather than hoped. `test_write.py`'s two
+id fixtures are promoted from `# recorded in part:` to `# recorded:`, which is
+the whole purpose that third marker was invented for on 27 Oct.
+
+**The candidate lists are NOT narrowed, deliberately.** `WORKOUT_ID_KEYS` is
+read in three places — the upload response, the workout list in the name
+resolver, and calendar items in `_scheduled_ids_on` — and only the first has had
+its key names measured. Narrowing on this evidence would be reading one
+endpoint's answer as three endpoints'. The confirmation is recorded per endpoint
+instead, in the comment above each list.
+
+**Schedule ids so far**, since `unschedule_workout` is the only undo and takes
+this id and nothing else: `throwaway test` 1821895273 (27 Oct, from a build with
+no `id_keys`), `Runner strength 30` 1825661241 (31 Oct).
+
+**The exercise names render.** Cross-checked in the Connect app on the phone:
+the steps read `Goblet Squat`, `Hip Raise` and the rest, as composed. So the
+`category`/`exerciseName` pair on a TIME-ended step is not merely accepted, it
+is **displayed**. That was the last of the three outcomes still open, and it is
+the good one. Strictly, what is measured is Connect's rendering on a phone; the
+watch's own mid-session display was not observed separately, and the honest
+version of this claim says so.
 
 **The flat form is a real finding too, not only a workaround.** A 24-step flat
 circuit was accepted and scheduled, so the repeat group is not required for a
@@ -2798,7 +2826,16 @@ ask for a circuit and check the preview's `step_summary` shows `4x:` with the
 steps indented beneath it rather than twenty-four flat lines. Then write it. It
 is the last composed-but-unsent shape in the write path.
 
-**3. `id_keys` settles Garmin's response keys — ASK FOR IT BY NAME.**
+**~~3. `id_keys`.~~ DONE 2026-10-31** — `workoutId` and `workoutScheduleId`,
+measured, with the fixtures promoted to `# recorded:` and the candidate lists
+annotated rather than narrowed. The method is the part worth keeping: the field
+was returned and summarised away, and **asking for it by name in one sentence
+retrieved it in full.** Do that every time.
+
+**~~3b. Whether the names show.~~ DONE** — they do, cross-checked in the Connect
+app. The watch's own mid-session render was not separately observed.
+
+The original item, kept because the expectation it set was met exactly:
 Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
 "workoutScheduleId"}`. Whatever comes back, **write the real key names into
 `test_write.py`** and change its two id fixtures from `# recorded in part:` to
