@@ -358,6 +358,10 @@ StepKind = Literal[tuple(source_compose.STEP_KINDS + ("repeat",))]  # type: igno
 #: written is a schema that lies to the agent.
 WorkoutAction = Literal["preview"]
 
+#: Derived from `compose` for the same reason the step kinds are: a sport the
+#: schema offers and the composer cannot build is a schema that lies.
+WorkoutSport = Literal[tuple(source_compose.SPORTS)]  # type: ignore[valid-type]
+
 
 class WorkoutStep(BaseModel):
     """One step of a prescribed session.
@@ -369,9 +373,22 @@ class WorkoutStep(BaseModel):
 
     kind: StepKind = Field(
         description=(
-            "warmup, interval, recovery, cooldown, or repeat. Only an interval "
-            "may be measured by distance; the rest are measured in time."
+            "For sport='running': warmup, interval, recovery, cooldown, or "
+            "repeat. Only an interval may be measured by distance; the rest are "
+            "measured in time. For sport='strength': exercise, rest, or repeat, "
+            "all measured in time. A kind used with the wrong sport is refused "
+            "and the refusal lists that sport's kinds."
         )
+    )
+    exercise: str | None = Field(
+        default=None,
+        description=(
+            "The exercise this step performs, for kind='exercise' only. Matched "
+            "against Garmin's own catalogue, which is what it stores -- 'goblet "
+            "squat', 'push-up', 'mountain climber'. An ambiguous term is refused "
+            "with the candidates listed rather than resolved to the nearest "
+            "match, so name one exactly if asked."
+        ),
     )
     duration_secs: float | None = Field(
         default=None, description="How long this step lasts, in seconds."
@@ -406,7 +423,7 @@ class WorkoutPreview(BaseModel):
     """
 
     workout_name: str = Field(description="The name this session would be saved under.")
-    sport: str = Field(description="Always 'running' in v0.")
+    sport: str = Field(description="The sport this session was composed for.")
     step_summary: list[str] = Field(
         description="One readable line per step, in the order they would run."
     )
@@ -441,6 +458,30 @@ _PREVIEW_NOTE = (
 )
 
 
+_TRAILING_REST_NOTE = (
+    " NOTE ON THIS CIRCUIT: its last round ends with a rest step. A repeat group "
+    "cannot vary by iteration, so the rest after the final exercise cannot be "
+    "dropped while keeping the rest between rounds -- the watch will hold that "
+    "last rest. Read this out: it is a property of the session being approved, "
+    "not of this server."
+)
+
+
+def _ends_on_a_rest(structure: dict) -> bool:
+    """Whether any repeat group's last child is a rest step.
+
+    Read off the composed structure rather than the step list, because it is a
+    statement about what Garmin will run, and the structure is what Garmin gets.
+    """
+    for item in structure["workoutSegments"][0]["workoutSteps"]:
+        if item.get("type") != "RepeatGroupDTO":
+            continue
+        children = item.get("workoutSteps") or []
+        if children and (children[-1].get("stepType") or {}).get("stepTypeKey") == "rest":
+            return True
+    return False
+
+
 def _as_compose_steps(steps: list[WorkoutStep]) -> tuple[source_compose.Step, ...]:
     """The wire model, converted to the composer's own.
 
@@ -456,6 +497,7 @@ def _as_compose_steps(steps: list[WorkoutStep]) -> tuple[source_compose.Step, ..
             distance_m=step.distance_m,
             iterations=step.iterations,
             repeat=_as_compose_steps(step.repeat),
+            exercise=step.exercise,
         )
         for step in steps
     )
@@ -473,6 +515,15 @@ def _summarise(steps: list[WorkoutStep]) -> list[str]:
         if step.kind == "repeat":
             lines.append(f"{step.iterations}x:")
             lines.extend(f"    {line}" for line in _summarise(step.repeat))
+        elif step.kind == "exercise" and step.duration_secs is not None:
+            # Resolved, not echoed. The whole point of the line is to show which
+            # catalogue entry Garmin will store, and the term the agent typed is
+            # exactly what cannot be trusted to be that entry.
+            entry = source_compose.resolve_exercise(step.exercise)
+            lines.append(
+                f"exercise: {entry['name']} {step.duration_secs:g}s "
+                f"[{entry['category']}/{entry['exercise']}]"
+            )
         elif step.duration_secs is not None:
             lines.append(f"{step.kind}: {step.duration_secs:g}s")
         elif step.distance_m is not None:
@@ -504,8 +555,17 @@ def garmin_workouts(
     description: Annotated[
         str | None, Field(description="Optional note saved with the workout.")
     ] = None,
+    sport: Annotated[
+        WorkoutSport,
+        Field(
+            description=(
+                "'running' (the default) or 'strength'. A strength session is a "
+                "circuit of named exercises held for a time, with timed rests."
+            )
+        ),
+    ] = "running",
 ) -> WorkoutPreview:
-    """Compose a running session and show what would be sent to Garmin.
+    """Compose a session and show what would be sent to Garmin.
 
     **Sends nothing.** A preview makes zero Garmin requests, so it cannot fail
     on a rate limit and costs nothing to run twice. There is no create or
@@ -517,10 +577,23 @@ def garmin_workouts(
     is and what hurts, which no Garmin endpoint holds. They belong in the
     conversation (docs/SCOPE.md §1).
 
-    **v0 is time and distance with no pace or heart-rate target.** Every target
-    Garmin offers is zone-based and this account's zones have never been
-    fetched, so a target is refused rather than guessed. Ask for a target and
-    the refusal says this.
+    **No pace or heart-rate target, in either sport.** Every target Garmin
+    offers is zone-based and this account's zones have never been fetched, so a
+    target is refused rather than guessed. Ask for a target and the refusal says
+    this.
+
+    **A strength session is a circuit.** Put the round in a repeat group --
+    exercise, rest, exercise, rest -- and give the group its iterations. Each
+    exercise names one entry from Garmin's catalogue and is held for
+    `duration_secs`; reps and weight are not built. An ambiguous exercise name
+    is refused with the candidates listed, so the human approves the entry
+    Garmin will actually store rather than the word the agent typed.
+
+    **One strength shape is unverified against Garmin**: a named exercise
+    measured in time. The library builds named exercises by *reps* and timed
+    steps *without* names, so the combination is this server's, and no live
+    create has confirmed Garmin accepts it (docs/SCOPE.md §5 -- the v1.6
+    amendment covering strength is drafted, NOT yet ratified).
 
     A malformed session is refused with the reason: a repeat group with no
     steps, fewer than two iterations, a step with no end condition, or one
@@ -541,21 +614,27 @@ def garmin_workouts(
     composed_steps = _as_compose_steps(steps)
 
     try:
-        structure = source_compose.compose(name, composed_steps, description)
+        structure = source_compose.compose(
+            name, composed_steps, description, sport=sport
+        )
         estimated, basis = source_compose.estimate_duration(composed_steps)
     except GarminSourceError as exc:
         raise ToolError(str(exc)) from exc
 
+    note = _PREVIEW_NOTE
+    if _ends_on_a_rest(structure):
+        note += _TRAILING_REST_NOTE
+
     return WorkoutPreview(
         workout_name=structure["workoutName"],
-        sport="running",
+        sport=sport,
         step_summary=_summarise(steps),
         estimated_duration_secs=estimated,
         estimated_duration_basis=basis,
         requests_made=0,
         structure=structure,
         approval=source_compose.approval_for(structure),
-        note=_PREVIEW_NOTE,
+        note=note,
     )
 
 

@@ -540,3 +540,313 @@ def test_composing_works_with_the_doorway_booby_trapped(monkeypatch):
     monkeypatch.setattr(source, "_garmin_access", explode)
 
     assert compose.compose("Thu threshold", SESSION)["workoutName"] == "Thu threshold"
+
+
+# --------------------------------------------------------------------------
+# Strength circuits (§5, v1.6 -- amendment drafted, not yet ratified)
+#
+# The shape this section exercises is the one the library does not build: a
+# named exercise measured in TIME. `create_strength_exercise_step` ends on reps
+# and `create_strength_rest_step` names nothing, so `_build_exercise` combines
+# them -- and Garmin's acceptance of that combination is unverified until a live
+# create settles it. These tests prove the structure is what we meant to send.
+# They cannot prove Garmin wants it, and nothing here should be read as saying
+# they do.
+# --------------------------------------------------------------------------
+
+CIRCUIT = (
+    Step(
+        "repeat",
+        iterations=3,
+        repeat=(
+            Step("exercise", duration_secs=40.0, exercise="goblet squat"),
+            Step("rest", duration_secs=20.0),
+            Step("exercise", duration_secs=40.0, exercise="push-up"),
+            Step("rest", duration_secs=20.0),
+        ),
+    ),
+)
+
+
+def work_steps(structure):
+    """Every strength work step, in order. Rests and the group are skipped."""
+    return [
+        item
+        for item, _ in compose._flatten(steps_of(structure))
+        if (item.get("stepType") or {}).get("stepTypeKey") == "interval"
+    ]
+
+
+def test_a_strength_circuit_carries_the_strength_sport_type_in_both_places():
+    """The segment repeats the workout's sport type. Two copies of one fact is
+    two things that can disagree, so both come from `_sport_type`."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+
+    expected = {
+        "sportTypeId": 5,
+        "sportTypeKey": "strength_training",
+        "displayOrder": 5,
+    }
+    assert structure["sportType"] == expected
+    assert structure["workoutSegments"][0]["sportType"] == expected
+
+
+def test_the_sport_type_block_is_read_off_the_library_model():
+    """Asserted against the library rather than against a literal of ours: if
+    upstream renumbers a sport, this fails instead of silently disagreeing."""
+    from garminconnect.workout import StrengthWorkout
+
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+    upstream = StrengthWorkout.model_fields["sportType"].default_factory()
+
+    assert structure["sportType"] == upstream
+
+
+def test_a_timed_exercise_step_carries_the_catalogue_pair():
+    """Garmin stores an exercise as a category and a name from its own
+    catalogue. A step carrying neither is an unnamed block on the watch."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+    first, second = work_steps(structure)
+
+    assert (first["category"], first["exerciseName"]) == ("SQUAT", "GOBLET_SQUAT")
+    assert (second["category"], second["exerciseName"]) == ("PUSH_UP", "PUSH_UP")
+
+
+def test_the_exercise_step_ends_on_time_not_reps():
+    """The whole point of v1.6. `create_strength_exercise_step` would put REPS
+    (id 10) here with the rep count as the value; this asserts TIME (id 2) with
+    the seconds, because a step that silently became 40 REPS of an exercise is
+    the failure this literal exists to catch."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+    first = work_steps(structure)[0]
+
+    assert first["endCondition"]["conditionTypeId"] == 2
+    assert first["endCondition"]["conditionTypeKey"] == "time"
+    assert first["endConditionValue"] == 40.0
+    assert first["stepType"]["stepTypeKey"] == "interval"
+
+
+def test_a_strength_rest_step_is_timed_and_names_nothing():
+    """The rest is upstream's builder, unmodified. It carries no category by
+    design, which is why `validate_structure` exempts it."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+    rests = [
+        item
+        for item, _ in compose._flatten(steps_of(structure))
+        if (item.get("stepType") or {}).get("stepTypeKey") == "rest"
+    ]
+
+    assert len(rests) == 2
+    for rest in rests:
+        assert rest["endCondition"]["conditionTypeKey"] == "time"
+        assert rest["endConditionValue"] == 20.0
+        assert "category" not in rest
+
+
+def test_a_strength_circuit_numbers_its_steps_contiguously():
+    """Garmin's `stepOrder` is flat across the segment, not per-group. Five
+    steps: the group, then its four children."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+
+    assert flat_orders(structure) == [1, 2, 3, 4, 5]
+
+
+def test_a_strength_circuit_estimates_time_times_rounds():
+    """3 x (40 + 20 + 40 + 20)."""
+    estimated, basis = compose.estimate_duration(CIRCUIT)
+
+    assert estimated == 360
+    assert "time-based" in basis
+
+
+def test_every_strength_step_carries_an_explicit_no_target():
+    """v0's target story holds in v1.6: the account's zones have still never
+    been fetched, so a strength step guesses nothing either."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+
+    for item, _ in compose._flatten(steps_of(structure)):
+        if item.get("type") == "RepeatGroupDTO":
+            continue
+        assert item["targetType"]["workoutTargetTypeKey"] == compose.NO_TARGET_KEY
+        assert item["targetType"]["workoutTargetTypeId"] == compose.NO_TARGET_ID
+
+
+# -------------------------- exercise resolution ---------------------------
+
+
+def test_an_exact_name_beats_its_own_substring_matches():
+    """'Squat' is the display name of one exercise AND a substring of 125
+    others. Substring-first would refuse the name a human is most likely to
+    type, so the exact pass runs first. This is the ordering, asserted."""
+    assert len(compose.EXERCISES) > 1000
+    assert len([e for e in compose.EXERCISES if "squat" in e["name"].lower()]) > 100
+
+    assert compose.resolve_exercise("Squat")["exercise"] == "SQUAT"
+
+
+def test_resolution_is_case_insensitive():
+    """Making a human match Garmin's capitalisation is a refusal that teaches
+    nothing."""
+    assert compose.resolve_exercise("goblet squat")["exercise"] == "GOBLET_SQUAT"
+    assert compose.resolve_exercise("GOBLET SQUAT")["exercise"] == "GOBLET_SQUAT"
+
+
+def test_a_unique_substring_resolves():
+    """The second pass earns its place: 'zercher' names no exercise exactly."""
+    assert compose.resolve_exercise("zercher squat")["exercise"] == "ZERCHER_SQUAT"
+
+
+def test_an_ambiguous_exercise_is_refused_with_its_candidates():
+    """Refusing costs one turn; guessing puts a different exercise on the watch
+    under a name that reads correct in the preview. The candidate list is what
+    makes the refusal actionable rather than a wall."""
+    with pytest.raises(ComposeError) as exc:
+        compose.resolve_exercise("press")
+
+    message = str(exc.value)
+    assert "matches 82 Garmin exercises" in message
+    assert "and 74 more" in message
+    assert message.count("'") >= 16  # the eight candidates, quoted
+
+
+def test_an_unknown_exercise_is_refused():
+    with pytest.raises(ComposeError, match="no Garmin exercise is named"):
+        compose.resolve_exercise("nonsense exercise xyz")
+
+
+@pytest.mark.parametrize("name", [None, "", "   "])
+def test_an_exercise_step_with_no_name_is_refused(name):
+    with pytest.raises(ComposeError, match="needs an exercise name"):
+        compose.resolve_exercise(name)
+
+
+# ---------------------------- the refusals --------------------------------
+
+
+def test_an_exercise_name_on_a_non_exercise_step_is_refused():
+    """Garmin would drop it and the watch would show a nameless step. A silent
+    drop is the failure direction this project refuses."""
+    bad = (
+        Step(
+            "repeat",
+            iterations=2,
+            repeat=(
+                Step("exercise", duration_secs=40.0, exercise="squat"),
+                Step("rest", duration_secs=20.0, exercise="goblet squat"),
+            ),
+        ),
+    )
+
+    with pytest.raises(ComposeError, match="carries an exercise name"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+def test_a_running_kind_in_a_strength_session_is_refused():
+    """'interval' means run hard for 400m and has no meaning in a circuit."""
+    bad = (Step("interval", duration_secs=400.0),)
+
+    with pytest.raises(ComposeError, match="not a step kind for a strength"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+def test_a_strength_kind_in_a_running_session_is_refused():
+    """The mirror image, and the reason the schema's flat enum is safe: the
+    refusal carries the per-sport rule the enum cannot."""
+    bad = (Step("exercise", duration_secs=40.0, exercise="squat"),)
+
+    with pytest.raises(ComposeError, match="not a step kind for a running"):
+        compose.compose("Bad", bad, sport="running")
+
+
+def test_the_refusal_lists_that_sports_kinds():
+    with pytest.raises(ComposeError, match="Valid kinds: exercise, rest"):
+        compose.compose("Bad", (Step("warmup", duration_secs=600.0),), sport="strength")
+
+
+def test_a_strength_step_measured_in_distance_is_refused():
+    """Nothing in a circuit is measured in distance, and the empty
+    `DISTANCE_BUILDERS_BY_SPORT` entry is what says so."""
+    bad = (Step("rest", distance_m=100.0),)
+
+    with pytest.raises(ComposeError, match="measured in time, not distance"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+def test_an_exercise_measured_in_distance_is_refused():
+    bad = (Step("exercise", distance_m=100.0, exercise="squat"),)
+
+    with pytest.raises(ComposeError, match="measured in time, not distance"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+def test_an_exercise_with_no_duration_is_refused():
+    bad = (Step("exercise", exercise="squat"),)
+
+    with pytest.raises(ComposeError, match="needs duration_secs"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+@pytest.mark.parametrize("bad", [0.0, -40.0, math.inf, math.nan])
+def test_a_non_positive_exercise_duration_is_refused(bad):
+    steps = (Step("exercise", duration_secs=bad, exercise="squat"),)
+
+    with pytest.raises(ComposeError):
+        compose.compose("Bad", steps, sport="strength")
+
+
+def test_a_strength_work_step_with_no_category_is_refused():
+    """Reached by composing a good circuit and breaking it, the way the four
+    unreachable §8 cases are -- and it is the path `create` takes when a
+    structure comes back from a conversation rather than from the composer."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+    broken = copy.deepcopy(structure)
+    group = broken["workoutSegments"][0]["workoutSteps"][0]
+    group["workoutSteps"][0]["category"] = ""
+
+    with pytest.raises(ComposeError, match="no exercise category"):
+        compose.validate_structure(broken)
+
+
+def test_the_category_check_exempts_a_rest_step():
+    """The control. A check that refused rests too would refuse every circuit,
+    and would read as working because the refusal message looks deliberate."""
+    structure = compose.compose("Thu circuit", CIRCUIT, sport="strength")
+
+    compose.validate_structure(structure)  # the rests carry no category
+
+
+def test_the_category_check_does_not_fire_on_a_running_session():
+    """A running interval carries no category and must not need one."""
+    structure = compose.compose("Thu threshold", SESSION)
+
+    compose.validate_structure(structure)
+
+
+def test_an_unknown_sport_is_refused():
+    with pytest.raises(ComposeError, match="unknown sport"):
+        compose.compose("Bad", EASY_RUN, sport="rowing")
+
+
+def test_the_running_default_is_byte_identical_to_asking_for_it():
+    """`sport` arrived with a default so that every caller written before
+    strength existed composes the same structure after it. That is a claim about
+    bytes, so it is asserted as one."""
+    implicit = compose.compose("Thu threshold", SESSION)
+    explicit = compose.compose("Thu threshold", SESSION, sport="running")
+
+    assert json.dumps(implicit, sort_keys=True) == json.dumps(explicit, sort_keys=True)
+
+
+def test_the_step_kind_union_covers_both_sports_and_nothing_else():
+    """`STEP_KINDS` is what the tool's enum is built from, so a kind missing
+    here is a kind the agent cannot ask for however well it is implemented."""
+    assert set(compose.STEP_KINDS) == {
+        "warmup",
+        "interval",
+        "recovery",
+        "cooldown",
+        "exercise",
+        "rest",
+    }
+    assert set(compose.STEP_KINDS_BY_SPORT["strength"]) == {"exercise", "rest"}
+    assert "exercise" not in compose.STEP_KINDS_BY_SPORT["running"]
