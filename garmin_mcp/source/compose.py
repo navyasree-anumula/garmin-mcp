@@ -86,11 +86,22 @@ TIME_BUILDERS = {
     "cooldown": create_cooldown_step,
 }
 
-#: A strength circuit's timed rest. The work step is `exercise`, which is not
-#: here because it needs a name as well as a duration and so does not fit the
-#: `builder(seconds, order)` shape -- `_build_exercise` makes that one.
+#: A strength circuit's timed steps that carry no exercise name. The work step
+#: is `exercise`, which is not here because it needs a name as well as a
+#: duration and so does not fit the `builder(seconds, order)` shape --
+#: `_build_exercise` makes that one.
+#:
+#: `warmup` and `cooldown` arrive after the first live strength session had to
+#: drop them: v1.6 offered `exercise` and `rest` only, so a real 30-minute
+#: session came out as a bare circuit and the human was told to warm up on
+#: their own. The builders are upstream's and generic across sports, but
+#: **Garmin's acceptance of a warmup step inside a `strength_training` workout
+#: is unverified** -- the next live strength create settles it, and it is cheap
+#: because that create was going to happen anyway.
 STRENGTH_TIME_BUILDERS = {
+    "warmup": create_warmup_step,
     "rest": create_strength_rest_step,
+    "cooldown": create_cooldown_step,
 }
 
 TIME_BUILDERS_BY_SPORT = {
@@ -224,8 +235,8 @@ def resolve_exercise(term: str | None) -> dict[str, str]:
         raise ComposeError(
             f"no Garmin exercise is named {wanted!r}. Garmin stores an exercise as "
             "a category and a name from its own catalogue, so a name it does not "
-            "hold cannot be written. Try a broader word -- 'squat', 'press', "
-            "'plank', 'row' -- and the refusal will list what it matches."
+            "hold cannot be written. Search the catalogue for a broader word -- "
+            "'squat', 'press', 'plank', 'row' -- rather than guessing again."
         )
 
     shown = ", ".join(repr(entry["name"]) for entry in matches[:_MAX_CANDIDATES])
@@ -233,9 +244,77 @@ def resolve_exercise(term: str | None) -> dict[str, str]:
     more = f", and {extra} more" if extra > 0 else ""
     raise ComposeError(
         f"{wanted!r} matches {len(matches)} Garmin exercises: {shown}{more}. Name "
-        "one exactly. Picking the nearest would put a different exercise on the "
-        "watch than the one that was approved."
+        "one exactly, or search the catalogue to see them all. Picking the "
+        "nearest would put a different exercise on the watch than the one that "
+        "was approved."
     )
+
+
+#: How many matches a search returns unless asked for more. Enough to show a
+#: category's worth of variants, short enough that an agent reads it rather
+#: than summarising it -- the same reasoning as `_MAX_CANDIDATES`, one step up.
+DEFAULT_SEARCH_LIMIT = 25
+
+
+def search_exercises(
+    term: str, limit: int = DEFAULT_SEARCH_LIMIT
+) -> tuple[tuple[dict[str, str], ...], int]:
+    """Catalogue entries matching every word in `term`, best first, and the total.
+
+    Discovery, not commitment. `resolve_exercise` refuses an ambiguous term
+    because committing to a guess puts the wrong exercise on a watch -- and
+    until now there was no way to resolve that ambiguity except to guess again.
+    The first live session spent three turns on it. This is the looking, at the
+    cost of **zero Garmin requests**: the catalogue is a constant in the
+    library, not an endpoint.
+
+    **Every name this returns resolves unambiguously.** It returns catalogue
+    display names, and `resolve_exercise`'s exact pass matches one of those by
+    definition -- so a name read out of a search can be handed straight back to
+    a step. That property is the whole reason the search is worth having, and
+    it is asserted rather than assumed.
+
+    All words must appear, in any order, so "squat goblet" finds what "goblet
+    squat" finds. Deliberately more permissive than `resolve_exercise`: looking
+    should be easy and committing should be strict.
+
+    Returns the total beside the capped list. A truncated list that does not say
+    it is truncated is the silent partial this project refuses everywhere else
+    -- it reads as "these are the only ones", which is how a human ends up
+    believing an exercise does not exist.
+    """
+    words = [word for word in (term or "").lower().split() if word]
+    if not words:
+        raise ComposeError(
+            "a search needs something to search for. Try a movement word -- "
+            "'squat', 'lunge', 'press', 'plank'."
+        )
+    if limit < 1:
+        raise ComposeError(f"limit must be at least 1, not {limit}.")
+
+    matches = [
+        entry
+        for entry in EXERCISES
+        if all(word in entry["name"].lower() for word in words)
+    ]
+
+    needle = " ".join(words)
+
+    def rank(entry: dict[str, str]) -> tuple[int, str]:
+        """Exact name, then names that start with the term, then the rest.
+
+        Alphabetical within each band, so the order does not depend on the
+        catalogue's own ordering and the same search twice reads the same.
+        """
+        name = entry["name"].lower()
+        if name == needle:
+            return (0, name)
+        if name.startswith(needle):
+            return (1, name)
+        return (2, name)
+
+    matches.sort(key=rank)
+    return tuple(matches[:limit]), len(matches)
 
 
 def _build_exercise(step: Step, order: int) -> Any:

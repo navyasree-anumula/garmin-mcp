@@ -583,3 +583,62 @@ def test_the_example_survives_the_raw_wire_path():
         "sport": "strength",
         "steps": json.loads(REPEAT_GROUP_EXAMPLE),
     }) is not None
+
+
+def test_a_strength_preview_renders_a_warmup_and_cooldown():
+    """The friction the first live session hit: it was told to drop the timed
+    warm-up and cool-down and warm up unaided. A session that can hold them is
+    only useful if the preview shows them, since the preview is what gets
+    approved."""
+    preview = garmin_workouts(
+        action="preview",
+        name="Thu session",
+        sport="strength",
+        steps=[
+            WorkoutStep(kind="warmup", duration_secs=300.0),
+            WorkoutStep(
+                kind="repeat",
+                iterations=3,
+                repeat=[
+                    WorkoutStep(
+                        kind="exercise", duration_secs=40.0, exercise="goblet squat"
+                    ),
+                    WorkoutStep(kind="rest", duration_secs=20.0),
+                ],
+            ),
+            WorkoutStep(kind="cooldown", duration_secs=180.0),
+        ],
+    )
+
+    assert preview.step_summary == [
+        "warmup: 300s",
+        "3x:",
+        "    exercise: Goblet Squat 40s [SQUAT/GOBLET_SQUAT]",
+        "    rest: 20s",
+        "cooldown: 180s",
+    ]
+    assert preview.estimated_duration_secs == 660
+    assert preview.requests_made == 0
+
+
+def test_a_running_kind_in_strength_still_refuses_at_the_tool():
+    """`warmup` crossing over must not have brought `recovery` and `interval`
+    with it. The per-sport rule is the only thing standing between a flat enum
+    and a session Garmin would reject."""
+    with pytest.raises(ToolError, match="not a step kind for a strength"):
+        garmin_workouts(
+            action="preview",
+            name="Bad",
+            sport="strength",
+            steps=[WorkoutStep(kind="recovery", duration_secs=120.0)],
+        )
+
+
+def test_the_exercise_field_points_at_the_search_tool():
+    """A refusal is only actionable if the schema says what to do about it.
+    The composer cannot name an MCP tool -- source/ does not know MCP exists --
+    so the pointer lives here, which is also where an agent reads it."""
+    schema = registered_tool("garmin_workouts").input_schema
+    described = schema["$defs"]["WorkoutStep"]["properties"]["exercise"]["description"]
+
+    assert "garmin_exercises" in described

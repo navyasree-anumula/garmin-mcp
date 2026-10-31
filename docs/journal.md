@@ -2782,6 +2782,68 @@ strength session. The repeat-group path remains **unexercised live** in strength
 
 Tests: 590 -> 593.
 
+## 2026-10-31 (later) — looking up an exercise, and warming up before one
+
+Two gaps from the first live strength session, both of them friction the session
+actually hit rather than anything found by reading the code.
+
+**`garmin_exercises` — a lookup that reaches nothing.** Three of the session's
+six exercise names were refused as ambiguous, and the agent's only recovery was
+to guess again; it spent three turns doing it. The refusal was right —
+committing to a nearest match puts a different exercise on the watch under a
+name that reads correct — but **refusing without offering a way to look is half
+a design.** The catalogue is 1527 entries compiled into `garminconnect`, not an
+endpoint, so the search costs **zero Garmin requests**, cannot hit a rate limit
+and is free to run repeatedly. `open_world_hint=False` is the honest annotation
+and the only tool here that earns it.
+
+Search matches **all words in any order**, so "squat goblet" finds what "goblet
+squat" finds — deliberately more permissive than `resolve_exercise`, because
+looking should be easy and committing should be strict. Ranking is exact name,
+then names starting with the term, then the rest, alphabetical within each band
+so the same question reads the same twice. "Squat" is a display name *and* a
+substring of 125 others, so without the exact band the commonest input would
+return a wall.
+
+**The load-bearing test is `test_every_name_a_search_returns_resolves`.** The
+tool is worth having only if its output can be handed straight back to a step,
+and that is two functions agreeing rather than either being correct on its own.
+Parameterised over eight movement words, it would catch `resolve_exercise`
+growing stricter or the search starting to return something that is not a
+catalogue display name.
+
+**The truncation is reported, not hidden.** `shown`, `total_matches` and
+`truncated` come back together. A capped list that does not say it is capped
+reads as "these are the only ones", which is how a human concludes an exercise
+does not exist.
+
+**Strength sessions can warm up now.** v1.6 offered `exercise` and `rest` only,
+so the live 30-minute session came out as a bare circuit and the human was told
+to warm up unaided. `warmup` and `cooldown` join `STRENGTH_TIME_BUILDERS` using
+upstream's own generic builders. **Garmin's acceptance of a warmup step inside a
+`strength_training` workout is unverified** — the next live strength create
+settles it, and that create was going to happen anyway, so the unknown is free.
+
+**The published enum did not change, and that is the point.** `warmup` and
+`cooldown` were already in `STEP_KINDS` from running, so the flat enum is
+untouched and the per-sport rule does all the work. That was the arrangement the
+flat enum was accepted on, and this is the first change that tested it.
+
+**Two tests changed premise rather than being loosened.** `warmup` was the
+invalid kind in `test_the_refusal_lists_that_sports_kinds`; it is now valid in
+strength, so the test moved to `recovery` rather than having its assertion
+widened. And the category-exemption check is asserted in **both** directions —
+a warmup exempt, an unnamed work step still caught — because an exemption too
+narrow refuses every session with a warmup and one too broad re-permits the bug
+the check was written for.
+
+**One layering note.** The refusal cannot name `garmin_exercises`: §11 says
+`source/` does not know MCP exists. So `compose.py` says "search the catalogue"
+and the pointer to the actual tool lives in the `exercise` field's description,
+which is also where an agent reads it. Asserted, so the two cannot drift apart.
+
+Tests: 593 -> 638.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
@@ -2818,6 +2880,12 @@ named correctly; accepted but shown unnamed (the `category`/`exerciseName` pair
 is not read for a timed step); rejected outright. The fallback for the last two
 is reps-based sets, which upstream supports and which loses the work time.
 **This call also settles `id_keys` for free** — see check 3.
+
+**~~2a. An exercise lookup, and strength warm-ups.~~ DONE 2026-10-31** —
+`garmin_exercises` searches the catalogue for zero Garmin requests, and a
+strength session may now hold a timed `warmup` and `cooldown`. Carries ONE new
+unverified claim to settle on the next strength create, for free: whether Garmin
+accepts a warmup step inside a `strength_training` workout.
 
 **2. Send a repeat group to Garmin.** Composed and tested since v1.6, never
 sent — the first two strength sessions could not build one and the first write

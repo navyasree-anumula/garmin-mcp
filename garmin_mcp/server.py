@@ -345,6 +345,120 @@ def garmin_health(
 
 
 # --------------------------------------------------------------------------
+# The exercise catalogue -- a lookup, not an endpoint (docs/SCOPE.md §5)
+# --------------------------------------------------------------------------
+
+
+class ExerciseMatch(BaseModel):
+    """One catalogue entry. `name` is the field to pass back to a step."""
+
+    name: str = Field(
+        description=(
+            "Garmin's display name, and the value to give a step's `exercise`. "
+            "Every name returned here resolves unambiguously, so it can be "
+            "copied straight into a workout."
+        )
+    )
+    category: str = Field(description="Garmin's category, e.g. SQUAT.")
+    exercise: str = Field(description="Garmin's exercise key, e.g. GOBLET_SQUAT.")
+
+
+class ExerciseSearch(BaseModel):
+    """What matched, how many there were, and whether the list was cut short."""
+
+    search: str = Field(description="The term that was searched for.")
+    matches: list[ExerciseMatch] = Field(
+        description="The matches, best first: exact name, then names starting with the term, then the rest."
+    )
+    shown: int = Field(description="How many matches are in this response.")
+    total_matches: int = Field(
+        description=(
+            "How many matched in total. Compare with `shown`: a larger total "
+            "means the list was capped and there are more."
+        )
+    )
+    truncated: bool = Field(
+        description="True when `total_matches` exceeds `shown`. Raise `limit` or narrow the search."
+    )
+    requests_made: int = Field(
+        description="Garmin requests this call made. Always 0 -- the catalogue ships in the library."
+    )
+    note: str = Field(description="What this call did and did not do.")
+
+
+_EXERCISE_NOTE = (
+    "Nothing was sent to Garmin: the exercise catalogue is a constant that ships "
+    "inside the library, so this call reaches no endpoint, spends no request "
+    "budget and cannot hit a rate limit. Use it when `garmin_workout_create` or "
+    "a preview refuses an exercise name as ambiguous -- pass one of the `name` "
+    "values back verbatim and it will resolve."
+)
+
+
+@mcp.tool(
+    title="Search Garmin's exercise catalogue",
+    annotations=ToolAnnotations(
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    ),
+)
+def garmin_exercises(
+    search: Annotated[
+        str,
+        Field(
+            description=(
+                "Words to look for in the exercise name. All of them must "
+                "appear, in any order, so 'squat goblet' finds the same entry "
+                "as 'goblet squat'. Case does not matter."
+            )
+        ),
+    ],
+    limit: Annotated[
+        int, Field(description="How many matches to return. Default 25.")
+    ] = source_compose.DEFAULT_SEARCH_LIMIT,
+) -> ExerciseSearch:
+    """Look up what Garmin calls an exercise, without touching Garmin.
+
+    **Zero requests.** The catalogue is 1527 entries compiled into the library,
+    not an endpoint, so this is free, cannot fail on a rate limit and costs
+    nothing to run repeatedly.
+
+    **This exists because refusing was not enough.** A strength step must name
+    one catalogue entry, and an ambiguous name is refused rather than resolved
+    to the nearest match -- the right call, since a guess puts a different
+    exercise on the watch under a name that reads correct. But the first live
+    strength session then had no way to resolve the ambiguity except to guess
+    again, and spent three turns doing it. This is the looking.
+
+    Every `name` returned resolves unambiguously, so the answer to a refusal is
+    to search, show the human the options, and pass a `name` back verbatim.
+    """
+    try:
+        matches, total = source_compose.search_exercises(search, limit)
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    if not matches:
+        raise ToolError(
+            f"no Garmin exercise name contains all of {search!r}. The catalogue "
+            "holds 1527 entries; try one broader movement word, such as 'squat', "
+            "'lunge', 'press', 'row' or 'plank'."
+        )
+
+    return ExerciseSearch(
+        search=search,
+        matches=[ExerciseMatch(**entry) for entry in matches],
+        shown=len(matches),
+        total_matches=total,
+        truncated=total > len(matches),
+        requests_made=0,
+        note=_EXERCISE_NOTE,
+    )
+
+
+# --------------------------------------------------------------------------
 # Workouts -- preview only (docs/SCOPE.md §5, v1.5)
 # --------------------------------------------------------------------------
 
@@ -411,7 +525,9 @@ class WorkoutStep(BaseModel):
             "against Garmin's own catalogue, which is what it stores -- 'goblet "
             "squat', 'push-up', 'mountain climber'. An ambiguous term is refused "
             "with the candidates listed rather than resolved to the nearest "
-            "match, so name one exactly if asked."
+            "match. When that happens, call `garmin_exercises` to search the "
+            "catalogue -- it makes no Garmin requests -- and pass one of its "
+            "`name` values back verbatim."
         ),
     )
     duration_secs: float | None = Field(

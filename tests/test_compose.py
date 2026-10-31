@@ -760,8 +760,15 @@ def test_a_strength_kind_in_a_running_session_is_refused():
 
 
 def test_the_refusal_lists_that_sports_kinds():
-    with pytest.raises(ComposeError, match="Valid kinds: exercise, rest"):
-        compose.compose("Bad", (Step("warmup", duration_secs=600.0),), sport="strength")
+    """`recovery` is a running kind and means nothing in a circuit. `warmup`
+    used to stand here and no longer can, because a strength session may now
+    have one -- the test moved rather than being loosened."""
+    with pytest.raises(
+        ComposeError, match="Valid kinds: exercise, warmup, rest, cooldown"
+    ):
+        compose.compose(
+            "Bad", (Step("recovery", duration_secs=120.0),), sport="strength"
+        )
 
 
 def test_a_strength_step_measured_in_distance_is_refused():
@@ -849,5 +856,152 @@ def test_the_step_kind_union_covers_both_sports_and_nothing_else():
         "exercise",
         "rest",
     }
-    assert set(compose.STEP_KINDS_BY_SPORT["strength"]) == {"exercise", "rest"}
+    assert set(compose.STEP_KINDS_BY_SPORT["strength"]) == {
+        "exercise",
+        "warmup",
+        "rest",
+        "cooldown",
+    }
     assert "exercise" not in compose.STEP_KINDS_BY_SPORT["running"]
+    # The union did not change when strength gained warmup and cooldown: both
+    # were already in it from running. So the published enum is untouched, and
+    # the per-sport rule is doing all the work -- which is the arrangement the
+    # flat enum was accepted on.
+    assert "recovery" not in compose.STEP_KINDS_BY_SPORT["strength"]
+    assert "interval" not in compose.STEP_KINDS_BY_SPORT["strength"]
+
+
+# --------------------------------------------------------------------------
+# A strength session may now warm up and cool down (§5)
+#
+# v1.6 offered `exercise` and `rest` only, so the first live 30-minute session
+# came out as a bare circuit and the human was told to warm up on their own.
+# The builders are upstream's and generic across sports; **Garmin's acceptance
+# of a warmup step inside a strength_training workout is unverified** until the
+# next live strength create, which was going to happen anyway.
+# --------------------------------------------------------------------------
+
+FULL_SESSION = (
+    Step("warmup", duration_secs=300.0),
+    Step(
+        "repeat",
+        iterations=3,
+        repeat=(
+            Step("exercise", duration_secs=40.0, exercise="goblet squat"),
+            Step("rest", duration_secs=20.0),
+        ),
+    ),
+    Step("cooldown", duration_secs=180.0),
+)
+
+
+def test_a_strength_session_composes_with_a_warmup_and_cooldown():
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+    steps = steps_of(structure)
+
+    assert steps[0]["stepType"]["stepTypeKey"] == "warmup"
+    assert steps[0]["endConditionValue"] == 300.0
+    assert steps[-1]["stepType"]["stepTypeKey"] == "cooldown"
+    assert steps[-1]["endConditionValue"] == 180.0
+
+
+def test_the_full_session_numbers_its_steps_contiguously():
+    """Warmup, the group, its two children, cooldown."""
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+
+    assert flat_orders(structure) == [1, 2, 3, 4, 5]
+
+
+def test_the_category_check_exempts_a_warmup_and_a_cooldown():
+    """They name no exercise by design, like a rest. An exemption that was too
+    narrow would refuse every session with a warmup; one too broad would
+    re-permit the unnamed work step the check exists to catch -- so both
+    directions are asserted, here and in the test below."""
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+
+    compose.validate_structure(structure)
+
+
+def test_the_category_check_still_catches_an_unnamed_work_step():
+    """The other direction. Adding warmup and cooldown to the exempt set must
+    not have widened it to the step that matters."""
+    structure = compose.compose("Thu session", FULL_SESSION, sport="strength")
+    broken = copy.deepcopy(structure)
+    group = broken["workoutSegments"][0]["workoutSteps"][1]
+    group["workoutSteps"][0]["category"] = ""
+
+    with pytest.raises(ComposeError, match="no exercise category"):
+        compose.validate_structure(broken)
+
+
+def test_the_estimate_counts_the_warmup_and_cooldown():
+    """300 + 3 x (40 + 20) + 180."""
+    estimated, _ = compose.estimate_duration(FULL_SESSION)
+
+    assert estimated == 660
+
+
+def test_a_strength_warmup_carrying_an_exercise_name_is_refused():
+    """Garmin would drop the name and the watch would show a nameless step --
+    the same silent partial an exercise name on a rest step is refused for."""
+    bad = (Step("warmup", duration_secs=300.0, exercise="goblet squat"),)
+
+    with pytest.raises(ComposeError, match="carries an exercise name"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+def test_a_strength_warmup_measured_in_distance_is_refused():
+    bad = (Step("warmup", distance_m=1000.0),)
+
+    with pytest.raises(ComposeError, match="measured in time, not distance"):
+        compose.compose("Bad", bad, sport="strength")
+
+
+# ------------------------- the catalogue search ---------------------------
+
+
+def test_the_search_returns_its_matches_and_the_total():
+    """The total is returned beside the capped list rather than inferred from
+    its length, because the two differ and only one of them is the answer to
+    "is that all of them"."""
+    rows, total = compose.search_exercises("press", limit=3)
+
+    assert len(rows) == 3
+    assert total > 3
+
+
+def test_the_search_returns_everything_when_it_fits():
+    rows, total = compose.search_exercises("goblet squat", limit=25)
+
+    assert len(rows) == total
+
+
+def test_the_search_finds_nothing_without_raising():
+    """An empty result is an answer, not an error -- the tool layer decides
+    how to present it. Refusing here would make "does this exist?" unaskable."""
+    rows, total = compose.search_exercises("nonsense exercise xyz")
+
+    assert rows == ()
+    assert total == 0
+
+
+@pytest.mark.parametrize("term", [None, "", "   "])
+def test_a_search_with_no_words_is_refused(term):
+    with pytest.raises(ComposeError, match="needs something to search for"):
+        compose.search_exercises(term)
+
+
+@pytest.mark.parametrize("limit", [0, -5])
+def test_a_search_limit_below_one_is_refused(limit):
+    with pytest.raises(ComposeError, match="at least 1"):
+        compose.search_exercises("squat", limit=limit)
+
+
+def test_the_search_is_a_pure_lookup_over_the_catalogue():
+    """Asserted against the catalogue itself: every row the search returns is
+    an entry that was already there, so the search cannot invent a name that
+    `resolve_exercise` would then refuse."""
+    rows, _ = compose.search_exercises("squat", limit=40)
+
+    for row in rows:
+        assert row in compose.EXERCISES
