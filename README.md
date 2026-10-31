@@ -31,8 +31,9 @@ no request. A running step may carry **one** target: an explicit pace range in m
 bound first. Heart-rate, power, cadence and zone-based targets are refused, because every one
 of them depends on a profile this account has never been read for. Garmin's side of the pace
 contract — the key string, the unit, the display order, and which value holds the faster
-bound — is community convention confined to one constant and is **unverified** until it is
-read back from Connect.
+bound — lived in one constant as community convention and was **confirmed live on 2026-10-31**:
+Connect displays a prescribed 4:20-4:40/km range exactly as given. Only the target block's
+`displayOrder` is still unverified, and nothing observed depends on it.
 
 Read [`docs/SCOPE.md`](docs/SCOPE.md) before adding to it.
 

@@ -3036,13 +3036,71 @@ Tests: 685 -> 691. Three changed premise rather than being loosened, all from (a
 `test_a_pace_is_what_makes_a_distance_step_estimable` and asserts the opposite, kept pointing the
 other way rather than deleted, because that pair of numbers is what the decision was about.
 
+## 2026-10-31 (live, the big close-out) — five checks settled in two creates and one page load
+
+Two creates, three Garmin requests each, no warnings. Every preview made zero requests.
+
+**Pace targets work, and one page load settled three assumptions.** "6x800 pace", workout
+**1746821178**, scheduled **1825773941** for 2026-11-01. Connect displays the range as
+**4:20-4:40/km, exactly as prescribed.** That single reading closes:
+
+- **2.a, the key string** — `"pace.zone"` is what Garmin accepts. A wrong key would have been
+  rejected or ignored.
+- **2.b, the unit** — m/s. A wrong unit renders a wrong pace, and the pace is right.
+- **2.c, the bound order** — `targetValueOne` carries the **faster** bound. A swapped pair would
+  have displayed the range inverted. **The `[Mahi-verify]` is closed and §9's risk row is
+  retired.**
+
+**The cheap check beat the expensive one, which is the lesson worth keeping.** The plan said the
+bound order needed a run outside the range to settle. It did not: it needed a page load. The
+expensive check was for the watch's *alerting behaviour*, which is a different question and is
+still pending the 1 Nov run — but it is **no longer load-bearing**, because the data the watch
+is working from is now confirmed correct. Reading before running would have been right even if
+the order had been wrong, and it would have been cheaper still.
+
+**Repeat groups reach Garmin. Check 2 is CLOSED.** The 6x800 shows as one 6x group in Connect.
+It had been composed, tested and unsent since v1.6, and three consecutive live sessions had gone
+in flat because the flat form kept working — nothing forced it. Asking for it deliberately is
+what closed it.
+
+**Option (b)'s number lands as sent: 2736 s, displayed 45:36.** Which also re-confirms the
+no-recompute finding from workout 1746800115 earlier the same day, on a session whose duration
+was *computed from a pace* rather than summed from timed steps. The decision taken this morning,
+reversed this afternoon, is now confirmed by the thing it was reversed for.
+
+**Strength sessions warm up. §15's 2.e is CLOSED.** "circuit + warmup", workout **1746822994**,
+scheduled **1825775743** for 2026-11-01: Garmin accepted a timed `warmup` and `cooldown` inside a
+`strength_training` workout, both steps present, no warnings. Carried unverified since #43 and it
+settled free on the next strength create, exactly as predicted.
+
+**`garmin_exercises` did its job in conversation, not just in tests.** "press" was refused with
+**82 matches**; a search for "dumbbell press" returned **22**, `truncated: false`; the name
+resolved without a guess. That is the three-turn failure of the first live strength session not
+happening. The tests proved the two functions agree; this proved the agent reaches for the search
+when it is refused, which no test can.
+
+**And the one real defect found: the published `kind` description was five days stale.** It still
+said strength took "exercise, rest, or repeat" — omitting the `warmup` and `cooldown` shipped in
+#43. **This is the worst shape of staleness in this project:** the agent reads the description,
+believes it, and refuses on the server's behalf, so a working feature is unreachable while every
+test passes. Fixed, and now **asserted** — four new tests check the published description and
+enum against the composer's own list, that the tool no longer claims every target is refused, and
+that no agent-facing text still calls the settled claims unverified. A description that lags the
+code is worse than a missing one.
+
+Tests: 691 -> 695.
+
+**Still open after today:** whether the watch alerts off-pace and in which direction (1 Nov run);
+the target block's `displayOrder`, which is unverified and inert; the four unverified metric rows;
+and the §5 tool-split deviation, still undecided.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **691 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **695 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -3079,30 +3137,29 @@ strength session may now hold a timed `warmup` and `cooldown`. Carries ONE new
 unverified claim to settle on the next strength create, for free: whether Garmin
 accepts a warmup step inside a `strength_training` workout.
 
-**2. Send a repeat group to Garmin.** Composed and tested since v1.6, never
-sent — the first two strength sessions could not build one and the first write
-went in flat, and so did the 6x300m on 2026-10-31. **Three live sessions in a
-row have gone in flat**, which is worth noticing: the flat form keeps working,
-so nothing forces the group to be exercised, and it stays unmeasured by
-default. Now that `REPEAT_GROUP_EXAMPLE` is in the prose the agent reads,
+**~~2. Send a repeat group to Garmin.~~ DONE 2026-10-31** — the 6x800 pace
+session (workout 1746821178) went in as **one 6x group** and Connect shows it
+that way. It had been composed, tested and unsent since v1.6 while three
+consecutive live sessions went in flat, because the flat form kept working and
+nothing forced the group. **Asking for it deliberately is what closed it** —
+worth remembering for anything else that is composed-but-unsent. Now that `REPEAT_GROUP_EXAMPLE` is in the prose the agent reads,
 ask for a circuit and check the preview's `step_summary` shows `4x:` with the
 steps indented beneath it rather than twenty-four flat lines. Then write it. It
 is the last composed-but-unsent shape in the write path.
 
-**2b. Settle Garmin's pace contract, which takes one workout and one run.**
-Composed and tested since 2026-10-31, never sent. Four things are community
-convention and live in `PACE_CONTRACT`: the key string `"pace.zone"`, the
-`displayOrder`, the unit (m/s), and **which of `targetValueOne`/`targetValueTwo`
-carries the faster bound.** The id is upstream's, so it is not in question.
-Two ways to settle it, cheapest first:
-1. **Read it back from Connect.** Build one pace step by hand in Connect, fetch
-   the workout, and read the four values off the payload. No guessing, no run.
-2. **Run it.** Write a paced session, then run **outside** the range on purpose
-   and watch which way the watch complains. This is the only check that catches
-   a swapped pair, because a swapped pair composes, uploads and schedules
-   happily — it just turns the easy end of the range into the hard end. "The
-   workout exists" settles nothing here.
-Do (1) first. If the bound order is wrong, exactly one constant changes.
+**~~2b. Settle Garmin's pace contract.~~ MOSTLY DONE 2026-10-31** — the key
+string, the unit and the bound order are all **confirmed** by one page load:
+workout 1746821178 displays 4:20-4:40/km as prescribed. `targetValueOne` is the
+faster bound. **The claim that this needed a run was wrong** — it needed a
+reading, and the reading was free.
+
+**What is left is the watch's behaviour, not our bytes:** whether it alerts when
+you run outside the range, and in which direction. Pending the 1 Nov run. It is
+not load-bearing any more, because the data is confirmed correct.
+
+Also left: the target block's `displayOrder`, which is **unverified and inert**
+— nothing observed depends on it and a wrong value would not show anywhere. It
+stays labelled rather than being quietly promoted.
 
 **~~3. `id_keys`.~~ DONE 2026-10-31** — `workoutId` and `workoutScheduleId`,
 measured, with the fixtures promoted to `# recorded:` and the candidate lists
@@ -3295,10 +3352,12 @@ confirmed the first workout, not the response.
 
 **Still open:**
 
-- **Garmin's pace contract is unverified** — the key string, the display order, the unit and
-  the bound order, all inside `PACE_CONTRACT` so a wrong one is wrong once. The target *id* is
-  upstream's `TargetType.PACE_ZONE` and is not in question. A swapped bound order is invisible
-  everywhere except on the watch, mid-run. See check 2b.
+- **Whether the watch alerts off-pace, and in which direction** — pending the 1 Nov run. The
+  pace *data* is confirmed (workout 1746821178 displays 4:20-4:40/km as prescribed, so
+  `targetValueOne` is the faster bound), so this is the watch's behaviour and not our bytes.
+- **The pace target block's `displayOrder`** — unverified and **inert**: nothing observed depends
+  on it, and a wrong value would not show in Connect or on the watch. Labelled rather than
+  promoted.
 - **Four unverified metric rows** — `training_status`, `load_balance`, `readiness`,
   `recovery_time`. All settleable the free way `hrv_status` was: compare the row's output against
   what the Garmin Connect app displays for the same day. **`probe --explain` cannot do it** — it

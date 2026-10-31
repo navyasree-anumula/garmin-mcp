@@ -513,9 +513,11 @@ class WorkoutStep(BaseModel):
         description=(
             "For sport='running': warmup, interval, recovery, cooldown, or "
             "repeat. Only an interval may be measured by distance; the rest are "
-            "measured in time. For sport='strength': exercise, rest, or repeat, "
-            "all measured in time. A kind used with the wrong sport is refused "
-            "and the refusal lists that sport's kinds."
+            "measured in time. For sport='strength': exercise, rest, warmup, "
+            "cooldown, or repeat, all measured in time -- a circuit can warm up "
+            "and cool down, and those two steps carry no exercise name. A kind "
+            "used with the wrong sport is refused and the refusal lists that "
+            "sport's kinds."
         )
     )
     exercise: str | None = Field(
@@ -775,12 +777,17 @@ def garmin_workouts(
     and a pace on a strength step is refused because a circuit is prescribed by
     time. Ask for one of those and the refusal says which it is.
 
-    **Garmin's side of a pace target is unverified.** The target id is the
-    library's own; the key string, the unit, the display order and which of the
-    two values carries the faster bound are community convention, confined to
-    one constant, and settle on a read-back from Connect. The first live pace
-    session is the check -- run outside the range on purpose and see whether the
-    watch alerts, and in which direction.
+    **Confirmed live on 2026-10-31**, workout 1746821178: Connect displays a
+    prescribed 4:20-4:40/km range exactly as given, which settles the key
+    string, the unit and which value carries the faster bound. What is still
+    open is the watch's own behaviour -- whether it alerts when the athlete runs
+    outside the range, and in which direction. The data it is working from is
+    confirmed correct.
+
+    **A strength session may warm up and cool down.** Garmin accepts a timed
+    `warmup` and `cooldown` inside a `strength_training` workout -- confirmed
+    live on 2026-10-31, workout 1746822994, accepted with no warnings. Those two
+    steps carry no exercise name by design.
 
     **A strength session is a circuit.** Put the round in a repeat group --
     exercise, rest, exercise, rest -- and give the group its iterations. Each

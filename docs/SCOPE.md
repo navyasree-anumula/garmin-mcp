@@ -618,7 +618,10 @@ The rules:
   `600.0`-vs-`600` class of mismatch does **not** apply to a non-whole float — measured, not
   assumed — but one converter feeding both the structure and the summary is what guarantees it.
 - **Garmin's side is `workoutTargetTypeKey` `"pace.zone"` (id 6) with `targetValueOne` and
-  `targetValueTwo`.** Every part of that sentence is community convention: the library writes
+  `targetValueTwo`.** **CONFIRMED live 2026-10-31** by workout 1746821178: Connect displays a
+  prescribed 4:20-4:40/km range exactly as given, which settles the key string, the unit, and
+  that `targetValueOne` carries the faster bound. `displayOrder` is still unverified and inert.
+  When this was written, every part of the sentence was community convention: the library writes
   only `"no.target"` and holds no pace key at all. **[Mahi-verify]** by building one pace step
   in Connect and reading it back — the key string, the unit, the `displayOrder`, and **which
   value Garmin expects first.** Until that read-back, the ordering lives in one named constant.
@@ -972,7 +975,7 @@ they were written — never their contents.
 | Password enters a browser | Certain once §7a ships | Password managers, autofill, extensions and devtools see the field | **Accepted for UX.** A real regression against `getpass`; CLI bootstrap retained as the tighter path (§4) |
 | Two containers, one token file | **Observed** 2026-08-30 | Concurrent refresh could lose an update | Cross-process file lock around refresh. Structural risk; not yet observed to bite |
 | Single-maintainer bus factor | Low now | Fork treadmill | Accepted. MIT means forking is at least possible |
-| A pace range written with its bounds swapped (v1.6) | Medium until `[Mahi-verify]` closes | The watch alerts continuously and the easy end becomes the hard end | **Accepted for one session.** Which of `targetValueOne`/`Two` Garmin expects first is unmeasured, so the ordering lives in **one named constant**, is read back from Connect before the first live pace write, and is wrong in only one place if wrong at all |
+| A pace range written with its bounds swapped (v1.6) | **Resolved 2026-10-31** | The watch alerts continuously and the easy end becomes the hard end | **Closed by measurement.** Workout 1746821178 displays 4:20-4:40/km as prescribed, so `targetValueOne` is the faster bound and the risk is retired. The mitigation is kept: the ordering still lives in **one named constant**, which is what made the check a one-line fix had it gone the other way. Whether the watch *alerts* outside the range is a separate, non-structural question, pending a run |
 | An important id exists only in a tool response (v1.6) | **Observed five times** | `unschedule_workout` takes the scheduled id and nothing else, so a calendar entry becomes removable only by hand in Connect | **Decided 2026-10-31: no ledger.** The id is looked up from Garmin's calendar at undo time (§15.13 option 2), so a dropped id is *recoverable* rather than stored twice. A returned field is not a delivered one — summarising clients dropped `server_version`, the provenance note, the refusal distinction, the write's ids and `id_keys` — which is why the answer is a lookup and not a louder response. Unschedule-by-lookup is **v1.7 scope**; until it ships, an undo is still by hand in Connect, and the residual risk is accepted for that window |
 | Datacenter-IP flag | **Resolved** | — | Eliminated by the laptop decision (§7) |
 
@@ -1640,10 +1643,16 @@ framing and is why #3's findings are unusually concrete.
 - 2.b: pace stored as **m/s** — plausible, unmeasured — `[Mahi-verify]`.
 - 2.c: **which of `targetValueOne`/`targetValueTwo` is the faster bound** — unmeasured, and Mahi
   flagged it himself — `[Mahi-verify]`. Confined to one named constant (§15.11, A.1).
+  **CLOSED 2026-10-31:** workout 1746821178 displays 4:20-4:40/km as prescribed, so
+  `targetValueOne` is the faster bound. A swapped pair would have shown the range inverted. The
+  same reading closed 2.a's key string and 2.b's unit — three assumptions on one page load,
+  which is the argument for the cheap read-back before the expensive run.
 - 2.d: the target block's `displayOrder`. The `no.target` block uses `displayOrder: 1`, equal to
   its id, so `6` for pace is an inference from one sample — `[Mahi-verify]`.
 - 2.e: Garmin accepting a **warm-up step inside `strength_training`** — shipped in #43, unmeasured.
-  Settles free on the next live strength create. No action beyond saying so.
+  Settles free on the next live strength create. No action beyond saying so. **CLOSED 2026-10-31:**
+  workout 1746822994 ("circuit + warmup") was accepted with no warnings, both steps present. It
+  did settle free, exactly as predicted.
 
 ### §15.4 #3 Actual code checks — 5 findings, 4 actionable
 
