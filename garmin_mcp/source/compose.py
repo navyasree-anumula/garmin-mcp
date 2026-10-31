@@ -373,7 +373,8 @@ def _build_repeat(step: Step, order: int, sport: str) -> tuple[Any, int]:
         )
     if not step.repeat:
         raise ComposeError(
-            f"step {order}: a repeat group with no steps repeats nothing."
+            f"step {order}: a repeat group with no steps repeats nothing. The "
+            "nested steps go in the group's `repeat` field."
         )
 
     next_order = order + 1
