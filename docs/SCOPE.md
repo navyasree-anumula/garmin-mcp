@@ -637,6 +637,25 @@ The rules:
   run, not a measurement of what they do run, so estimating from it would turn an instruction into
   a computed number in the same displayed field this rule exists to keep invented numbers out of.
   Option (b), estimating from the range's midpoint, was considered and rejected on that ground.
+  **REOPENED by measurement, 2026-10-31 (open, for Mahi).** Workout 1746800115 ("6x300m",
+  scheduled 1825752591) settled a claim this decision leaned on: **Garmin does not recompute
+  `estimatedDurationInSecs` on upload** -- the server computed 27:30 and Connect displays 27:30
+  unchanged. The old basis sentence hedged that Garmin "may recompute", which made a distance
+  step's 0 look provisional. It is not: the number is ours and final, **and the basis sentence
+  that explains it does not travel to Connect**, where the bare number sits on the calendar with
+  nothing beside it. This does not change what an unpaced session displays -- (b) computes only
+  where a pace was given -- but it changes the stakes for a *paced* one, which would permanently
+  display several minutes short of a session the server was told the exact speed of.
+  **RESOLVED the same day: option (b) is ratified, reversing option (a).** A distance step
+  **given a pace** is estimated from that range at its **midpoint, taken in min/km** -- 4:20 to
+  4:40 gives 4:30, the answer anybody would say out loud; the midpoint of the two *speeds* is a
+  different number, being a harmonic mean of it. A distance step **without** a pace still
+  contributes 0, which is the half of (a) that survives. What moved the argument was not that (a)
+  was wrong in principle but that the alternative was never "no number": it was a number wrong by
+  minutes, permanent, with nothing beside it. Multiplying out a pace is a claim about the
+  instruction the human just approved, not about the athlete, so §1 is intact -- the server still
+  never *chooses* a pace. Worked example, pinned in tests: 10 min warm-up + 5 km at 4:20-4:40 +
+  5 min cool-down estimates **2250 s**, where (a) gave 900 s.
 - **An out-of-band edit in Connect is overwritten.** The update path reads a workout's name and
   id and never its stored target, so a pace changed by hand in Connect is replaced by the next
   re-prescription. Consistent with "the calendar wins", and stated here because the losing side

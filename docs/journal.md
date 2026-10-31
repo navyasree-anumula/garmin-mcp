@@ -2950,13 +2950,99 @@ Tests: 638 -> 684. Nothing removed. Two tests changed premise rather than being 
 heart-rate zone is still refused, but the refusal no longer says "no targets", so they now assert
 the reason and that the message names what IS allowed.
 
+## 2026-10-31 (live) — Garmin does not recompute the duration, and that reopens a decision
+
+**The measurement.** Workout **1746800115**, "6x300m", scheduled **1825752591**. Distance steps
+confirmed on the watch: 300 m, 6 reps, 90 s recoveries, as composed. And the one that closes a
+claim carried since v0: **Connect displays 27:30, which is exactly what the server computed.**
+`estimatedDurationInSecs` is **not** recomputed on upload.
+
+**What that closes.** `estimate_duration`'s basis has said "Garmin may recompute this on upload
+-- unverified until the supervised live cycle" since v0. Gone, in the docstring and in both
+basis sentences, replaced by the measured fact with its date. A test asserts the hedge is
+**absent** and the settled phrasing present, because an unverified claim that creeps back is how
+a measured fact gets un-measured. One existing test changed premise rather than being loosened:
+it asserted the basis contained "unverified", which was correct until today and is now the
+regression.
+
+**What that reopens, and it is Mahi's call.** The basis decision of this morning -- option (a),
+the sentence changes and the arithmetic does not -- leaned on the recompute being an open
+question. While Garmin might have fixed the number on upload, a distance step contributing 0
+could be read as provisional. It cannot now. **The number on the calendar is ours and final, and
+the basis sentence explaining it does not travel to Connect** -- Garmin shows the bare number
+with nothing beside it, which is precisely the condition the original docstring said made a 0
+"read as broken".
+
+**The arithmetic, on today's own session.** 1800 m of running contributed 0. At roughly
+4:30/km that is about 8 minutes, so a session Connect will now permanently call 27:30 is nearer
+35:30 in fact.
+
+**But today's session does not itself indict (a)**, and the honest version says so: it carried no
+pace target, so option (b) would have computed nothing for it either and it would read 27:30
+under both. What changed is the stakes for a **paced** session. Under (a), a 6x800 m at
+4:20-4:40/km -- where the server was told the exact speed -- would still display several minutes
+short, permanently, with no explanation attached. Under (b) it would display the arithmetic on
+the pace the human approved.
+
+**The argument for (a) is unchanged and still good:** a target is a prescription, not a
+measurement, and computing from one puts an invented-looking number in a displayed field. The
+argument against it got sharper today: the alternative is not "no number", it is "a number that
+is wrong by eight minutes with no sentence beside it".
+
+Recorded in SCOPE §15 as **REOPENED (open, for Mahi)**. No behaviour changed: the ratified
+option is still (a), and it stays (a) until Mahi says otherwise.
+
+Tests: 684 -> 685.
+
+## 2026-10-31 (option b) — a prescription multiplied out is still not a measurement
+
+**Reversed the same day it was ratified, by a measurement.** Option (a) — the basis sentence
+changes, the arithmetic does not — rested on Garmin possibly recomputing `estimatedDurationInSecs`
+on upload. Workout 1746800115 showed it does not. That removed the assumption, so **option (b) is
+ratified**: a distance step **given a pace** is estimated from that range; a distance step
+**without** one still contributes 0.
+
+**What actually moved the argument.** Not that (a) was wrong in principle — a target really is a
+prescription rather than a measurement of the athlete. What changed is that the alternative was
+never "no number". It was *a number wrong by minutes, permanently, with nothing beside it*: the
+basis sentence that explains a 0 lives in the MCP response and **does not travel to Connect**,
+where the bare figure sits on the calendar. Multiplying out a pace is a claim about the
+instruction the human just approved, not about the athlete, which is the distinction that makes
+(b) survive §1 — the server still never chooses a pace, it only multiplies out one it was handed.
+
+**The midpoint is taken in min/km, not in m/s**, and this is pinned by a test because the two are
+different numbers. 4:20 to 4:40 averages to 4:30 as a pace; averaged as *speeds* it comes out
+about a third of a second per km faster, because one is the harmonic mean of the other. The human
+approved min/km, so the midpoint is taken there — 4:30 is the answer anybody would give out loud,
+and that is the test a derived number should pass before it goes in a displayed field.
+
+**Counts are per round, not per written step.** A paced interval inside a 4x repeat is four
+distance steps in the basis sentence, because the sentence reports the session the athlete runs.
+`_repeat_totals` and `_paced_count` are gone, replaced by one `_tally` walker that returns the
+seconds and the three counts together — they had started to disagree about whether a repeat's
+children were counted once or per iteration.
+
+**Worked example, pinned in tests:** 10 min warm-up + 5 km at 4:20-4:40 + 5 min cool-down is
+**2250 s**, where it was 900 s under (a). The same session with the pace removed is still 600 s,
+and the basis still says why.
+
+**Check 2 is NOT closed: the 6x300m went in flat.** The repeat group remains composed, tested and
+never sent — the third live session in a row to go in flat. What today's session *did* settle is
+**distance steps on the watch**: 300 m, 6 reps, 90 s recoveries, as composed. That was previously
+only composed-and-tested.
+
+Tests: 685 -> 691. Three changed premise rather than being loosened, all from (a) -> (b);
+`test_a_pace_does_not_change_the_estimate_itself` is now
+`test_a_pace_is_what_makes_a_distance_step_estimable` and asserts the opposite, kept pointing the
+other way rather than deleted, because that pair of numbers is what the decision was about.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **684 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **691 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -2995,7 +3081,10 @@ accepts a warmup step inside a `strength_training` workout.
 
 **2. Send a repeat group to Garmin.** Composed and tested since v1.6, never
 sent — the first two strength sessions could not build one and the first write
-went in flat. Now that `REPEAT_GROUP_EXAMPLE` is in the prose the agent reads,
+went in flat, and so did the 6x300m on 2026-10-31. **Three live sessions in a
+row have gone in flat**, which is worth noticing: the flat form keeps working,
+so nothing forces the group to be exercised, and it stays unmeasured by
+default. Now that `REPEAT_GROUP_EXAMPLE` is in the prose the agent reads,
 ask for a circuit and check the preview's `step_summary` shows `4x:` with the
 steps indented beneath it rather than twenty-four flat lines. Then write it. It
 is the last composed-but-unsent shape in the write path.
