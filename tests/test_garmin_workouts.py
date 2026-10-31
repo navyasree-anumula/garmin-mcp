@@ -231,3 +231,166 @@ def test_the_read_tools_are_unaffected():
     names = {tool.name for tool in asyncio.run(mcp.list_tools())}
 
     assert {"garmin_auth_status", "garmin_training", "garmin_health"} <= names
+
+
+# --------------------------------------------------------------------------
+# Strength circuits at the tool layer (§5, v1.6 -- amendment not yet ratified)
+#
+# `test_compose.py` proves the structure. This proves the two things only the
+# tool layer can get wrong: that the preview names the exercise Garmin will
+# actually store rather than the word the agent typed, and that the trailing
+# rest a repeat group cannot avoid is stated instead of discovered on the watch.
+# --------------------------------------------------------------------------
+
+CIRCUIT = [
+    WorkoutStep(
+        kind="repeat",
+        iterations=3,
+        repeat=[
+            WorkoutStep(kind="exercise", duration_secs=40.0, exercise="goblet squat"),
+            WorkoutStep(kind="rest", duration_secs=20.0),
+            WorkoutStep(kind="exercise", duration_secs=40.0, exercise="push-up"),
+            WorkoutStep(kind="rest", duration_secs=20.0),
+        ],
+    )
+]
+
+
+def test_a_strength_preview_reports_its_own_sport():
+    """`sport` used to be the literal 'running'. A field that reports a
+    constant is a field that lies the moment a second sport exists."""
+    preview = garmin_workouts(
+        action="preview", name="Thu circuit", steps=CIRCUIT, sport="strength"
+    )
+
+    assert preview.sport == "strength"
+    assert preview.requests_made == 0
+
+
+def test_the_summary_names_the_resolved_exercise_not_the_term_typed():
+    """The human approves what Garmin will store. 'goblet squat' is the term;
+    'Goblet Squat' and SQUAT/GOBLET_SQUAT are what lands, so the line carries
+    all three parts of the answer and none of the question."""
+    preview = garmin_workouts(
+        action="preview", name="Thu circuit", steps=CIRCUIT, sport="strength"
+    )
+
+    assert preview.step_summary == [
+        "3x:",
+        "    exercise: Goblet Squat 40s [SQUAT/GOBLET_SQUAT]",
+        "    rest: 20s",
+        "    exercise: Push-up 40s [PUSH_UP/PUSH_UP]",
+        "    rest: 20s",
+    ]
+
+
+def test_the_estimate_counts_every_round():
+    preview = garmin_workouts(
+        action="preview", name="Thu circuit", steps=CIRCUIT, sport="strength"
+    )
+
+    assert preview.estimated_duration_secs == 360
+
+
+def test_a_circuit_ending_on_a_rest_says_so_in_the_note():
+    """A repeat group cannot vary by iteration, so the final round keeps its
+    rest. That is a property of the session being approved, and an approval is
+    only informed if the thing is said out loud."""
+    preview = garmin_workouts(
+        action="preview", name="Thu circuit", steps=CIRCUIT, sport="strength"
+    )
+
+    assert "last round ends with a rest step" in preview.note
+
+
+def test_a_circuit_ending_on_an_exercise_does_not_say_it():
+    """The control. A note appended unconditionally would read as true here and
+    would be false, which is worse than silence."""
+    ends_on_work = [
+        WorkoutStep(
+            kind="repeat",
+            iterations=3,
+            repeat=[
+                WorkoutStep(kind="rest", duration_secs=20.0),
+                WorkoutStep(
+                    kind="exercise", duration_secs=40.0, exercise="goblet squat"
+                ),
+            ],
+        )
+    ]
+
+    preview = garmin_workouts(
+        action="preview", name="Thu circuit", steps=ends_on_work, sport="strength"
+    )
+
+    assert "last round ends with a rest step" not in preview.note
+
+
+def test_a_running_preview_never_grows_the_rest_note():
+    """A running session has no rest steps at all, so the detector must not
+    fire on a recovery step, which is a different thing wearing a similar name."""
+    preview = garmin_workouts(action="preview", name="Thu threshold", steps=SESSION)
+
+    assert "last round ends with a rest step" not in preview.note
+    assert preview.sport == "running"
+
+
+def test_an_ambiguous_exercise_arrives_as_a_tool_error():
+    """A refusal the agent can read, not a traceback -- and it must carry the
+    candidates, or the agent has nothing to retry with."""
+    ambiguous = [
+        WorkoutStep(kind="exercise", duration_secs=40.0, exercise="press")
+    ]
+
+    with pytest.raises(ToolError) as exc:
+        garmin_workouts(
+            action="preview", name="Bad", steps=ambiguous, sport="strength"
+        )
+
+    assert "matches 82 Garmin exercises" in str(exc.value)
+
+
+def test_a_strength_kind_in_a_running_session_arrives_as_a_tool_error():
+    """The schema's enum is the union of both sports' kinds, because a single
+    Literal cannot be conditional. The refusal is what carries the real rule,
+    so it has to survive the tool boundary."""
+    with pytest.raises(ToolError, match="not a step kind for a running"):
+        garmin_workouts(
+            action="preview",
+            name="Bad",
+            steps=[
+                WorkoutStep(kind="exercise", duration_secs=40.0, exercise="squat")
+            ],
+        )
+
+
+def test_the_sports_in_the_schema_come_from_the_composer():
+    """Same rule as the step kinds: a sport the schema offers and the composer
+    cannot build is a schema that lies to the agent."""
+    from typing import get_args
+
+    from garmin_mcp.server import WorkoutSport
+
+    assert set(get_args(WorkoutSport)) == set(compose_module.SPORTS)
+
+
+def test_the_schema_offers_the_exercise_field():
+    """An agent cannot pass a name the published schema does not mention, so
+    the field's presence is part of the feature rather than a detail of it."""
+    schema = registered_tool("garmin_workouts").input_schema
+    step = schema["$defs"]["WorkoutStep"]["properties"]
+
+    assert "exercise" in step
+    assert "catalogue" in step["exercise"]["description"]
+
+
+def test_a_strength_preview_still_reaches_nothing():
+    """The doorway fixture is autouse, so this passes only if composition made
+    no request. Strength resolution reads a module-level catalogue, and a
+    catalogue that had turned into a lookup would fail here."""
+    preview = garmin_workouts(
+        action="preview", name="Thu circuit", steps=CIRCUIT, sport="strength"
+    )
+
+    assert preview.requests_made == 0
+    assert preview.approval.startswith("sha256:")

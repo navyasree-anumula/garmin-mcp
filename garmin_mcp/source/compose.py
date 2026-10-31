@@ -18,6 +18,15 @@ absolute ranges through `ExecutableStep`'s `extra="allow"` are unverified
 against what Garmin accepts. So a target is refused rather than guessed, and the
 first live cycle confirms one unknown instead of three.
 
+**v1.6 adds a strength circuit, and one shape in it is ours rather than
+upstream's.** A named exercise measured in *time* -- 40 seconds of Goblet Squat
+-- is not a step the library builds: `create_strength_exercise_step` ends on
+REPS and takes no duration, and `create_strength_rest_step` is timed but names
+nothing. `_build_exercise` combines them, from the library's own enum members,
+and **Garmin's acceptance of the combination is unverified** until a live create
+settles it. Every other strength piece is upstream's: the `StrengthWorkout`
+model, the rest step, and the `category`/`exerciseName` catalogue.
+
 **What this module does not do is design the session.** It composes what it is
 told. Which distance, how many reps, how long the recovery -- those need how the
 legs feel and how much time there is, which no endpoint holds, so they belong in
@@ -32,27 +41,58 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from garminconnect.exercises import EXERCISES
 from garminconnect.workout import (
+    ConditionType,
+    ExecutableStep,
     RunningWorkout,
+    StepType,
+    StrengthWorkout,
+    TargetType,
     WorkoutSegment,
     create_cooldown_step,
     create_distance_interval_step,
     create_interval_step,
     create_recovery_step,
     create_repeat_group,
+    create_strength_rest_step,
     create_warmup_step,
 )
 
 from .errors import GarminSourceError
 
-#: The step kinds v0 composes, each mapped to the builder that makes it. Keyed
-#: rather than branched on, so the tool's enum is derived from this dict and a
-#: new kind cannot arrive in the schema without a builder behind it.
+#: The sports this module composes, mapped to the library's workout model.
+#: `StrengthWorkout` arrives in v1.6; `RunningWorkout` is v0's only sport and
+#: stays the default, so nothing composed before this change composes
+#: differently after it.
+SPORT_MODELS = {
+    "running": RunningWorkout,
+    "strength": StrengthWorkout,
+}
+
+SPORTS = tuple(SPORT_MODELS)
+
+#: A running session's time-measured kinds, each mapped to the builder that
+#: makes it. Keyed rather than branched on, so the tool's enum is derived from
+#: this dict and a new kind cannot arrive in the schema without a builder
+#: behind it.
 TIME_BUILDERS = {
     "warmup": create_warmup_step,
     "interval": create_interval_step,
     "recovery": create_recovery_step,
     "cooldown": create_cooldown_step,
+}
+
+#: A strength circuit's timed rest. The work step is `exercise`, which is not
+#: here because it needs a name as well as a duration and so does not fit the
+#: `builder(seconds, order)` shape -- `_build_exercise` makes that one.
+STRENGTH_TIME_BUILDERS = {
+    "rest": create_strength_rest_step,
+}
+
+TIME_BUILDERS_BY_SPORT = {
+    "running": TIME_BUILDERS,
+    "strength": STRENGTH_TIME_BUILDERS,
 }
 
 #: Only an interval may be measured in distance. A warmup or cooldown by
@@ -63,7 +103,28 @@ DISTANCE_BUILDERS = {
     "interval": create_distance_interval_step,
 }
 
-STEP_KINDS = tuple(TIME_BUILDERS)
+#: Nothing in a strength circuit is measured in distance. The empty dict is the
+#: statement, and `_build_step` reads it rather than carrying a second rule
+#: about which sports have distance steps.
+DISTANCE_BUILDERS_BY_SPORT = {
+    "running": DISTANCE_BUILDERS,
+    "strength": {},
+}
+
+#: Which kinds each sport accepts. A single flat enum cannot express this --
+#: `interval` means "run hard for 400m" and has no meaning in a circuit, while
+#: `exercise` carries a name a running step has nowhere to put -- so the schema
+#: offers the union and the refusal carries the per-sport rule.
+STEP_KINDS_BY_SPORT = {
+    "running": tuple(TIME_BUILDERS),
+    "strength": ("exercise",) + tuple(STRENGTH_TIME_BUILDERS),
+}
+
+#: Every kind the composer has a builder for, in declaration order and without
+#: duplicates. `server.py` derives its enum from this.
+STEP_KINDS = tuple(
+    dict.fromkeys(kind for kinds in STEP_KINDS_BY_SPORT.values() for kind in kinds)
+)
 
 #: Garmin's own id/key for "no target", which the builders already default to
 #: when no target is passed (read from `garminconnect/workout.py`, not assumed).
@@ -87,7 +148,9 @@ class Step:
     Exactly one of `duration_secs` and `distance_m` is set -- a step measured
     both ways has two end conditions and Garmin takes one. `repeat` carries the
     nested steps when this entry is a repeat group, in which case `kind` is
-    `"repeat"` and neither measure is set.
+    `"repeat"` and neither measure is set. `exercise` belongs to an `exercise`
+    step and nothing else; on any other kind it is refused rather than dropped,
+    because a dropped name is one the watch silently will not show.
     """
 
     kind: str
@@ -95,6 +158,7 @@ class Step:
     distance_m: float | None = None
     iterations: int | None = None
     repeat: tuple["Step", ...] = field(default_factory=tuple)
+    exercise: str | None = None
 
 
 def _positive(value: float, what: str) -> None:
@@ -111,7 +175,122 @@ def _positive(value: float, what: str) -> None:
         raise ComposeError(f"{what} must be greater than zero, not {value!r}.")
 
 
-def _build_step(step: Step, order: int) -> Any:
+#: How many candidates a refusal lists before it says "and N more". A refusal
+#: the agent can act on is a short list; forty names is a wall it will
+#: summarise, which is the §5 failure this repo keeps paying for.
+_MAX_CANDIDATES = 8
+
+
+def resolve_exercise(term: str | None) -> dict[str, str]:
+    """Garmin's catalogue entry for a named exercise, or a refusal.
+
+    Garmin does not store an exercise as free text. It stores a `category` and
+    an `exerciseName`, both drawn from a fixed catalogue of 1527 entries, so a
+    name the catalogue does not hold cannot be sent at all.
+
+    Two passes, exact before substring, because the two disagree and the exact
+    one is right: "Squat" is the display name of one exercise *and* a substring
+    of 125 others, so substring-first would refuse the very name a human is most
+    likely to type. The exact pass is case-insensitive -- "goblet squat" is the
+    same request as "Goblet Squat", and making a human match Garmin's
+    capitalisation is a refusal that teaches nothing.
+
+    **An ambiguous term is refused, never resolved to the nearest match.** The
+    failure directions are not symmetric: refusing costs one more turn in the
+    conversation, while guessing puts a different exercise on the watch than the
+    one that was approved, under a name that reads correct in the preview.
+    """
+    wanted = (term or "").strip()
+    if not wanted:
+        raise ComposeError(
+            "an exercise step needs an exercise name -- Garmin stores one per "
+            "step and has no unnamed exercise."
+        )
+
+    lowered = wanted.lower()
+
+    exact = [entry for entry in EXERCISES if entry["name"].lower() == lowered]
+    if len(exact) == 1:
+        return exact[0]
+
+    matches = [entry for entry in EXERCISES if lowered in entry["name"].lower()]
+    if len(matches) == 1:
+        return matches[0]
+
+    if not matches:
+        raise ComposeError(
+            f"no Garmin exercise is named {wanted!r}. Garmin stores an exercise as "
+            "a category and a name from its own catalogue, so a name it does not "
+            "hold cannot be written. Try a broader word -- 'squat', 'press', "
+            "'plank', 'row' -- and the refusal will list what it matches."
+        )
+
+    shown = ", ".join(repr(entry["name"]) for entry in matches[:_MAX_CANDIDATES])
+    extra = len(matches) - _MAX_CANDIDATES
+    more = f", and {extra} more" if extra > 0 else ""
+    raise ComposeError(
+        f"{wanted!r} matches {len(matches)} Garmin exercises: {shown}{more}. Name "
+        "one exactly. Picking the nearest would put a different exercise on the "
+        "watch than the one that was approved."
+    )
+
+
+def _build_exercise(step: Step, order: int) -> Any:
+    """A named exercise held for a number of seconds.
+
+    **This step shape is ours, not the library's.**
+    `create_strength_exercise_step` ends on REPS and takes no duration;
+    `create_strength_rest_step` is timed but carries no name. A named exercise
+    measured in *time* is the two combined, which upstream does not offer -- so
+    it is assembled here through `ExecutableStep`'s `extra="allow"`, from the
+    same enum members the library's own builders use rather than from literals
+    of ours.
+
+    **Garmin's acceptance of it is unverified** (docs/SCOPE.md §5 -- the v1.6
+    amendment covering strength is drafted, NOT yet ratified). Every
+    field is one upstream writes somewhere; the combination is not. The first
+    live create settles it, and until it does this docstring is the only honest
+    statement of what is known.
+    """
+    if step.distance_m is not None:
+        raise ComposeError(
+            f"step {order}: an exercise is measured in time, not distance. "
+            "Give it duration_secs."
+        )
+    if step.duration_secs is None:
+        raise ComposeError(
+            f"step {order}: an exercise step needs duration_secs -- how long to "
+            "hold it for."
+        )
+    _positive(step.duration_secs, f"step {order} (exercise) duration_secs")
+
+    entry = resolve_exercise(step.exercise)
+
+    return ExecutableStep(
+        stepOrder=order,
+        stepType={
+            "stepTypeId": StepType.INTERVAL,
+            "stepTypeKey": "interval",
+            "displayOrder": 3,
+        },
+        endCondition={
+            "conditionTypeId": ConditionType.TIME,
+            "conditionTypeKey": "time",
+            "displayOrder": 2,
+            "displayable": True,
+        },
+        endConditionValue=float(step.duration_secs),
+        targetType={
+            "workoutTargetTypeId": TargetType.NO_TARGET,
+            "workoutTargetTypeKey": NO_TARGET_KEY,
+            "displayOrder": 1,
+        },
+        category=entry["category"],
+        exerciseName=entry["exercise"],
+    )
+
+
+def _build_step(step: Step, order: int, sport: str) -> Any:
     """One step, built by the builder its shape names.
 
     `stepOrder` is assigned by the caller's counter and never taken from the
@@ -123,26 +302,49 @@ def _build_step(step: Step, order: int) -> Any:
     if step.kind == "repeat":
         raise ComposeError("a repeat group cannot be nested inside another repeat group.")
 
+    kinds = STEP_KINDS_BY_SPORT[sport]
+    if step.kind not in kinds:
+        raise ComposeError(
+            f"step {order}: {step.kind!r} is not a step kind for a {sport} "
+            f"session. Valid kinds: {', '.join(kinds)}."
+        )
+
     if step.duration_secs is not None and step.distance_m is not None:
         raise ComposeError(
             f"step {order} ({step.kind}) sets both duration_secs and distance_m. "
             "A step ends one way or the other, never both."
         )
 
+    if step.kind == "exercise":
+        return _build_exercise(step, order)
+
+    if step.exercise is not None:
+        raise ComposeError(
+            f"step {order} ({step.kind}) carries an exercise name. Only an "
+            "'exercise' step has anywhere to put one -- on any other kind Garmin "
+            "would drop it, and the watch would show a step with no name."
+        )
+
     if step.duration_secs is not None:
-        builder = TIME_BUILDERS.get(step.kind)
+        builder = TIME_BUILDERS_BY_SPORT[sport].get(step.kind)
         if builder is None:
             raise ComposeError(
-                f"unknown step kind {step.kind!r}. Valid kinds: {', '.join(STEP_KINDS)}."
+                f"unknown step kind {step.kind!r}. Valid kinds: {', '.join(kinds)}."
             )
         _positive(step.duration_secs, f"step {order} ({step.kind}) duration_secs")
         return builder(step.duration_secs, order)
 
     if step.distance_m is not None:
-        builder = DISTANCE_BUILDERS.get(step.kind)
+        distance_builders = DISTANCE_BUILDERS_BY_SPORT[sport]
+        if not distance_builders:
+            raise ComposeError(
+                f"step {order}: a {sport} step is measured in time, not distance. "
+                "Give it duration_secs instead."
+            )
+        builder = distance_builders.get(step.kind)
         if builder is None:
             raise ComposeError(
-                f"step {order}: only an {', '.join(DISTANCE_BUILDERS)} step may be "
+                f"step {order}: only an {', '.join(distance_builders)} step may be "
                 f"measured in distance, not a {step.kind!r}. Give it duration_secs "
                 "instead."
             )
@@ -155,7 +357,7 @@ def _build_step(step: Step, order: int) -> Any:
     )
 
 
-def _build_repeat(step: Step, order: int) -> tuple[Any, int]:
+def _build_repeat(step: Step, order: int, sport: str) -> tuple[Any, int]:
     """A repeat group, and the next free `stepOrder` after it.
 
     The children share the parent's numbering -- Garmin's `stepOrder` is flat
@@ -177,14 +379,30 @@ def _build_repeat(step: Step, order: int) -> tuple[Any, int]:
     next_order = order + 1
     children = []
     for child in step.repeat:
-        children.append(_build_step(child, next_order))
+        children.append(_build_step(child, next_order, sport))
         next_order += 1
 
     return create_repeat_group(step.iterations, children, order), next_order
 
 
+def _sport_type(sport: str) -> dict[str, Any]:
+    """Garmin's sportType block for a sport, read off the library's own model.
+
+    The segment repeats the workout's sport type, so both copies are taken from
+    one call of this and cannot disagree -- and taking it from the model's own
+    default means an upstream change surfaces here instead of being silently
+    contradicted by a literal of ours. The previous version of this function was
+    two hand-written copies of the running block.
+    """
+    factory = SPORT_MODELS[sport].model_fields["sportType"].default_factory
+    return dict(factory())
+
+
 def compose(
-    name: str, steps: tuple[Step, ...], description: str | None = None
+    name: str,
+    steps: tuple[Step, ...],
+    description: str | None = None,
+    sport: str = "running",
 ) -> dict[str, Any]:
     """The structure Garmin's upload wants, built from a step list.
 
@@ -193,7 +411,14 @@ def compose(
     in them is something our tests should catch rather than Garmin. It is also
     exactly the check `create` will run on an approved structure, so the rule
     lives in one place from the start.
+
+    `sport` defaults to running, which is what v0 composed, so every caller
+    written before strength existed composes the same structure after it.
     """
+    if sport not in SPORT_MODELS:
+        raise ComposeError(
+            f"unknown sport {sport!r}. Valid sports: {', '.join(SPORTS)}."
+        )
     if not name or not name.strip():
         raise ComposeError("a workout needs a name.")
     if not steps:
@@ -203,27 +428,23 @@ def compose(
     order = 1
     for step in steps:
         if step.kind == "repeat":
-            group, order = _build_repeat(step, order)
+            group, order = _build_repeat(step, order, sport)
             built.append(group)
         else:
-            built.append(_build_step(step, order))
+            built.append(_build_step(step, order, sport))
             order += 1
 
     estimated, _ = estimate_duration(steps)
 
-    workout = RunningWorkout(
+    workout = SPORT_MODELS[sport](
         workoutName=name.strip(),
-        sportType={"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+        sportType=_sport_type(sport),
         estimatedDurationInSecs=estimated,
         description=description,
         workoutSegments=[
             WorkoutSegment(
                 segmentOrder=1,
-                sportType={
-                    "sportTypeId": 1,
-                    "sportTypeKey": "running",
-                    "displayOrder": 1,
-                },
+                sportType=_sport_type(sport),
                 workoutSteps=built,
             )
         ],
@@ -392,6 +613,8 @@ def validate_structure(structure: dict[str, Any]) -> None:
     if not steps:
         raise ComposeError("the structure has no steps.")
 
+    sport_key = (structure.get("sportType") or {}).get("sportTypeKey")
+
     flat = _flatten(steps)
     orders = [item.get("stepOrder") for item, _ in flat]
 
@@ -429,6 +652,17 @@ def validate_structure(structure: dict[str, Any]) -> None:
                     f"({end_value}) disagree. They are two fields holding one fact."
                 )
             continue
+
+        step_key = (item.get("stepType") or {}).get("stepTypeKey")
+        is_strength_work = sport_key == "strength_training" and step_key == "interval"
+        if is_strength_work and not item.get("category"):
+            raise ComposeError(
+                f"step {item.get('stepOrder')} of a strength session is a work step "
+                "carrying no exercise category. Garmin identifies an exercise by "
+                "category and name, so a step without one shows on the watch as an "
+                "unnamed block -- which is the one thing a strength session is for. "
+                "A rest step is exempt: it names no exercise by design."
+            )
 
         target = item.get("targetType") or {}
         key = target.get("workoutTargetTypeKey")

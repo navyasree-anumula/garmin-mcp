@@ -2552,70 +2552,175 @@ confirmed this workout, not the response.
 
 Tests: 537 -> 541, 2 skipped.
 
+## 2026-10-31 — a strength circuit, composed but not yet written
+
+The real use case arrived and it was not the one v0 was built for: a circuit of
+named exercises, each held for a work time, with timed rest between, repeated
+for N rounds. Two findings, and the second is the one that mattered.
+
+**Our composer was running-only, structurally.** `compose` hardcoded
+`RunningWorkout` and the running `sportType` block in two places, and `Step` had
+nowhere to put an exercise name. A 40s/20s circuit would have composed — the
+timed repeat group is a shape we already had — and landed as a *running* workout
+of unnamed intervals. Times would have shown on the watch; names would not have
+existed.
+
+**The library builds named exercises by reps, and timed steps without names.**
+`create_strength_exercise_step` hardcodes `endCondition` REPS (id 10) with the
+rep count as the value; `create_strength_rest_step` is timed and names nothing.
+So "40 seconds of Goblet Squat" is a combination upstream does not offer, and
+`_build_exercise` assembles it from the library's own enum members through
+`ExecutableStep`'s `extra="allow"`. **Garmin's acceptance of that combination is
+unverified.** Every field is one upstream writes somewhere; the pairing is not.
+That is what the next live create settles, and it is why this entry does not say
+the feature works.
+
+**Resolution is exact-before-substring, and the order is load-bearing.** Garmin
+stores an exercise as a `category`/`exerciseName` pair from a fixed catalogue of
+1527 entries. "Squat" is the display name of one of them *and* a substring of 125
+others, so substring-first would refuse the name a human is most likely to type.
+An ambiguous term is refused with its candidates listed, never resolved to the
+nearest match: refusing costs one turn in the conversation, guessing puts a
+different exercise on the watch under a name that reads correct in the preview.
+
+**The preview shows the resolved pair, not the term typed.** `goblet squat`
+renders as `exercise: Goblet Squat 40s [SQUAT/GOBLET_SQUAT]`. A preview that
+echoed the question would let a human approve a word rather than an exercise.
+
+**A repeat group cannot vary by iteration**, so `[work, rest] x N` keeps the rest
+after the final round. That cannot be engineered away, so the preview states it
+in `note` rather than letting it turn up on the watch — with a control test
+asserting the sentence is *absent* when a circuit ends on work, because a note
+appended unconditionally would read as true and be false.
+
+**Two sports, one flat enum.** `StepKind` is the union of both sports' kinds,
+because a single `Literal` cannot be conditional on another argument. The
+per-sport rule therefore lives in the refusal, which names the sport and lists
+its kinds. `sport` defaults to `"running"`, and a test asserts the default
+composes byte-identically to asking for running explicitly — so nothing written
+before this change composes differently after it.
+
+**The cassette question answered itself while being asked.** Tracing the
+transport for §8: `_run_request` ends at `sess = self._api_session`, a plain
+`requests.Session()`. Only the *login* strategies use `curl_cffi`, which vcrpy
+cannot patch at all. So the data and write calls are recordable, and **the
+password POST never touches the recordable stack** — which removes the larger
+half of §8's scrubbing worry. `before_record_response` is still required:
+`_run_request` calls `_refresh_session()` when the token is near expiry, and a
+refresh response carries tokens. Nothing was built; the finding is the
+deliverable.
+
+**Verified on the artifact, not the build log.** A local `docker build`, then a
+capability probe inside the image — `compose.SPORTS`, the strength kinds, the
+`exercise` field on the published schema, and a live resolution of "goblet
+squat". `server_version` was not consulted, for the documented reason.
+
+**SCOPE is not amended.** §5 still describes a running composer. The v1.6
+amendment is drafted for ratification and every forward reference in the code
+says so in those words, because a docstring citing a section that does not exist
+is the same overclaim in a smaller font.
+
+Tests: 541 -> 585, 2 skipped. **The laptop was not re-pinned** — that was skipped
+deliberately, so it still runs `sha-7a5b852` and has neither the approval-marker
+fix, nor `id_keys`, nor any of this.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **541 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **585 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
 
 ## OPEN CHECKS — do these first, in this order
 
-**1. The update path has never run live.** This is the gap worth closing before anything new is
-built. The live cycle exercised the **upload** branch only: no match ⇒ `upload_workout` ⇒
-`schedule_workout`. The other branch — match ⇒ read the target month ⇒ `update_workout` in place
-⇒ skip or schedule — is four code paths and one Garmin behaviour that have never been near a real
-account, and it is the branch a *re-prescription* takes, which is the normal weekly case rather
-than the exceptional one.
+**1. Re-pin the laptop. Still the gate, and now it gates more.** It runs
+`sha-7a5b852`: no approval-marker fix (so a create from Desktop refuses any
+whole-number duration), no `id_keys`, no strength. Nothing below this line can
+run until it moves. The script shape that works is at the bottom of this file;
+pin to a tag whose digest was asserted first, and verify with `docker ps` plus a
+capability probe, never `server_version`.
 
-Cheapest way to exercise all of it: **create `throwaway test` a second time, same name, a
-different date.** Expect `action: "updated"`, the **same** `workout_id` (1742892340 if the first
-one is still there), `requests_made: 4`, and `scheduled: "new"`. Then a third create on the date
-it is already scheduled for, expecting `scheduled: "already"` and **no second calendar entry**.
-Those two calls settle: the name match, `update_workout` keeping the id, the 1-indexed month
-conversion, and the double-booking guard. Also confirms `id_keys` (check 2) in the same breath.
+**2. The strength circuit, live — the highest-value call this project can make.**
+It is the real use case *and* it settles the one unverified thing in the new
+code: whether Garmin accepts a named exercise measured in TIME. Preview the
+session, approve it, create it, schedule it, then read the watch for the exercise
+names and the work/rest times. Three outcomes worth distinguishing: accepted and
+named correctly; accepted but shown unnamed (the `category`/`exerciseName` pair
+is not read for a timed step); rejected outright. The fallback for the last two
+is reps-based sets, which upstream supports and which loses the work time.
+**This call also settles `id_keys` for free** — see check 3.
 
-**2. `id_keys` settles Garmin's response keys — free, on whatever create runs next.** The laptop
-needs a re-pin first; `id_keys` is not on `sha-eeb26dd`. Expect something like
-`{"workout_id": "workoutId", "scheduled_workout_id": "workoutScheduleId"}`. Whatever comes back,
-**write the real key names into `test_write.py`** and change its two id fixtures from
-`# recorded in part:` to `# recorded:`. If a key differs from our first candidate, narrow
+**3. `id_keys` settles Garmin's response keys, on whatever create runs first.**
+Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
+"workoutScheduleId"}`. Whatever comes back, **write the real key names into
+`test_write.py`** and change its two id fixtures from `# recorded in part:` to
+`# recorded:`. If a key differs from our first candidate, narrow
 `WORKOUT_ID_KEYS` / `SCHEDULE_ID_KEYS` to what Garmin actually sends and say so.
 
-**3. Delete `throwaway test` from Connect** — both the calendar entry and the workout library
-copy. There is no delete tool by design, so this does not happen on its own. Do it after checks
-1 and 2, since they reuse the same workout.
+**4. The update path has never run live**, and the second create of the same
+circuit is how it gets exercised — which is also the normal weekly
+re-prescription rather than an artificial test. The live cycle so far has only
+taken the **upload** branch: no match ⇒ `upload_workout` ⇒ `schedule_workout`.
+The other branch — match ⇒ read the target month ⇒ `update_workout` in place ⇒
+skip or schedule — is four code paths and one Garmin behaviour never near a real
+account. Create the same-named circuit on a different date: expect
+`action: "updated"`, the **same** `workout_id`, `requests_made: 4`, and
+`scheduled: "new"`. Then a third create on the date it already holds, expecting
+`scheduled: "already"` and **no second calendar entry**.
 
-**4. Cassettes (§8), the one unexercised thing left in the write path.** They have to be recorded
-from a real exchange, which checks 1–2 provide. §8's requirements are requirements on this work:
-`filter_post_data_parameters`, `before_record_response` scrubbing, and a test that **asserts** no
-cassette on disk contains a token-shaped string. `vcrpy` is not yet a dependency.
+**5. Delete the throwaways from Connect** — `throwaway test` (workout 1742892340
+and its calendar entry) and whatever check 2 leaves behind. There is no delete
+tool by design, so this does not happen on its own.
 
-**5. Decisions waiting on Mahi, none blocking:**
+**6. Cassettes (§8).** The transport is now known: writes go through
+`requests` via `_api_session` and are recordable; login is `curl_cffi` and is
+not, which means the password POST cannot reach a cassette. Still required by
+§8: `filter_headers` for `Authorization`/`Cookie`, `before_record_response` (a
+near-expiry `_refresh_session()` carries tokens), and a test that **asserts** no
+cassette on disk holds a token-shaped string — with a positive half driving a
+synthetic token through the real scrubber, because that assertion passes
+vacuously while the cassette directory is empty. `vcrpy` is not yet a dependency,
+though `tests/test_runtime_lock.py` already lists it as dev-only.
 
-- **Ratify or reject the §5 tool-split deviation** — `garmin_workouts` (preview, read-only) and
-  `garmin_workout_create` (write) as two tools, because `ToolAnnotations` are per tool and §5
-  asks for per-action honesty. If rejected, one tool and preview loses its read-only hint.
-- **`id_keys` surfacing Garmin's response key names.** Argued as schema rather than account data,
-  by analogy with `probe --explain`. Remove it if you read key names as account information.
-- **`paths-ignore: ['docs/**']` on `docker.yml`.** Would stop a docs-only PR running a full
-  multi-arch build and a docs-only merge publishing a tag for identical code — and would mean
-  `latest` points at the last *code* commit rather than `main`'s tip.
-- **`ignore-error=true` on `cache-to`.** Turns the `failed to reserve cache` flake into a warning
-  instead of a red check; it hit two PRs in one evening.
+**7. Decisions waiting on Mahi, none blocking:**
 
-**6. Longer-lived, in rough order of value:** the four unverified metric rows
-(`training_status`, `load_balance`, `readiness`, `recovery_time`) settled the free way
-`hrv_status` was — against the Connect app, **not** `probe --explain`, which prints value types
-and never values; then the provenance question (refuse unverified rows, or move the qualifier
-from `note` into `verdict` as a fifth value `present_unconfirmed`); then `tools.json` and
-`garmin_auth_status` reporting the live tool set, which the env-var gate only answers for now;
-then SCOPE v1.6's standing debts (§7's Connectors-not-Developer and per-user Docker path, §7a's
-bind address, §9's location exposure).
+- **Ratify or reject the SCOPE v1.6 §5 amendment** — strength as a second sport,
+  with the timed-exercise shape labelled unverified. The code is written and
+  every reference to the amendment says it is unratified. Per the standing
+  orders a SCOPE amendment wants the 10-dimension walk plus passes A and B
+  before it is committed; that was not done this session and is the reason the
+  amendment is a draft rather than a commit.
+- **Ratify or reject the §5 tool-split deviation** — `garmin_workouts` (preview,
+  read-only) and `garmin_workout_create` (write) as two tools, because
+  `ToolAnnotations` are per tool and §5 asks for per-action honesty. If rejected,
+  one tool and preview loses its read-only hint.
+- **`id_keys` surfacing Garmin's response key names.** Argued as schema rather
+  than account data, by analogy with `probe --explain`. Remove it if you read key
+  names as account information.
+- **`paths-ignore: ['docs/**']` on `docker.yml`.** Confirmed live on 2026-10-31:
+  the docs-only merge of #38 ran a full multi-arch build and moved `latest` to
+  `sha-0c20fd8`, whose application code is identical to `sha-43ba988`. The fix
+  would also mean `latest` points at the last *code* commit rather than `main`'s
+  tip.
+- **`ignore-error=true` on `cache-to`.** Turns the `failed to reserve cache`
+  flake into a warning instead of a red check; it hit two PRs in one evening.
+- **Reps and weight for strength.** Left out of v1.6 on purpose — upstream
+  supports both, neither was asked for, and every kind offered is a kind the live
+  cycle has to confirm.
+
+**8. Longer-lived, in rough order of value:** the four unverified metric rows
+(`training_status`, `load_balance`, `readiness`, `recovery_time`) settled the
+free way `hrv_status` was — against the Connect app, **not** `probe --explain`,
+which prints value types and never values; then the provenance question (refuse
+unverified rows, or move the qualifier from `note` into `verdict` as a fifth
+value `present_unconfirmed`); then `tools.json` and `garmin_auth_status`
+reporting the live tool set, which the env-var gate only answers for now; then
+SCOPE v1.6's standing debts (§7's Connectors-not-Developer and per-user Docker
+path, §7a's bind address, §9's location exposure).
 
 ---
 
@@ -2623,8 +2728,15 @@ bind address, §9's location exposure).
 
 - **Reads, live on the laptop.** `garmin_auth_status`, `garmin_training` (5 metrics),
   `garmin_health` (11 rows, four of them HRV including the second verdict `hrv_feedback`).
-- **Preview, live on the laptop.** `garmin_workouts(action="preview")` composes a running session
-  and sends nothing — zero requests, nine refusal rules. Time and distance with NO_TARGET only.
+- **Preview of a running session, live on the laptop.** `garmin_workouts(action="preview")`
+  composes and sends nothing — zero requests, nine refusal rules. Time and distance with
+  NO_TARGET only.
+- **Preview of a strength circuit, on `main` and NOT on the laptop.**
+  `garmin_workouts(action="preview", sport="strength")` composes named exercises held for a time
+  with timed rests, resolved against Garmin's 1527-entry catalogue, exact-name before substring,
+  ambiguity refused with its candidates. **The timed-exercise step shape is ours and Garmin has
+  never seen it** — the library names exercises by reps and times steps without names. Reps and
+  weight are deliberately not built.
 - **The write, reachable and never yet used.** `garmin_workout_create` takes a previewed structure,
   its approval marker and a date; resolves the name (match ⇒ update in place keeping the id, no
   match ⇒ upload, two matches ⇒ refuse); reads the target month on the update path only; writes;
