@@ -2620,9 +2620,44 @@ amendment is drafted for ratification and every forward reference in the code
 says so in those words, because a docstring citing a section that does not exist
 is the same overclaim in a smaller font.
 
-Tests: 541 -> 585, 2 skipped. **The laptop was not re-pinned** — that was skipped
-deliberately, so it still runs `sha-7a5b852` and has neither the approval-marker
-fix, nor `id_keys`, nor any of this.
+Tests: 541 -> 585, 2 skipped.
+
+### Later the same day — the re-pin, and two bugs in the script that did it
+
+The re-pin was skipped at first and then asked for, so #39 merged and the laptop
+moved to `sha-7ac390f` in the same session. It took three attempts, and each
+failure was worth more than the step itself.
+
+**A Go template in a PowerShell script is a quoting hazard.** PowerShell 5.1
+mangles embedded double quotes on their way to a native command, so
+`--format '{{join .RepoDigests ","}}'` reached docker as a broken template and
+`docker image inspect` wrote nothing to stdout. Array splatting does not help;
+the same bug destroyed a `python -c` one-liner on the next line. The fixes:
+a template with **no string literal** (`'{{.RepoDigests}}'`), and for the probe,
+**send the code over stdin** (`$code | docker run --rm -i --entrypoint python
+<img> -`) so it never becomes a command-line token at all.
+
+**The digest check then printed `digest OK` having verified nothing.** With its
+input empty, the guard passed. That is the failure this repo keeps naming in
+other people's code — a check that cannot see its input and reports success —
+and it shipped here in the one script whose entire job is to refuse an
+unverified image. The guard now forces its input to a scalar string, **throws if
+that string is empty**, and uses `.Contains()` rather than `-like`, because
+`-like` against an array filters instead of returning a boolean. No harm done:
+the `docker pull` output happened to show the right digest. The pull told us,
+not the check.
+
+**Hardcoding the expected old tag was a design mistake that paid for itself.**
+The script refused because the config pinned `sha-eeb26dd`, not the
+`sha-7a5b852` this file had been asserting for five days. Rewritten to match
+whatever `ghcr.io/.../garmin-mcp[:@]...` reference is present, print it, and
+replace it — so the next re-pin cannot be blocked by this file being wrong, and
+prints the truth on its way past. The withdrawal is at the bottom of this file.
+
+**What the script does right, and kept doing right across all three runs:** pull,
+assert the digest, and probe the image's *capability* — all before the config is
+touched. Every failure above left the config exactly as it was, and the one
+backup taken before a refusal was simply unused.
 
 ## RESUME HERE
 
@@ -2637,14 +2672,15 @@ than the code and the suite wins.
 
 ## OPEN CHECKS — do these first, in this order
 
-**1. Re-pin the laptop. Still the gate, and now it gates more.** It runs
-`sha-7a5b852`: no approval-marker fix (so a create from Desktop refuses any
-whole-number duration), no `id_keys`, no strength. Nothing below this line can
-run until it moves. The script shape that works is at the bottom of this file;
-pin to a tag whose digest was asserted first, and verify with `docker ps` plus a
-capability probe, never `server_version`.
+**~~1. Re-pin the laptop.~~ DONE** — the laptop carries everything on `main` as
+of this block, digest asserted before the config was touched, capability-probed
+inside the image, and confirmed by `docker ps` after relaunch. The tag and the
+measurement date live with the laptop's state at the bottom of this file, not
+here, because this block does not quote values that a later re-pin supersedes.
+The claim it replaces was wrong for five days; the withdrawal is down there too.
+Nothing below is gated any more.
 
-**2. The strength circuit, live — the highest-value call this project can make.**
+**1. The strength circuit, live — the highest-value call this project can make.**
 It is the real use case *and* it settles the one unverified thing in the new
 code: whether Garmin accepts a named exercise measured in TIME. Preview the
 session, approve it, create it, schedule it, then read the watch for the exercise
@@ -2652,16 +2688,16 @@ names and the work/rest times. Three outcomes worth distinguishing: accepted and
 named correctly; accepted but shown unnamed (the `category`/`exerciseName` pair
 is not read for a timed step); rejected outright. The fallback for the last two
 is reps-based sets, which upstream supports and which loses the work time.
-**This call also settles `id_keys` for free** — see check 3.
+**This call also settles `id_keys` for free** — see check 2.
 
-**3. `id_keys` settles Garmin's response keys, on whatever create runs first.**
+**2. `id_keys` settles Garmin's response keys, on whatever create runs first.**
 Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
 "workoutScheduleId"}`. Whatever comes back, **write the real key names into
 `test_write.py`** and change its two id fixtures from `# recorded in part:` to
 `# recorded:`. If a key differs from our first candidate, narrow
 `WORKOUT_ID_KEYS` / `SCHEDULE_ID_KEYS` to what Garmin actually sends and say so.
 
-**4. The update path has never run live**, and the second create of the same
+**3. The update path has never run live**, and the second create of the same
 circuit is how it gets exercised — which is also the normal weekly
 re-prescription rather than an artificial test. The live cycle so far has only
 taken the **upload** branch: no match ⇒ `upload_workout` ⇒ `schedule_workout`.
@@ -2672,11 +2708,11 @@ account. Create the same-named circuit on a different date: expect
 `scheduled: "new"`. Then a third create on the date it already holds, expecting
 `scheduled: "already"` and **no second calendar entry**.
 
-**5. Delete the throwaways from Connect** — `throwaway test` (workout 1742892340
+**4. Delete the throwaways from Connect** — `throwaway test` (workout 1742892340
 and its calendar entry) and whatever check 2 leaves behind. There is no delete
 tool by design, so this does not happen on its own.
 
-**6. Cassettes (§8).** The transport is now known: writes go through
+**5. Cassettes (§8).** The transport is now known: writes go through
 `requests` via `_api_session` and are recordable; login is `curl_cffi` and is
 not, which means the password POST cannot reach a cassette. Still required by
 §8: `filter_headers` for `Authorization`/`Cookie`, `before_record_response` (a
@@ -2686,7 +2722,7 @@ synthetic token through the real scrubber, because that assertion passes
 vacuously while the cassette directory is empty. `vcrpy` is not yet a dependency,
 though `tests/test_runtime_lock.py` already lists it as dev-only.
 
-**7. Decisions waiting on Mahi, none blocking:**
+**6. Decisions waiting on Mahi, none blocking:**
 
 - **Ratify or reject the SCOPE v1.6 §5 amendment** — strength as a second sport,
   with the timed-exercise shape labelled unverified. The code is written and
@@ -2712,7 +2748,7 @@ though `tests/test_runtime_lock.py` already lists it as dev-only.
   supports both, neither was asked for, and every kind offered is a kind the live
   cycle has to confirm.
 
-**8. Longer-lived, in rough order of value:** the four unverified metric rows
+**7. Longer-lived, in rough order of value:** the four unverified metric rows
 (`training_status`, `load_balance`, `readiness`, `recovery_time`) settled the
 free way `hrv_status` was — against the Connect app, **not** `probe --explain`,
 which prints value types and never values; then the provenance question (refuse
@@ -2748,16 +2784,44 @@ path, §7a's bind address, §9's location exposure).
   step carrying `no.target` — so both of the preview session's recorded assumptions are answered
   yes. Delete it in Connect; there is no delete tool by design.
 
-**The laptop runs `sha-7a5b852` with writes ENABLED** (`-e GARMIN_MCP_ENABLE_WRITES=1` in the
+**The laptop runs `sha-7ac390f` with writes ENABLED** (`-e GARMIN_MCP_ENABLE_WRITES=1` in the
 Desktop config's `args`, before the image name — **not** an `env` block: `docker run` does not
 forward the parent process's environment into the container, so an `env` block looks configured
-and leaves writes off). `sha-5d9993b` was skipped deliberately on the way, because nothing
-user-facing changed in it — **a chosen drift and an unnoticed one look identical from
-`docker ps`**, which is why the choice is written here.
+and leaves writes off). Measured 2026-10-31 15:34 local: digest
+`sha256:81994ff44e1a591b0341faae5a77f7c08d210d9c387cc6ba8c71e47408252481` asserted before the
+config was touched, a capability probe inside the image answered `STRENGTH_OK GOBLET_SQUAT`, and
+`docker ps` after relaunch showed both containers on `sha-7ac390f` and none on the old tag.
+`sha-5d9993b` was skipped deliberately back at #35, because nothing user-facing changed in it —
+**a chosen drift and an unnoticed one look identical from `docker ps`**, which is why the choice
+is written here.
 
-**The laptop is one build behind again**: the approval-marker fix is not on it, so a create from
-Desktop still refuses any whole-number duration. That re-pin is the first thing the next session
-needs.
+**WITHDRAWN 2026-10-31: "the laptop is one build behind, the approval-marker fix is not on it,
+so a create from Desktop still refuses any whole-number duration."** That was false, and it sat
+in this file as an instruction to the next session for five days. The laptop was pinned to
+`sha-eeb26dd`, which **is** the merge of #36 — the approval-marker fix — and which is *newer*
+than the `sha-7a5b852` this file claimed:
+
+| build | merged | carries |
+|-------|--------|---------|
+| `sha-7a5b852` | 2026-10-26 22:30 +01:00 | #35, `garmin_workout_create` |
+| `sha-eeb26dd` | 2026-10-26 22:56 +01:00 | #36, the approval-marker fix |
+| `sha-43ba988` | 2026-10-26 23:13 +01:00 | #37, `id_keys` |
+
+What the laptop genuinely lacked was #37 onward, so the `id_keys` check was right while the
+reason given for it was wrong. **A build claim is a measurement with a date on it, and the only
+instrument is the config plus `docker ps`** — the rule this repo already wrote for metric rows,
+never once applied to the laptop's own pin. Two sessions repeated the claim without measuring it;
+what finally caught it was a re-pin script that hardcoded the expected old tag and refused when
+it did not match. The bug found the stale claim, which is not a method anyone should rely on.
+
+**DRAFT, awaiting Mahi's ratification — the forensic reading.** The containers stopped during
+this re-pin were 41 hours old, started around 2026-10-29 22:30, which is *after* the write
+sessions. So an unrecorded re-pin to `sha-eeb26dd` happened between the first successful write
+and now, and the resume block was never updated for it. The likely sequence is that #36 merged,
+the laptop was re-pinned inside that same session, and the successful write therefore ran on
+`sha-eeb26dd` — but the containers that did it are gone and nothing was recorded, so **which
+build wrote `throwaway test` cannot be established from here.** It is a reconstruction, not
+evidence, and it is written as a draft for exactly that reason.
 
 **The live cycle is done.** What it still owes: **cassettes**, which §8 wants recorded from a
 real exchange and which did not happen during this one — so they are the next session's work,
@@ -2795,6 +2859,15 @@ confirmed the first workout, not the response.
 - **A response that only explains itself on failure teaches nothing when it works.** The first
   real write returned both ids and left Garmin's response keys unknown, because the raw payload
   was attached only on a miss.
+- **A build claim is a measurement with a date on it.** The instrument is the config plus
+  `docker ps`, never this file and never `server_version`. The laptop's pin was asserted wrongly
+  here for five days while the rule was already written for metric rows.
+- **A guard must fail when it cannot see its input.** An empty input that reports success is
+  worse than no guard, because it reads as evidence. Force the input to a scalar, refuse an empty
+  one, and prefer an explicit `.Contains()` to an operator whose meaning changes with the
+  operand's type.
+- **In a PowerShell script, a quote inside a native command's argument will not survive.** Use a
+  template with no string literal, or pass the payload over stdin.
 
 **Still open:**
 
