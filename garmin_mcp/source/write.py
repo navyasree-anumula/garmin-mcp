@@ -49,11 +49,20 @@ MAX_PAGES = 10
 
 #: Where a workout id might live in a response nobody has read yet. Order is
 #: preference, not likelihood.
+#: `workoutId` is CONFIRMED for `upload_workout`, measured 2026-10-31 by
+#: `id_keys` on the `Runner strength 30` create. The fallbacks stay, and are not
+#: dead weight: this tuple is also read against **calendar items** in
+#: `_scheduled_ids_on` and against the **workout list** in the name resolver,
+#: neither of which has had its key names measured. Narrowing it to the one
+#: confirmed key would be reading one endpoint's evidence as three endpoints'.
 WORKOUT_ID_KEYS = ("workoutId", "id")
 
 #: Same, for the schedule. §5: undo needs the scheduled id and NOT the workout
 #: id -- `unschedule_workout` takes the former -- so a miss here costs the only
 #: rollback path and has to be said out loud.
+#:
+#: `workoutScheduleId` is CONFIRMED for `schedule_workout`, same measurement.
+#: The fallbacks stay for the calendar read, whose shape is still unmeasured.
 SCHEDULE_ID_KEYS = ("workoutScheduleId", "scheduledWorkoutId", "id")
 
 #: Containers a calendar month might arrive in. The distinction that matters is
