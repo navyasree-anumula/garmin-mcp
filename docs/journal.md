@@ -3229,6 +3229,14 @@ though `tests/test_runtime_lock.py` already lists it as dev-only.
   supports both, neither was asked for, and every kind offered is a kind the live
   cycle has to confirm.
 
+**7b. The next version's candidates are now a document.**
+`docs/plan-2026-10-31-v1.7-candidates.md` — a **proposal**, not an amendment.
+It collects the committed v1.7 floor, the four things that settle free with no
+code, a recommended small v1.7 ("the write path becomes reversible, and the docs
+stop lying"), and what is deliberately pushed to v1.8. The chosen set gets the
+ten dimensions plus passes A and B before any code, which is the order v1.6 got
+wrong.
+
 **8. Longer-lived, in rough order of value:** the four unverified metric rows
 (`training_status`, `load_balance`, `readiness`, `recovery_time`) settled the
 free way `hrv_status` was — against the Connect app, **not** `probe --explain`,
