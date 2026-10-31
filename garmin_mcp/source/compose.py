@@ -323,6 +323,34 @@ class PaceTarget:
     slower_m_s: float
 
     @property
+    def midpoint_secs_per_km(self) -> float:
+        """The middle of the range, **in seconds per km rather than in m/s.**
+
+        The two are not the same number: averaging the paces and averaging the
+        speeds differ by about a third of a second per km over a 20-second
+        range, because one is the harmonic mean of the other. The pace is the
+        unit the human approved, so the midpoint is taken there -- 4:20 to 4:40
+        gives 4:30, which is the answer anybody would give out loud, and that is
+        the test a derived number has to pass before it goes in a displayed
+        field.
+        """
+        return (self.faster_secs_per_km + self.slower_secs_per_km) / 2.0
+
+    @property
+    def midpoint_rendered(self) -> str:
+        """The midpoint in min/km, for the basis sentence to name."""
+        return f"{_format_pace(self.midpoint_secs_per_km)}/km"
+
+    def seconds_for(self, distance_m: float) -> float:
+        """How long `distance_m` takes at the midpoint of this range.
+
+        **Arithmetic on the prescription, not a measurement.** It says what the
+        session takes if it is run as instructed, which is the only sense in
+        which this server ever knows a duration for a distance step.
+        """
+        return distance_m / 1000.0 * self.midpoint_secs_per_km
+
+    @property
     def rendered(self) -> str:
         """The range in min/km. A human is never shown m/s."""
         return (
@@ -855,115 +883,102 @@ def approval_for(structure: dict[str, Any]) -> str:
 def estimate_duration(steps: tuple[Step, ...]) -> tuple[int, str]:
     """Seconds, and the sentence saying how that number was arrived at.
 
-    **Time-based steps only.** A distance step's duration is unknowable without
-    a pace, and this account has no measured pace -- `get_heart_rate_zones` and
-    the pace endpoints have never been run. Assuming one would put a fabricated
-    number in a field the calendar may display, so a distance step contributes
-    zero and the basis says so.
+    **A distance step is estimated only when it was given a pace** (option (b),
+    ratified 2026-10-31). Then the duration is arithmetic on the range the human
+    approved, taken at its midpoint: it says what the session takes if it is run
+    as instructed. Without a pace the step still contributes **zero**, because
+    this account has no measured pace -- `get_heart_rate_zones` and the pace
+    endpoints have never been run -- and inventing one would put a fabricated
+    number in a field the calendar displays.
 
-    **A pace target does not change that, and the basis stops saying there is no
-    pace when one is present.** A target is a *prescription* -- what the athlete
-    has been told to run -- not a measurement of what they do run. Estimating
-    from it would turn an instruction into a measurement and put a computed
-    number in the same displayed field the paragraph above refuses to invent
-    one for. So a paced distance step still contributes zero, and the basis says
-    which of the two reasons applies. This is the narrower of the two readings
-    of §5's "must stop claiming there is no pace", and it is the one ratified
-    (option (a), 2026-10-31): the sentence changes, the arithmetic does not.
-
-    That means an all-distance session estimates 0, which reads as broken unless
-    the basis is read with it. The two are returned together for exactly that
-    reason, and `estimated_duration_secs` is never surfaced without its basis.
+    The distinction is the whole decision. A prescribed pace is not a
+    measurement of the athlete, but multiplying it out is not a claim about the
+    athlete either; it is a claim about the instruction, and the instruction is
+    the thing the human just approved. Option (a) -- change the sentence, leave
+    the arithmetic -- was ratified first and reversed the same day, when the
+    live check below removed the assumption it rested on.
 
     **Garmin does not recompute it on upload. MEASURED 2026-10-31** --
     workout 1746800115 ("6x300m", scheduled 1825752591): the server computed
     27:30, and Connect displays 27:30 unchanged. So this number is not a
     provisional one that Garmin corrects; **it is the number the calendar
-    shows, and nothing downstream fixes it.** The claim was carried as
-    unverified from v0 and is now closed.
+    shows, and nothing downstream fixes it.** That is what reversed the
+    decision: under (a) a paced session would have displayed several minutes
+    short, permanently, and **the basis sentence explaining it does not travel
+    to Connect** -- the calendar shows the bare number with nothing beside it.
 
-    That makes the sentence above a bigger deal than it was when it was written.
-    While the recompute was an open question, a distance step contributing 0
-    could be hoped to be temporary. It is not: the understatement is permanent,
-    and the basis explaining it **does not travel to Connect** -- the calendar
-    shows the bare number with no sentence beside it.
+    An all-distance session with no paces still estimates 0, which reads as
+    broken unless the basis is read with it. The two are returned together for
+    exactly that reason, and `estimated_duration_secs` is never surfaced without
+    its basis.
     """
-    timed = 0.0
-    distance_steps = 0
-    for step in steps:
-        if step.kind == "repeat":
-            child_total, child_distance = _repeat_totals(step)
-            timed += child_total
-            distance_steps += child_distance
-        elif step.duration_secs is not None:
-            timed += step.duration_secs
-        elif step.distance_m is not None:
-            distance_steps += 1
+    total, paced_distance, unpaced_distance, paced_timed = _tally(steps)
 
-    paced = _paced_count(steps)
+    parts = ["Sum of the time-based steps."]
 
-    basis = "Sum of the time-based steps."
-    if paced and not distance_steps:
-        basis = (
-            f"Sum of the time-based steps. {paced} step(s) carry an explicit "
-            "pace target, which is not used to estimate anything: a target is "
-            "what the athlete was told to run, not a measurement of what they "
-            "do run."
+    if paced_distance:
+        parts.append(
+            f"{paced_distance} distance step(s) are estimated from the pace "
+            "range each was given, at its midpoint: arithmetic on the "
+            "prescription the human approved, not a measured pace."
         )
-    elif distance_steps and not paced:
-        basis = (
-            f"Sum of the time-based steps only. {distance_steps} distance step(s) "
-            "contribute 0: this account has no measured pace, and assuming one "
-            "would put an invented number in a field the calendar displays. "
+    if unpaced_distance:
+        parts.append(
+            f"{unpaced_distance} distance step(s) contribute 0: they carry no "
+            "pace, this account has no measured pace, and assuming one would "
+            "put an invented number in a field the calendar displays."
+        )
+    if paced_timed and not paced_distance:
+        parts.append(
+            "A pace target on a time-based step is not used to estimate "
+            "anything -- that step's duration is already known."
+        )
+    if paced_distance or unpaced_distance:
+        parts.append(
             "Garmin does not recompute it on upload (measured 2026-10-31), so "
             "this is the number the calendar will show."
         )
-    elif distance_steps and paced:
-        basis = (
-            f"Sum of the time-based steps only. {distance_steps} distance step(s) "
-            f"contribute 0. {paced} step(s) carry an explicit pace target, so it "
-            "is no longer true that there is no pace here -- but a target is a "
-            "prescription rather than a measured pace, and estimating from one "
-            "would turn an instruction into a number in a field the calendar "
-            "displays. It is deliberately not used. Garmin does not recompute "
-            "it on upload (measured 2026-10-31), so this is the number the "
-            "calendar will show and the shortfall is permanent."
-        )
-    return int(timed), basis
+
+    return int(total), " ".join(parts)
 
 
-def _paced_count(steps: tuple[Step, ...]) -> int:
-    """How many steps carry a pace target, counting a repeat's children once.
+def _tally(
+    steps: tuple[Step, ...], iterations: int = 1
+) -> tuple[float, int, int, int]:
+    """Seconds, and how many steps of each kind the basis has to account for.
 
-    Once, not once per iteration: the basis sentence says how many steps of the
-    session were written with a target, which is a fact about the prescription
-    and not about how much of it is distance the estimate had to skip.
+    Counts are **per iteration of the session as run**, not per written step, so
+    a repeat group's children count once for each round. The basis reports what
+    the athlete will actually do, and four 800s estimated from a pace is four
+    facts about the session rather than one about the source.
     """
-    total = 0
+    total = 0.0
+    paced_distance = 0
+    unpaced_distance = 0
+    paced_timed = 0
+
     for step in steps:
         if step.kind == "repeat":
-            total += sum(1 for child in step.repeat if child.pace_min_km is not None)
-        elif step.pace_min_km is not None:
-            total += 1
-    return total
+            child_total, child_paced, child_unpaced, child_timed = _tally(
+                step.repeat, step.iterations or 0
+            )
+            total += child_total
+            paced_distance += child_paced
+            unpaced_distance += child_unpaced
+            paced_timed += child_timed
+        elif step.duration_secs is not None:
+            total += step.duration_secs * iterations
+            if step.pace_min_km is not None:
+                paced_timed += iterations
+        elif step.distance_m is not None:
+            if step.pace_min_km is not None:
+                target = pace_target(step.pace_min_km)
+                total += target.seconds_for(step.distance_m) * iterations
+                paced_distance += iterations
+            else:
+                unpaced_distance += iterations
 
-
-def _repeat_totals(step: Step) -> tuple[float, int]:
-    """A repeat group's contribution: time multiplied by iterations.
-
-    Distance steps are counted per iteration too, because the basis sentence
-    reports how many of them contributed nothing, and a count that ignored the
-    repeat would under-report what the estimate is missing.
-    """
-    iterations = step.iterations or 0
-    timed = 0.0
-    distance_steps = 0
-    for child in step.repeat:
-        if child.duration_secs is not None:
-            timed += child.duration_secs
-        elif child.distance_m is not None:
-            distance_steps += 1
-    return timed * iterations, distance_steps * iterations
+    return total, paced_distance, unpaced_distance, paced_timed
 
 
 def _flatten(workout_steps: list[Any], depth: int = 0) -> list[tuple[dict, int]]:

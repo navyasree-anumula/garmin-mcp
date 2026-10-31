@@ -717,12 +717,19 @@ def test_the_approval_marker_covers_the_pace():
 
 def test_the_basis_in_the_preview_stops_claiming_there_is_no_pace():
     """The basis is read by the human, not by a test of `estimate_duration`,
-    so the sentence is asserted where it is actually surfaced."""
+    so the sentence is asserted where it is actually surfaced.
+
+    **Premise changed 2026-10-31, (a) -> (b):** a paced distance step is now
+    estimated from its range, so the number here is 2250 rather than 900. This
+    is the figure that lands on Garmin's calendar and that Garmin does not
+    recompute, which is why the decision moved."""
     preview = garmin_workouts(action="preview", name="Tempo 5k", steps=PACED_SESSION)
 
     assert "this account has no measured pace" not in preview.estimated_duration_basis
-    assert "prescription" in preview.estimated_duration_basis
-    assert preview.estimated_duration_secs == 900
+    assert "arithmetic on the prescription" in preview.estimated_duration_basis
+    assert "does not recompute" in preview.estimated_duration_basis
+    # 600 warmup + 300 cooldown, plus 5000m at the 4:30/km midpoint.
+    assert preview.estimated_duration_secs == 2250
 
 
 def test_a_pace_in_a_strength_session_refuses_at_the_tool():
@@ -796,3 +803,18 @@ def test_an_undeclared_target_field_is_still_refused():
     dropped, which is the failure that cost a live session on 2026-10-31."""
     with pytest.raises(Exception, match="heart_rate_zone"):
         WorkoutStep(kind="interval", duration_secs=600.0, heart_rate_zone=3)
+
+
+def test_an_unpaced_distance_session_still_previews_zero_with_its_reason():
+    """The control for the test above, at the layer a human reads. Removing a
+    pace must take the estimate back to 0 rather than leaving a number behind
+    from the paced path."""
+    preview = garmin_workouts(
+        action="preview",
+        name="Tempo 5k",
+        steps=[WorkoutStep(kind="interval", distance_m=5000.0)],
+    )
+
+    assert preview.estimated_duration_secs == 0
+    assert "contribute 0" in preview.estimated_duration_basis
+    assert "no measured pace" in preview.estimated_duration_basis

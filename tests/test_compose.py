@@ -1279,9 +1279,13 @@ def test_a_pace_renders_from_the_conversion_not_from_the_input():
 
 def test_the_basis_stops_claiming_there_is_no_pace():
     """3.e / A.2. `estimate_duration` cannot see targets at all, so its basis
-    sentence was false the moment a pace could exist. Option (a), ratified
-    2026-10-31: the sentence changes and the arithmetic does not -- a target is
-    what the athlete was told to run, not a measurement of what they do run."""
+    sentence was false the moment a pace could exist.
+
+    **Premise changed 2026-10-31 (a) -> (b).** Option (a) changed the sentence
+    and left the arithmetic; it was reversed the same day, once workout
+    1746800115 showed Garmin does not recompute the duration on upload. A step
+    given a pace is now estimated from it, and one without a pace still
+    contributes 0 -- which is the half of the old behaviour that survives."""
     unpaced = (
         Step("warmup", duration_secs=600.0),
         Step("interval", distance_m=5000.0),
@@ -1291,23 +1295,27 @@ def test_the_basis_stops_claiming_there_is_no_pace():
 
     assert "this account has no measured pace" in plain_basis
     assert "this account has no measured pace" not in paced_basis
-    assert "prescription rather than a measured pace" in paced_basis
-    assert paced_secs == 900
+    assert "arithmetic on the prescription" in paced_basis
+    assert paced_secs == 2250      # 600 + 300 timed, + 5000m at 4:30/km
     assert plain_secs == 600
 
 
-def test_a_pace_does_not_change_the_estimate_itself():
-    """The other half of option (a), asserted so a later reading of §5 cannot
-    quietly turn the prescription into a measurement: the number is the same
-    with the pace and without it."""
+def test_a_pace_is_what_makes_a_distance_step_estimable():
+    """**The reversal, asserted in one place** (option (b), 2026-10-31). The
+    same session estimates differently with the pace and without it, and the
+    difference is exactly the distance step. Under option (a) this test
+    asserted the two were equal; it is kept pointing the other way rather than
+    deleted, because the pair of numbers is what the decision is about."""
     unpaced = tuple(
         Step(s.kind, duration_secs=s.duration_secs, distance_m=s.distance_m)
         for s in PACED_RUN
     )
 
-    assert compose.estimate_duration(PACED_RUN)[0] == (
-        compose.estimate_duration(unpaced)[0]
-    )
+    paced_secs = compose.estimate_duration(PACED_RUN)[0]
+    plain_secs = compose.estimate_duration(unpaced)[0]
+
+    assert paced_secs > plain_secs
+    assert paced_secs - plain_secs == 1350
 
 
 def test_an_all_timed_paced_session_says_the_pace_is_unused():
@@ -1404,3 +1412,78 @@ def test_the_basis_no_longer_hedges_about_garmin_recomputing():
         assert "may recompute" not in basis
         assert "unverified" not in basis
         assert "does not recompute" in basis
+
+
+def test_the_midpoint_is_taken_in_min_per_km_not_in_m_s():
+    """Pinned because the two are different numbers: averaging the paces and
+    averaging the speeds differ by a third of a second per km over a 20-second
+    range, since one is the harmonic mean of the other. The pace is the unit
+    the human approved, so the midpoint is taken there -- 4:20 to 4:40 gives
+    4:30, which is the answer anybody would give out loud."""
+    target = compose.pace_target(["4:20", "4:40"])
+
+    assert target.midpoint_secs_per_km == 270.0
+    assert target.midpoint_rendered == "4:30/km"
+
+    speed_midpoint = (target.faster_m_s + target.slower_m_s) / 2.0
+    assert 1000.0 / speed_midpoint != target.midpoint_secs_per_km
+
+
+def test_a_paced_distance_step_is_arithmetic_on_the_range():
+    """5 km at the midpoint of 4:20-4:40 is 5 x 270 seconds. Pinned, because
+    this number now lands on Garmin's calendar and nothing downstream corrects
+    it."""
+    target = compose.pace_target(["4:20", "4:40"])
+
+    assert target.seconds_for(5000.0) == 1350.0
+    assert target.seconds_for(800.0) == 216.0
+
+
+def test_a_paced_step_inside_a_repeat_is_counted_every_round():
+    """The estimate multiplies by iterations and so does the count in the
+    basis: four 800s estimated from a pace is four facts about the session the
+    athlete runs, not one about how it was written."""
+    steps = (
+        Step("warmup", duration_secs=600.0),
+        Step(
+            "repeat",
+            iterations=4,
+            repeat=(
+                Step("interval", distance_m=800.0, pace_min_km=("4:00", "4:10")),
+                Step("recovery", duration_secs=120.0),
+            ),
+        ),
+    )
+
+    seconds, basis = compose.estimate_duration(steps)
+
+    # 600 warmup + 4 x (800m at 4:05/km = 196s) + 4 x 120 recovery
+    assert seconds == 1864
+    assert "4 distance step(s) are estimated" in basis
+
+
+def test_a_session_with_some_paces_and_some_not_says_both():
+    """The mixed case is the one a basis sentence gets wrong: it has to report
+    what was estimated AND what contributed nothing, because a reader who sees
+    only one of the two misreads the number."""
+    steps = (
+        Step("interval", distance_m=5000.0, pace_min_km=("4:20", "4:40")),
+        Step("interval", distance_m=1000.0),
+    )
+
+    seconds, basis = compose.estimate_duration(steps)
+
+    assert seconds == 1350
+    assert "1 distance step(s) are estimated" in basis
+    assert "1 distance step(s) contribute 0" in basis
+
+
+def test_an_unpaced_distance_step_still_contributes_nothing():
+    """The half of option (a) that survived (b). Without a pace there is
+    nothing to compute from, and this account has never had its pace measured,
+    so the step contributes 0 and the basis says why."""
+    seconds, basis = compose.estimate_duration((Step("interval", distance_m=5000.0),))
+
+    assert seconds == 0
+    assert "contribute 0" in basis
+    assert "no measured pace" in basis

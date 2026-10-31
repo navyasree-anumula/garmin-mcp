@@ -582,7 +582,13 @@ class WorkoutPreview(BaseModel):
         description="One readable line per step, in the order they would run."
     )
     estimated_duration_secs: int = Field(
-        description="Estimated length. Read `estimated_duration_basis` before using it."
+        description=(
+            "Estimated length. Read `estimated_duration_basis` before using it. "
+            "Garmin does NOT recompute this on upload (measured 2026-10-31), so "
+            "whatever is here is the number the calendar will display, with no "
+            "basis sentence beside it. A distance step is estimated only when it "
+            "was given a pace; without one it contributes 0."
+        )
     )
     estimated_duration_basis: str = Field(
         description="How the estimate was derived, and what it leaves out."
