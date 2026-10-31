@@ -394,3 +394,137 @@ def test_a_strength_preview_still_reaches_nothing():
 
     assert preview.requests_made == 0
     assert preview.approval.startswith("sha256:")
+
+
+# --------------------------------------------------------------------------
+# An unknown field is named, not dropped (found live, 2026-10-31)
+#
+# A real session failed here. A client sent a repeat group's nested steps under
+# `steps` instead of `repeat`; pydantic's default dropped the key, and the server
+# refused with "a repeat group with no steps repeats nothing" -- blaming the
+# group for being empty rather than naming the field nobody read. The agent then
+# guessed field names for several turns and gave up. The schema was correct the
+# whole time, which is the point: a correct schema does not help if a wrong guess
+# produces a misdiagnosis.
+# --------------------------------------------------------------------------
+
+
+def call_raw(args: dict):
+    """The tool through MCP with a raw dict, the way a client really calls it.
+
+    The other tests here pass `WorkoutStep` objects, which cannot carry an
+    unknown field -- so they could never have caught this. Going through
+    `call_tool` is what makes the wire shape testable.
+    """
+    return asyncio.run(mcp.call_tool("garmin_workouts", args))
+
+
+def test_an_unknown_field_on_a_step_is_named_not_dropped():
+    """The exact live failure, as a regression test. The error must name the
+    offending field: `steps.0.steps` is recoverable in one turn, while "the
+    group has no steps" sent an agent guessing."""
+    bad = {
+        "action": "preview",
+        "name": "probe",
+        "sport": "strength",
+        "steps": [
+            {
+                "kind": "repeat",
+                "iterations": 4,
+                "steps": [
+                    {"kind": "exercise", "duration_secs": 40.0, "exercise": "squat"}
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(ToolError) as exc:
+        call_raw(bad)
+
+    message = str(exc.value)
+    assert "steps.0.steps" in message
+    assert "Extra inputs are not permitted" in message
+    # The misdiagnosis must NOT be what comes back any more.
+    assert "repeat group with no steps" not in message
+
+
+def test_the_control_the_right_field_name_composes():
+    """A refusal-only test would pass against a tool that refused everything."""
+    good = {
+        "action": "preview",
+        "name": "probe",
+        "sport": "strength",
+        "steps": [
+            {
+                "kind": "repeat",
+                "iterations": 4,
+                "repeat": [
+                    {"kind": "exercise", "duration_secs": 40.0, "exercise": "squat"},
+                    {"kind": "rest", "duration_secs": 20.0},
+                ],
+            }
+        ],
+    }
+
+    assert call_raw(good) is not None
+
+
+def test_an_unknown_field_at_the_top_of_a_step_is_refused_too():
+    """Not only the nested case. A plausible-looking `reps` is the obvious thing
+    an agent would try on a strength step, and v1.6 does not build reps -- so it
+    has to be refused rather than silently ignored."""
+    bad = {
+        "action": "preview",
+        "name": "probe",
+        "sport": "strength",
+        "steps": [
+            {"kind": "exercise", "duration_secs": 40.0, "exercise": "squat", "reps": 12}
+        ],
+    }
+
+    with pytest.raises(ToolError, match="Extra inputs are not permitted"):
+        call_raw(bad)
+
+
+def test_an_empty_repeat_group_names_the_field_it_wanted():
+    """When the group really is empty, the refusal should still say where the
+    steps go -- the message an agent reads is the only documentation it has at
+    that moment."""
+    bad = [WorkoutStep(kind="repeat", iterations=4, repeat=[])]
+
+    with pytest.raises(ToolError) as exc:
+        garmin_workouts(action="preview", name="probe", steps=bad, sport="strength")
+
+    assert "`repeat` field" in str(exc.value)
+
+
+def test_the_runner_circuit_from_the_live_session_composes():
+    """The session that found the bug designed this and never got to send it.
+    Six exercises, 40s work and 20s rest, four rounds -- 24 minutes. Pinned here
+    so the shape a real session asked for stays buildable."""
+    names = [
+        "Goblet Squat",
+        "Dumbbell Reverse Lunge",
+        "Single-leg Romanian Deadlift with Dumbbell",
+        "Hip Raise",
+        "Calf Raise",
+        "Plank",
+    ]
+    round_steps = []
+    for name in names:
+        round_steps.append(
+            WorkoutStep(kind="exercise", duration_secs=40.0, exercise=name)
+        )
+        round_steps.append(WorkoutStep(kind="rest", duration_secs=20.0))
+
+    preview = garmin_workouts(
+        action="preview",
+        name="Runner strength",
+        sport="strength",
+        steps=[WorkoutStep(kind="repeat", iterations=4, repeat=round_steps)],
+    )
+
+    assert preview.estimated_duration_secs == 1440
+    assert preview.requests_made == 0
+    assert "Goblet Squat" in preview.step_summary[1]
+    assert "DUMBBELL_REVERSE_LUNGE" in preview.step_summary[3]

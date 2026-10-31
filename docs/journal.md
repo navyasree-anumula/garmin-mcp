@@ -2659,6 +2659,47 @@ assert the digest, and probe the image's *capability* — all before the config 
 touched. Every failure above left the config exactly as it was, and the one
 backup taken before a refusal was simply unused.
 
+### Later still — the first live strength session, which never reached Garmin
+
+With the laptop on `sha-7ac390f`, a real session ran from Desktop: 30 minutes,
+dumbbells and a kettlebell, runner strength, today's date. The agent designed the
+circuit correctly, refused the timed warm-up and cool-down on its own because
+strength accepts only `exercise` and `rest` — and then **could not build a repeat
+group**, guessed field names for several turns, and stopped. Nothing was sent;
+every attempt was refused before composing.
+
+**The cause was ours, and it is the failure this project refuses everywhere
+else.** The client sent the nested steps under `steps` instead of `repeat`.
+pydantic's default is to **drop** an unknown field, so the key vanished and
+`compose` refused with "a repeat group with no steps repeats nothing" — blaming
+the group for being empty rather than naming the field nobody read. The
+published schema was correct the whole time and did name `repeat`. **A correct
+schema does not help when a wrong guess produces a misdiagnosis.**
+
+`WorkoutStep` now sets `extra="forbid"`, so the same call returns
+`steps.0.steps: Extra inputs are not permitted` — recoverable in one turn. The
+empty-group refusal also names the field it wanted. Both have regression tests,
+and the tests go through `mcp.call_tool` with a raw dict: every existing test in
+that file passes `WorkoutStep` objects, which **cannot carry an unknown field**,
+so none of them could ever have caught this. A wire-shape bug needs a wire-shape
+test.
+
+**The second thing the session would have hit.** Three of its six exercises are
+ambiguous against Garmin's catalogue — `reverse lunge` matches 10, `glute bridge`
+and `single-leg Romanian deadlift` two each — so it would have spent three more
+turns disambiguating after the repeat group was fixed. That is the resolver
+working as designed, and it is still three turns. The exact names for a
+dumbbell/kettlebell runner circuit are **Goblet Squat, Dumbbell Reverse Lunge,
+Single-leg Romanian Deadlift with Dumbbell, Hip Raise, Calf Raise, Plank** —
+pinned in a test that composes the whole 24-minute circuit, because the session
+that designed it never got to send it.
+
+Note for later: `glute bridge` resolves only to banded and suspension variants,
+neither of which is bodyweight. `Hip Raise` is the plain-floor equivalent and the
+catalogue's name for it. Worth knowing before prescribing one.
+
+Tests: 585 -> 590.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at

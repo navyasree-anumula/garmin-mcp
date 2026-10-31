@@ -13,7 +13,7 @@ from typing import Annotated, Literal
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .source import client as source
@@ -368,8 +368,19 @@ class WorkoutStep(BaseModel):
 
     Give exactly one of `duration_secs` and `distance_m` -- a step ends one way
     or the other. For `kind="repeat"`, give `iterations` and `repeat` instead,
-    and nothing else.
+    and nothing else. The nested steps go in a field called **`repeat`**.
+
+    **Unknown fields are refused, not ignored.** pydantic's default is to drop
+    them, and on 2026-10-31 that cost a live session: a client sent the nested
+    steps under `steps` instead of `repeat`, the key vanished, and the server
+    refused with "a repeat group with no steps repeats nothing" -- blaming the
+    group for being empty rather than naming the field that was never read. The
+    agent then guessed field names for several more turns. A silently dropped
+    input is the §5 failure this project refuses everywhere else, and the schema
+    boundary is where it is cheapest to catch.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     kind: StepKind = Field(
         description=(
