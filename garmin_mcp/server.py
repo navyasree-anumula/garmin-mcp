@@ -362,6 +362,19 @@ WorkoutAction = Literal["preview"]
 #: schema offers and the composer cannot build is a schema that lies.
 WorkoutSport = Literal[tuple(source_compose.SPORTS)]  # type: ignore[valid-type]
 
+#: The literal example carried in the `steps` description, as a constant rather
+#: than as prose inside it, so a test can parse this exact string and compose
+#: it. A documented example that no longer works is worse than no example: it
+#: reads as verified. Two live sessions were lost guessing this shape, because
+#: it lives behind a recursive `$ref` in the schema and not every client renders
+#: one -- so it is spelled out where the agent cannot miss it, and asserted
+#: where we cannot break it.
+REPEAT_GROUP_EXAMPLE = (
+    '[{"kind": "repeat", "iterations": 4, "repeat": '
+    '[{"kind": "exercise", "duration_secs": 40, "exercise": "Goblet Squat"}, '
+    '{"kind": "rest", "duration_secs": 20}]}]'
+)
+
 
 class WorkoutStep(BaseModel):
     """One step of a prescribed session.
@@ -561,7 +574,19 @@ def garmin_workouts(
     name: Annotated[str, Field(description="What to call this session.")],
     steps: Annotated[
         list[WorkoutStep],
-        Field(description="The steps of the session, in the order they should run."),
+        Field(
+            description=(
+                "The steps of the session, in the order they should run. "
+                "A repeat group's nested steps go in a field called `repeat` -- "
+                "NOT `steps`, `children` or `items`. A 4-round circuit is ONE "
+                "repeat group, written exactly like this: "
+                f"{REPEAT_GROUP_EXAMPLE} "
+                "-- and the same circuit written flat is that exercise/rest "
+                "pair listed four times here, which Garmin accepts equally. "
+                "Unknown field names are refused, not ignored, so a guess is "
+                "told which field it got wrong."
+            )
+        ),
     ],
     description: Annotated[
         str | None, Field(description="Optional note saved with the workout.")
@@ -600,11 +625,19 @@ def garmin_workouts(
     is refused with the candidates listed, so the human approves the entry
     Garmin will actually store rather than the word the agent typed.
 
-    **One strength shape is unverified against Garmin**: a named exercise
-    measured in time. The library builds named exercises by *reps* and timed
-    steps *without* names, so the combination is this server's, and no live
-    create has confirmed Garmin accepts it (docs/SCOPE.md §5 -- the v1.6
-    amendment covering strength is drafted, NOT yet ratified).
+    **The nested steps of a repeat group go in `repeat`.** The `steps`
+    parameter's own description carries a literal example to copy. Two live
+    sessions were lost guessing this, because the nested shape lives behind a
+    recursive `$ref` in the schema and not every client renders one -- so it is
+    written out in prose here, where it cannot be missed. Writing the rounds
+    out flat, with no repeat group at all, is equally valid and is what the
+    first successful strength session actually did.
+
+    **Garmin accepts a named exercise measured in time** -- confirmed by the
+    first live create on 2026-10-31, workout 1746708075, scheduled and visible
+    on the watch. The library builds named exercises by *reps* and timed steps
+    *without* names, so the combination was this server's and was labelled
+    unverified until that create. It no longer is.
 
     A malformed session is refused with the reason: a repeat group with no
     steps, fewer than two iterations, a step with no end condition, or one

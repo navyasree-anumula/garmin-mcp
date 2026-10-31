@@ -23,9 +23,12 @@ upstream's.** A named exercise measured in *time* -- 40 seconds of Goblet Squat
 -- is not a step the library builds: `create_strength_exercise_step` ends on
 REPS and takes no duration, and `create_strength_rest_step` is timed but names
 nothing. `_build_exercise` combines them, from the library's own enum members,
-and **Garmin's acceptance of the combination is unverified** until a live create
-settles it. Every other strength piece is upstream's: the `StrengthWorkout`
-model, the rest step, and the `category`/`exerciseName` catalogue.
+and **Garmin accepted the combination** on 2026-10-31 — workout 1746708075,
+uploaded, scheduled, and visible on the watch. It was the open question of v1.6
+and it is now answered yes; what is still unconfirmed is narrower, namely
+whether each step's exercise NAME renders on the watch mid-session. Every other
+strength piece is upstream's: the `StrengthWorkout` model, the rest step, and
+the `category`/`exerciseName` catalogue.
 
 **What this module does not do is design the session.** It composes what it is
 told. Which distance, how many reps, how long the recovery -- those need how the
@@ -246,11 +249,13 @@ def _build_exercise(step: Step, order: int) -> Any:
     same enum members the library's own builders use rather than from literals
     of ours.
 
-    **Garmin's acceptance of it is unverified** (docs/SCOPE.md §5 -- the v1.6
-    amendment covering strength is drafted, NOT yet ratified). Every
-    field is one upstream writes somewhere; the combination is not. The first
-    live create settles it, and until it does this docstring is the only honest
-    statement of what is known.
+    **Garmin accepts it.** CONFIRMED by the first live create, 2026-10-31:
+    workout 1746708075, uploaded and scheduled with no warnings and visible on
+    the watch. Every field was one upstream writes somewhere and the combination
+    was ours; the combination is now measured rather than hoped. Still
+    unconfirmed, and narrower: whether the exercise NAME renders on the watch
+    during the session. (docs/SCOPE.md §5 -- the v1.6 amendment covering
+    strength remains drafted, not yet ratified.)
     """
     if step.distance_m is not None:
         raise ComposeError(

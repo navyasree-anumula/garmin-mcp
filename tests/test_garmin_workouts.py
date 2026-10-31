@@ -528,3 +528,58 @@ def test_the_runner_circuit_from_the_live_session_composes():
     assert preview.requests_made == 0
     assert "Goblet Squat" in preview.step_summary[1]
     assert "DUMBBELL_REVERSE_LUNGE" in preview.step_summary[3]
+
+
+def test_the_documented_repeat_group_example_actually_works():
+    """The example in the `steps` description, parsed and composed.
+
+    Two live sessions were lost because the nested shape was invisible: it lives
+    behind a recursive `$ref` and the client did not render one, so the agent
+    guessed `steps` and was told the group was empty. The fix is prose, and
+    prose rots -- so the exact string the schema publishes is parsed here and
+    run through the tool. A documented example that no longer works reads as
+    verified, which is worse than no example at all.
+    """
+    import json
+
+    from garmin_mcp.server import REPEAT_GROUP_EXAMPLE
+
+    steps = json.loads(REPEAT_GROUP_EXAMPLE)
+    preview = garmin_workouts(
+        action="preview",
+        name="example",
+        steps=[WorkoutStep(**s) for s in steps],
+        sport="strength",
+    )
+
+    assert preview.estimated_duration_secs == 240
+    assert "Goblet Squat" in preview.step_summary[1]
+
+
+def test_the_example_is_in_the_published_description():
+    """The constant is only useful if the schema actually carries it. Asserted
+    against the published schema, not the source, because the schema is what
+    the agent reads."""
+    from garmin_mcp.server import REPEAT_GROUP_EXAMPLE
+
+    described = registered_tool("garmin_workouts").input_schema["properties"]["steps"][
+        "description"
+    ]
+
+    assert REPEAT_GROUP_EXAMPLE in described
+    assert "NOT `steps`" in described
+
+
+def test_the_example_survives_the_raw_wire_path():
+    """The same example as a client would send it -- a raw dict through
+    `call_tool`, which is the path that found the original bug."""
+    import json
+
+    from garmin_mcp.server import REPEAT_GROUP_EXAMPLE
+
+    assert call_raw({
+        "action": "preview",
+        "name": "example",
+        "sport": "strength",
+        "steps": json.loads(REPEAT_GROUP_EXAMPLE),
+    }) is not None

@@ -2700,6 +2700,60 @@ catalogue's name for it. Worth knowing before prescribing one.
 
 Tests: 585 -> 590.
 
+### Later still again — Garmin accepts a named exercise measured in time
+
+**The open question of v1.6 is answered yes.** `Runner strength 30` was uploaded
+and scheduled for 31 Oct, workout **1746708075**, no warnings, and it shows on
+the watch. Garmin accepts an `ExecutableStep` carrying `category` and
+`exerciseName` with a TIME end condition — the shape the library does not build
+and this project assembled through `extra="allow"`. Every "unverified" label on
+it is withdrawn, in `compose.py`, `server.py` and `test_compose.py`. What
+remains unconfirmed is narrower: whether each step's exercise *name* renders on
+the watch mid-session.
+
+**The resolver behaved exactly as designed, in front of a human.** Three of the
+six names were ambiguous or absent, and the agent reported every substitution
+before writing: `Hip Raise` for a glute bridge, because the catalogue has only
+banded and suspension variants of that name; the dumbbell variants of the lunge
+and the single-leg deadlift. A guess would have put different exercises on the
+watch under names that read correct. This is the one design decision of v1.6
+that was argued from values rather than evidence, and it paid.
+
+**But the circuit went in FLAT, not as a repeat group — and that is still our
+bug.** The agent said it "can't see how the tool wants a repeat group written"
+and **asked rather than guessed.** That is the `extra="forbid"` fix working in a
+way no test anticipated: told that a wrong field name would be refused, the
+agent stopped guessing and asked. Better behaviour, and still a failure: the
+shape was unavailable to it for the second session running.
+
+**Root cause: the nested shape lives behind a recursive `$ref` and this client
+does not render one.** `WorkoutStep.repeat` publishes as
+`items: {"$ref": "#/$defs/WorkoutStep"}`, and `$defs` evidently does not reach
+the agent. **The schema was correct both times.** A correct schema is not
+documentation if the client does not expand it. The fix is prose, in the
+top-level `steps` description, where every client renders it — a literal
+example to copy, naming `repeat` and naming the three wrong guesses. Prose rots,
+so the example is a module constant, `REPEAT_GROUP_EXAMPLE`, and three tests
+parse that exact published string and compose it: one through the typed model,
+one against the published schema, one through the raw wire path.
+
+**`id_keys` is STILL unknown, for the fifth time.** The create returned it and
+the agent reported only the workout id. `scheduled_workout_id` did not reach the
+human either — the id that `unschedule_workout` needs, without which the
+calendar entry can only be removed in Connect. This is the rule this file
+already carries, failing again: **a field is not a channel.** Returning a field
+does not deliver it; a summarising client drops whatever the human did not ask
+for by name. Five occurrences now: `server_version`, the provenance note, the
+refusal distinction, the write's ids, and now `id_keys`. The next create must be
+asked, in words, for `id_keys` and `scheduled_workout_id`.
+
+**The flat form is a real finding too, not only a workaround.** A 24-step flat
+circuit was accepted and scheduled, so the repeat group is not required for a
+strength session. The repeat-group path remains **unexercised live** in strength
+— composed, tested, and never sent.
+
+Tests: 590 -> 593.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
@@ -2721,7 +2775,13 @@ here, because this block does not quote values that a later re-pin supersedes.
 The claim it replaces was wrong for five days; the withdrawal is down there too.
 Nothing below is gated any more.
 
-**1. The strength circuit, live — the highest-value call this project can make.**
+**~~1. The strength circuit, live.~~ DONE IN PART** — Garmin accepts a named
+exercise measured in time; the session is on the calendar and on the watch. Two
+things it did NOT settle, both now items of their own: the circuit went in flat,
+so the **repeat group is still unexercised live** in strength (check 2), and
+`id_keys` was returned and never reached the human (check 3). The original
+wording of this item follows, because the three-outcome question it posed is
+answered and worth keeping answered:
 It is the real use case *and* it settles the one unverified thing in the new
 code: whether Garmin accepts a named exercise measured in TIME. Preview the
 session, approve it, create it, schedule it, then read the watch for the exercise
@@ -2729,16 +2789,23 @@ names and the work/rest times. Three outcomes worth distinguishing: accepted and
 named correctly; accepted but shown unnamed (the `category`/`exerciseName` pair
 is not read for a timed step); rejected outright. The fallback for the last two
 is reps-based sets, which upstream supports and which loses the work time.
-**This call also settles `id_keys` for free** — see check 2.
+**This call also settles `id_keys` for free** — see check 3.
 
-**2. `id_keys` settles Garmin's response keys, on whatever create runs first.**
+**2. Send a repeat group to Garmin.** Composed and tested since v1.6, never
+sent — the first two strength sessions could not build one and the first write
+went in flat. Now that `REPEAT_GROUP_EXAMPLE` is in the prose the agent reads,
+ask for a circuit and check the preview's `step_summary` shows `4x:` with the
+steps indented beneath it rather than twenty-four flat lines. Then write it. It
+is the last composed-but-unsent shape in the write path.
+
+**3. `id_keys` settles Garmin's response keys — ASK FOR IT BY NAME.**
 Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
 "workoutScheduleId"}`. Whatever comes back, **write the real key names into
 `test_write.py`** and change its two id fixtures from `# recorded in part:` to
 `# recorded:`. If a key differs from our first candidate, narrow
 `WORKOUT_ID_KEYS` / `SCHEDULE_ID_KEYS` to what Garmin actually sends and say so.
 
-**3. The update path has never run live**, and the second create of the same
+**4. The update path has never run live**, and the second create of the same
 circuit is how it gets exercised — which is also the normal weekly
 re-prescription rather than an artificial test. The live cycle so far has only
 taken the **upload** branch: no match ⇒ `upload_workout` ⇒ `schedule_workout`.
@@ -2749,11 +2816,11 @@ account. Create the same-named circuit on a different date: expect
 `scheduled: "new"`. Then a third create on the date it already holds, expecting
 `scheduled: "already"` and **no second calendar entry**.
 
-**4. Delete the throwaways from Connect** — `throwaway test` (workout 1742892340
+**5. Delete the throwaways from Connect** — `throwaway test` (workout 1742892340
 and its calendar entry) and whatever check 2 leaves behind. There is no delete
 tool by design, so this does not happen on its own.
 
-**5. Cassettes (§8).** The transport is now known: writes go through
+**6. Cassettes (§8).** The transport is now known: writes go through
 `requests` via `_api_session` and are recordable; login is `curl_cffi` and is
 not, which means the password POST cannot reach a cassette. Still required by
 §8: `filter_headers` for `Authorization`/`Cookie`, `before_record_response` (a
@@ -2763,7 +2830,7 @@ synthetic token through the real scrubber, because that assertion passes
 vacuously while the cassette directory is empty. `vcrpy` is not yet a dependency,
 though `tests/test_runtime_lock.py` already lists it as dev-only.
 
-**6. Decisions waiting on Mahi, none blocking:**
+**7. Decisions waiting on Mahi, none blocking:**
 
 - **Ratify or reject the SCOPE v1.6 §5 amendment** — strength as a second sport,
   with the timed-exercise shape labelled unverified. The code is written and
@@ -2789,7 +2856,7 @@ though `tests/test_runtime_lock.py` already lists it as dev-only.
   supports both, neither was asked for, and every kind offered is a kind the live
   cycle has to confirm.
 
-**7. Longer-lived, in rough order of value:** the four unverified metric rows
+**8. Longer-lived, in rough order of value:** the four unverified metric rows
 (`training_status`, `load_balance`, `readiness`, `recovery_time`) settled the
 free way `hrv_status` was — against the Connect app, **not** `probe --explain`,
 which prints value types and never values; then the provenance question (refuse

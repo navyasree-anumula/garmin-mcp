@@ -548,10 +548,11 @@ def test_composing_works_with_the_doorway_booby_trapped(monkeypatch):
 # The shape this section exercises is the one the library does not build: a
 # named exercise measured in TIME. `create_strength_exercise_step` ends on reps
 # and `create_strength_rest_step` names nothing, so `_build_exercise` combines
-# them -- and Garmin's acceptance of that combination is unverified until a live
-# create settles it. These tests prove the structure is what we meant to send.
-# They cannot prove Garmin wants it, and nothing here should be read as saying
-# they do.
+# them. Garmin's acceptance of that combination was the open question of v1.6
+# and a live create answered it YES on 2026-10-31 (workout 1746708075, scheduled
+# and visible on the watch). These tests still only prove the structure is what
+# we meant to send -- the live create is what proves Garmin wants it, and that
+# evidence lives in the journal, not here.
 # --------------------------------------------------------------------------
 
 CIRCUIT = (
