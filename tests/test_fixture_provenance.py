@@ -37,6 +37,8 @@ PAYLOAD_FILES = (
     "test_garmin_training.py",
     "test_write.py",
     "test_garmin_workout_create.py",
+    "test_unschedule.py",
+    "test_garmin_workout_unschedule.py",
 )
 
 #: Two labels, and the second is not a loophole.

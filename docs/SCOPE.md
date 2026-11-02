@@ -1,12 +1,17 @@
 # garmin-mcp — Scope
 
 **Status:** pass 1 shipped and proven live on the target laptop. Pass 2 in progress.
-**Version:** 1.6 · 2026-10-31 — **RATIFIED by Mahi, 2026-10-31**, on the diff summary,
-with three decisions taken at ratification: §15.15.
+**Version:** 1.7 · 2026-11-02 — **scope RATIFIED by Mahi in-session, 2026-11-02**: §16.
+v1.6 · 2026-10-31 — **RATIFIED by Mahi, 2026-10-31**, on the diff summary, with three decisions
+taken at ratification: §15.15.
 **Ratification:** this document is the artifact to approve before any code is written.
 **v1.3** stress-tested across all 10 dimensions of `sop/stress-test-10-dimensions.md`;
 audit trail in §12. **v1.4** walked the same ten plus adversarial passes A and B; §13.
 **v1.5** the same ten plus A and B; §14. **v1.6** the same ten plus A and B; §15.
+**v1.7**'s walk of record is **not in this file**: it is `docs/plan-2026-11-02-unschedule-by-lookup.md`
+§4–§6, where the ten dimensions plus passes A and B were walked before any code. The version is
+one small tool, and Pass A's state × surface matrix belongs beside the mechanism it describes.
+§16 records the decisions and points there.
 
 **v1.5 settles who does the thinking.** It covers the division of labour between the server
 and the conversation, where the athlete's own context lives, what ships of §6's cache, and the
@@ -554,7 +559,17 @@ testable without a network (§8).
   the current `read_only_hint=True`; `preview` is read-only and idempotent; create and schedule
   are neither read-only nor idempotent, and are **not** destructive, because
   `delete_workout`/`unschedule_workout` stay available and §5's four permanent deletion
-  exclusions are untouched.
+  exclusions are untouched. **`garmin_workout_unschedule` IS annotated destructive** (v1.7) —
+  it removes a calendar entry, and it is the first tool in this server where that hint is true.
+- **The workout surface ships as three tools, not one, and that is the design** —
+  **ratified 2026-11-02.** `garmin_workouts` (preview, read-only, idempotent),
+  `garmin_workout_create` (write) and `garmin_workout_unschedule` (destructive) are separate
+  tools because `ToolAnnotations` are **per tool** while the honesty this section asks for is
+  **per action**. One tool holding all three would have to carry the most dangerous annotation
+  of the three, and a client that gates destructive tools behind a confirmation would then wall
+  off the preview — the safest call in the flow, and the one the human approves from. The split
+  shipped in v1.5 and this document did not mention it until now, so the code and the document
+  disagreed on a point v1.6's ratification did not touch; this sentence is that correction.
 - **Composition lives in `source/`.** The workout builders are `garminconnect.workout`, so a
   `from garminconnect.workout import RunningWorkout` in `server.py` would break §11. The
   composer sits beside the metric map, imports nothing from `client.py`, and makes no requests.
@@ -976,7 +991,7 @@ they were written — never their contents.
 | Two containers, one token file | **Observed** 2026-08-30 | Concurrent refresh could lose an update | Cross-process file lock around refresh. Structural risk; not yet observed to bite |
 | Single-maintainer bus factor | Low now | Fork treadmill | Accepted. MIT means forking is at least possible |
 | A pace range written with its bounds swapped (v1.6) | **Resolved 2026-10-31** | The watch alerts continuously and the easy end becomes the hard end | **Closed by measurement.** Workout 1746821178 displays 4:20-4:40/km as prescribed, so `targetValueOne` is the faster bound and the risk is retired. The mitigation is kept: the ordering still lives in **one named constant**, which is what made the check a one-line fix had it gone the other way. Whether the watch *alerts* outside the range is a separate, non-structural question, pending a run |
-| An important id exists only in a tool response (v1.6) | **Observed five times** | `unschedule_workout` takes the scheduled id and nothing else, so a calendar entry becomes removable only by hand in Connect | **Decided 2026-10-31: no ledger.** The id is looked up from Garmin's calendar at undo time (§15.13 option 2), so a dropped id is *recoverable* rather than stored twice. A returned field is not a delivered one — summarising clients dropped `server_version`, the provenance note, the refusal distinction, the write's ids and `id_keys` — which is why the answer is a lookup and not a louder response. Unschedule-by-lookup is **v1.7 scope**; until it ships, an undo is still by hand in Connect, and the residual risk is accepted for that window |
+| An important id exists only in a tool response (v1.6) | **Observed five times** | `unschedule_workout` takes the scheduled id and nothing else, so a calendar entry becomes removable only by hand in Connect | **Decided 2026-10-31: no ledger.** The id is looked up from Garmin's calendar at undo time (§15.13 option 2), so a dropped id is *recoverable* rather than stored twice. A returned field is not a delivered one — summarising clients dropped `server_version`, the provenance note, the refusal distinction, the write's ids and `id_keys` — which is why the answer is a lookup and not a louder response. Unschedule-by-lookup **shipped in v1.7 as `garmin_workout_unschedule(name, date)`** — the id is looked up from the calendar, so the tool cannot be handed a remembered one. The residual risk is now narrower and different: the **calendar item's** key names are still unmeasured, so the lookup's candidate keys are an assumption until the first live undo records them, and a refusal that cannot read an entry is deliberately worded so it cannot be mistaken for an entry that is absent |
 | Datacenter-IP flag | **Resolved** | — | Eliminated by the laptop decision (§7) |
 
 ---
@@ -1878,3 +1893,64 @@ no consumer of state: decisions 1 and 3 are scope statements, and decision 2's m
 explicitly v1.7, where it gets its own ten plus A and B before any code — with §15.13's two
 inherited findings as its starting point. Said explicitly, per the SOP, rather than skipped
 quietly.
+
+---
+
+## §16 v1.7 — the write path becomes reversible
+
+**Scope ratified by Mahi in-session on 2026-11-02**, narrowed from the proposal in
+`docs/plan-2026-10-31-v1.7-candidates.md` to what one week's real use needs: plan next week's
+fitness classes from Claude Desktop, and be able to undo a wrong entry from the conversation
+that made it.
+
+**The walk of record is the plan document, not this file.** `docs/plan-2026-11-02-unschedule-by-lookup.md`
+§4 holds the ten dimensions, §5 Pass A's state × surface matrix and §6 Pass B's lifecycles,
+walked **before** any code — which is the order v1.6 got wrong (§15.1). Three dimensions are
+recorded there as small-but-not-nil rather than skipped silently, and the matrix is kept beside
+the mechanism it describes because that is what makes the next review cheap.
+
+### §16.1 What is in, and what each item cost
+
+| Item | Shape | State |
+|---|---|---|
+| **Unschedule-by-lookup** (§15.13 option 2) | `garmin_workout_unschedule(name, date)`, destructive-annotated, behind the existing writes gate | Built 2026-11-02. 44 tests added; **live undo still owed** |
+| **The §5 tool split** | One paragraph in §5 | Ratified 2026-11-02 and written. The code and this document had disagreed since v1.5 |
+| **The live update path** | No code — a live test | Owed. The update branch has never run against a real account |
+| **Two now-false claims about undo** | `WriteResult.scheduled_workout_id`'s description and the unreadable-schedule-id warning both sent the human to Connect | Corrected in the same commit as the tool that made them false |
+
+### §16.2 Decisions taken while building
+
+- **A duplicate calendar entry is notified, not refused** (Mahi, 2026-11-02). The plan proposed
+  refusing when the same workout sits on one date twice, by analogy with `resolve`'s two-match
+  refusal. **The analogy is wrong.** Two *templates* sharing a name are different things and
+  choosing between them is an invisible arbitrary act; two *calendar entries* of one workout on
+  one date are interchangeable, so removing one is not a choice between outcomes — and a
+  refusal would dead-end an undo on a state only Connect could fix. One entry goes per call and
+  the remainder is reported, in prose as well as in a field, because a returned field is not a
+  delivered one.
+- **A failed delete is `UnscheduleUncertain`, not `WriteRefused`.** `WriteRefused`'s docstring
+  promises the account is untouched, and nothing can promise that once the request has left: a
+  timeout on a DELETE may have been applied server-side. "Unknown" is the honest state and it
+  carries both ids so one look in Connect settles it.
+- **One calendar parser, two callers.** The undo needed two more facts out of the same read, and
+  growing `_scheduled_ids_on`'s return tuple would have changed the create path for the undo's
+  benefit. `_schedule_entry_on` is now the single parser and `_scheduled_ids_on` is a thin call
+  into it with its signature unchanged, so the two paths cannot drift.
+- **The off-pace alert is settled by observation and needs no code.** The 1 Nov run from a
+  pushed workout alerted "too fast" at the start, so the watch receives and acts on the pace
+  target. Whether the athlete's pace at that moment was outside the planned range is Mahi's to
+  confirm; the mechanism question is answered.
+
+### §16.3 Deferred, and one of them for the fourth time
+
+**§7's client-wiring corrections, §7a's bind address and §9's location exposure are deferred a
+fourth time, and this is the explicit record of it.** They were *committed* to v1.7 on
+2026-10-31 — the header above still says so — and the scope decision of 2026-11-02 moved them
+again, because the version was cut to what next week's planning needs. The third deferral was
+named a debt; naming the fourth is the only thing that keeps it from becoming invisible.
+
+Also outside this version, logged rather than built: `paths-ignore: ['docs/**']` in `docker.yml`;
+`ignore-error=true` on `cache-to`; and the latest-tag question, where a path filter makes
+`latest` point at the last **code** commit rather than at `main`'s tip — a decision, not a
+cleanup. v1.8's list is unchanged: reps and weight, cassettes, `tools.json`, the provenance
+question, body battery.

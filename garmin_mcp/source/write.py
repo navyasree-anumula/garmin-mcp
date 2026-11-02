@@ -306,27 +306,16 @@ def _scheduled_ids_on(
     an empty month and an unrecognised response look identical, and they have
     opposite conclusions -- one means "go ahead and schedule", the other means
     "we are not reading what we think we are".
+
+    **A thin call into `_schedule_entry_on` since 2026-11-02.** The undo needs
+    two more facts out of the same read -- how many entries matched, and which
+    key carried each id -- and growing this function's return tuple would have
+    changed the create path for the undo's benefit. One parser, two callers,
+    and this signature unchanged: the create path cannot drift from the undo
+    because there is nothing left to drift.
     """
-    if not isinstance(payload, dict):
-        return None, False
-
-    items = None
-    for key in CALENDAR_KEYS:
-        if key in payload:
-            items = payload[key]
-            break
-    if not isinstance(items, list):
-        return None, False
-
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if _first_id(item, WORKOUT_ID_KEYS) != workout_id:
-            continue
-        on = str(item.get("date") or item.get("calendarDate") or "")
-        if on.startswith(day):
-            return _first_id(item, SCHEDULE_ID_KEYS), True
-    return None, True
+    entry = _schedule_entry_on(payload, workout_id, day)
+    return entry.schedule_id, entry.understood
 
 
 def create_and_schedule(
@@ -446,8 +435,274 @@ def create_and_schedule(
         outcome.raw = {"schedule_response": booked}
         outcome.warnings.append(
             "Scheduled, but the schedule id is not in a key this server "
-            "recognises. Undo needs that id and not the workout id, so removing "
-            "this from the calendar has to be done in Garmin Connect. The raw "
-            "response is included."
+            "recognises. Undo needs that id and not the workout id -- and since "
+            "2026-11-02 that is no longer a dead end: `garmin_workout_unschedule` "
+            "looks the id up from the calendar by name and date, so this entry "
+            "can still be removed from a conversation. The raw response is "
+            "included because the key name is still unmeasured."
         )
+    return outcome
+
+
+# --------------------------------------------------------------------------
+# Undo: removing a calendar entry whose id nothing stored (§15.13, option 2)
+# --------------------------------------------------------------------------
+#
+# **Why this is a lookup and not a ledger.** `unschedule_workout` takes the
+# scheduled id and nothing else, and that id has been dropped by summarising
+# clients five times -- a returned field is not a delivered one. §15.13 weighed
+# three answers and ratified the one that stores nothing: Garmin's calendar
+# already holds the fact, so an undo is a *read* followed by a delete. The cost
+# is one extra request, paid only on an undo. The benefit is that a dropped id
+# is recoverable rather than lost, and §4's token volume gains no account data.
+#
+# **What it refuses, and why each refusal is a different sentence.** "Already
+# gone", "that date holds entries this server cannot read", and "the calendar is
+# not a shape this server recognises" are three different facts with three
+# different fixes, and a single "not found" would collapse them into the most
+# dangerous one: a silent success reads as evidence the undo happened.
+
+
+@dataclass(frozen=True)
+class CalendarEntry:
+    """What one calendar month says about one workout on one date.
+
+    `matches` is why this is a dataclass rather than a tuple: the undo needs to
+    tell "no entry" from "an entry whose ids we cannot read" from "two entries",
+    and those are three different values of two fields.
+    """
+
+    schedule_id: int | None
+    schedule_key: str
+    workout_key: str
+    matches: int
+    understood: bool
+
+
+def _schedule_entry_on(payload: Any, workout_id: int, day: str) -> CalendarEntry:
+    """**The one calendar parser.** Both the create path and the undo read this.
+
+    The create path asks "is it already on that date" and the undo asks "which
+    entry is on that date" -- the same read of the same unmeasured shape. Two
+    parsers would mean a fix to one leaving the other wrong, so
+    `_scheduled_ids_on` is now a thin call into this and keeps its old
+    signature: the create path and its tests are untouched by construction.
+
+    Records **which key carried each id**, because a calendar item is the one
+    shape in this module with no measured key names at all. `WORKOUT_ID_KEYS`
+    and `SCHEDULE_ID_KEYS` are confirmed for `upload_workout` and
+    `schedule_workout` *responses*; against a calendar item they are still
+    candidates. The first live undo settles them for free, the same way
+    `id_keys` settled the write's.
+    """
+    if not isinstance(payload, dict):
+        return CalendarEntry(None, "", "", 0, False)
+
+    items = None
+    for key in CALENDAR_KEYS:
+        if key in payload:
+            items = payload[key]
+            break
+    if not isinstance(items, list):
+        return CalendarEntry(None, "", "", 0, False)
+
+    matches = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if _first_id(item, WORKOUT_ID_KEYS) != workout_id:
+            continue
+        on = str(item.get("date") or item.get("calendarDate") or "")
+        if on.startswith(day):
+            matches.append(item)
+
+    if not matches:
+        return CalendarEntry(None, "", "", 0, True)
+
+    schedule_id, schedule_key = _first_id_with_key(matches[0], SCHEDULE_ID_KEYS)
+    _, workout_key = _first_id_with_key(matches[0], WORKOUT_ID_KEYS)
+    return CalendarEntry(schedule_id, schedule_key, workout_key, len(matches), True)
+
+
+def _entries_on(payload: Any, day: str) -> int:
+    """How many scheduled workouts that date holds, of any kind.
+
+    Only ever used in a refusal message, and it earns its place there: "nothing
+    called X is on 5 Nov" means something different when that date holds three
+    other sessions than when it holds none. The first says the name or the date
+    is wrong; the second says the whole month may be.
+    """
+    if not isinstance(payload, dict):
+        return 0
+
+    items = None
+    for key in CALENDAR_KEYS:
+        if key in payload:
+            items = payload[key]
+            break
+    if not isinstance(items, list):
+        return 0
+
+    count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        on = str(item.get("date") or item.get("calendarDate") or "")
+        if on.startswith(day):
+            count += 1
+    return count
+
+
+@dataclass
+class UnscheduleOutcome:
+    """A calendar entry that is gone, and everything the human needs after."""
+
+    name: str
+    date: str
+    workout_id: int
+    scheduled_workout_id: int
+    removed: bool
+    #: Entries for this workout still on that date. Normally 0. Garmin's own UI
+    #: permits the same workout twice on one day, and `unschedule_workout` takes
+    #: one id, so a duplicate is removed one call at a time.
+    remaining_on_date: int = 0
+    requests_made: int = 0
+    warnings: list[str] = field(default_factory=list)
+    id_keys: dict[str, str] = field(default_factory=dict)
+
+
+class UnscheduleUncertain(GarminSourceError):
+    """The delete was sent and its outcome is unknown.
+
+    Deliberately **not** a `WriteRefused`, whose docstring promises the account
+    is untouched -- a promise nothing can make once the request has left. A
+    timeout on a DELETE may have been applied server-side. Naming the state
+    "unknown" is the only honest answer, and it carries both ids so the human
+    can settle it in Connect in one look.
+    """
+
+
+def unschedule(
+    api: Any, tokens_path: str, name: str, day: str
+) -> UnscheduleOutcome:
+    """Take a session off the calendar, found by name and date (§15.13).
+
+    **Name and date, never an id.** The id the delete needs is looked up here,
+    so a conversation that lost it -- or never saw it, because the client
+    summarised the write -- can still undo. It also means the model *cannot*
+    pass a remembered id: the calendar is the current state and a remembered id
+    is a memory of one, and where they disagree the calendar wins. Enforced by
+    the signature rather than by a sentence.
+
+    **The template is not deleted.** `unschedule_workout` removes the calendar
+    entry and leaves the workout in the library, which is what makes it the
+    right undo for a wrong *date*. Deleting the template is `delete_workout`,
+    deliberately not exposed (§5's four permanent-deletion exclusions).
+
+    Everything up to the delete refuses, because until then refusing is free.
+    """
+    # The cheapest refusal first: a bad date costs no request, and
+    # `list_workouts` can cost ten.
+    try:
+        date_type.fromisoformat(day)
+    except ValueError as exc:
+        raise WriteRefused(
+            f"{day!r} is not a YYYY-MM-DD date. Nothing was changed."
+        ) from exc
+
+    existing, requests = list_workouts(api, tokens_path)
+    plan = resolve(name, existing)
+    wanted = name.strip()
+
+    if plan.action == UPLOADED or plan.workout_id is None:
+        raise WriteRefused(
+            f"no workout called {wanted!r} exists on this account, so nothing "
+            f"on {day} can be removed under that name. Nothing was changed. "
+            "Check the name against Garmin Connect -- the match is exact and "
+            "case-sensitive, the same way a write resolves it."
+        )
+
+    year, month = int(day[:4]), int(day[5:7])
+    try:
+        with source._garmin_access(tokens_path):
+            calendar = api.get_scheduled_workouts(year, month)
+    except RateLimited:
+        raise
+    except Exception as exc:  # noqa: BLE001 - refusing is still free here
+        raise WriteRefused(
+            f"could not read the calendar for {year}-{month:02d} "
+            f"({type(exc).__name__}), so the entry to remove could not be "
+            "found. Nothing was changed."
+        ) from exc
+    requests += 1
+
+    entry = _schedule_entry_on(calendar, plan.workout_id, day)
+
+    if not entry.understood:
+        raise WriteRefused(
+            f"the calendar response for {year}-{month:02d} is not a shape this "
+            f"server recognises, so whether {wanted!r} is on {day} cannot be "
+            "established. Nothing was changed. **This is not the same as the "
+            "entry being absent** -- it means the month could not be read at "
+            "all, and the entry may well still be there."
+        )
+
+    if entry.matches == 0:
+        others = _entries_on(calendar, day)
+        raise WriteRefused(
+            f"nothing called {wanted!r} is on the calendar for {day}, so there "
+            f"was nothing to remove and nothing was changed. That date holds "
+            f"{others} scheduled workout(s) in total. If the session was "
+            "expected there, either it was never scheduled or it has already "
+            "been removed."
+        )
+
+    if entry.schedule_id is None:
+        raise WriteRefused(
+            f"{wanted!r} IS on the calendar for {day}, but its entry carries no "
+            "id in a key this server recognises, and `unschedule_workout` takes "
+            "that id and nothing else. Nothing was changed. Remove it in Garmin "
+            f"Connect; the workout id is {plan.workout_id}."
+        )
+
+    # ---- past this line the calendar can change, so nothing may refuse ------
+    try:
+        with source._garmin_access(tokens_path):
+            api.unschedule_workout(entry.schedule_id)
+    except RateLimited:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the outcome is unknown, not safe
+        raise UnscheduleUncertain(
+            f"the request to remove entry {entry.schedule_id} from {day} failed "
+            f"({type(exc).__name__}), and whether Garmin applied it is unknown. "
+            f"Check {day} in Garmin Connect. The workout template "
+            f"{plan.workout_id} is untouched either way."
+        ) from exc
+    requests += 1
+
+    id_keys = {}
+    if entry.schedule_key:
+        id_keys["scheduled_workout_id"] = f"calendarItem.{entry.schedule_key}"
+    if entry.workout_key:
+        id_keys["workout_id"] = f"calendarItem.{entry.workout_key}"
+
+    outcome = UnscheduleOutcome(
+        name=wanted,
+        date=day,
+        workout_id=plan.workout_id,
+        scheduled_workout_id=entry.schedule_id,
+        removed=True,
+        remaining_on_date=entry.matches - 1,
+        requests_made=requests,
+        id_keys=id_keys,
+    )
+
+    if outcome.remaining_on_date:
+        outcome.warnings.append(
+            f"{wanted!r} was on {day} {entry.matches} times and ONE entry was "
+            f"removed, so {outcome.remaining_on_date} still remain on that "
+            "date. Garmin permits the same workout twice on one day. Call this "
+            "again with the same name and date to remove the next one."
+        )
+
     return outcome

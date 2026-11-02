@@ -889,8 +889,9 @@ class WriteResult(BaseModel):
     scheduled_workout_id: int | None = Field(
         description=(
             "The id undo needs. `unschedule_workout` takes this, NOT "
-            "workout_id, so without it the calendar entry can only be removed "
-            "in Garmin Connect."
+            "workout_id. Null is no longer a dead end: `garmin_workout_unschedule` "
+            "finds this id from the calendar by name and date, which is why "
+            "nothing stores it (docs/SCOPE.md §15.13)."
         )
     )
     date: str = Field(description="The date this session was scheduled for.")
@@ -994,4 +995,152 @@ def garmin_workout_create(
         warnings=outcome.warnings,
         raw=outcome.raw,
         id_keys=outcome.id_keys,
+    )
+
+
+# --------------------------------------------------------------------------
+# Undo (docs/SCOPE.md §15.13, v1.7)
+# --------------------------------------------------------------------------
+
+
+class UnscheduleResult(BaseModel):
+    """A calendar entry that is gone, said plainly enough to survive a summary.
+
+    The one fact this model exists to carry is that the **workout survives**.
+    An undo that reads as "the workout is gone" produces a duplicate on the next
+    write, because the next write resolves by name and the name is still taken.
+    """
+
+    name: str = Field(
+        description="The workout whose calendar entry was removed, as matched."
+    )
+    date: str = Field(description="The date it was removed from.")
+    workout_id: int = Field(
+        description="The template, which still exists. Nothing deleted it."
+    )
+    scheduled_workout_id: int = Field(
+        description=(
+            "The calendar entry that was removed. Looked up from Garmin's "
+            "calendar by name and date, which is why this call needed no id."
+        )
+    )
+    removed: bool = Field(
+        description=(
+            "True only after Garmin accepted the removal. There is no false "
+            "case: everything else raises, because a 'false' here would read as "
+            "an undo that happened."
+        )
+    )
+    template_kept: bool = Field(
+        description=(
+            "Always true, and said rather than implied. The workout is still in "
+            "the Garmin Connect library and can be scheduled again. Removing "
+            "the template itself is a separate act this server does not do."
+        )
+    )
+    remaining_on_date: int = Field(
+        description=(
+            "Entries for this workout STILL on that date, normally 0. Garmin "
+            "permits the same workout twice on one day and a removal takes one "
+            "entry at a time, so a non-zero value here means calling again "
+            "removes the next one. Also stated in warnings."
+        )
+    )
+    requests_made: int = Field(description="Garmin requests this call made.")
+    warnings: list[str] = Field(
+        description="Empty when everything worked. Read every entry out loud to the human."
+    )
+    id_keys: dict = Field(
+        description=(
+            "Which key inside the calendar item carried each id. The calendar "
+            "item's shape had no measured key names before this tool existed, "
+            "so a successful undo is also the measurement."
+        )
+    )
+    note: str = Field(
+        description="One sentence a summarising client can carry instead of the fields."
+    )
+
+
+@mcp.tool(
+    title="Take a Garmin workout off the calendar",
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+)
+def garmin_workout_unschedule(
+    name: Annotated[
+        str,
+        Field(
+            description=(
+                "The workout's name, exactly as it was written. The match is "
+                "case-sensitive, the same way a create resolves it."
+            )
+        ),
+    ],
+    date: Annotated[
+        str,
+        Field(description="YYYY-MM-DD. The date to take it off."),
+    ],
+) -> UnscheduleResult:
+    """Remove a scheduled session from the athlete's real Garmin calendar.
+
+    **Name and date. Never an id, including one from a create earlier in this
+    conversation.** The id Garmin needs is looked up from the calendar here,
+    which is the whole point: the calendar is the current state and a remembered
+    id is a memory of one. It also means an undo still works in a conversation
+    where the create's response was summarised and the ids were dropped.
+
+    **The workout itself is NOT deleted.** This takes the entry off the
+    calendar and leaves the template in the Garmin Connect library, which is
+    what makes it the right undo for a session put on the wrong day: remove it
+    here, then create it again for the right date and the same template is
+    reused. Deleting a workout permanently is not something this server does.
+
+    **Three different refusals, and they mean different things.** No workout of
+    that name; nothing of that name on that date (which says how many sessions
+    that date does hold); and a calendar month that could not be read at all --
+    the last of which is *not* evidence the entry is absent. None of them
+    changes anything on the account.
+
+    This tool decides nothing about training. It does not pick which session was
+    a mistake (docs/SCOPE.md §1).
+    """
+    if not source_write.writes_enabled():
+        raise ToolError(str(source_write.WritesDisabled()))
+
+    try:
+        outcome = source_write.unschedule(
+            source._connect(), source.tokenstore_path(), name, date
+        )
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    note = (
+        f"{outcome.name!r} is off the calendar for {outcome.date}. The workout "
+        f"itself (id {outcome.workout_id}) still exists in Garmin Connect and "
+        "can be scheduled again; only the calendar entry was removed."
+    )
+    if outcome.remaining_on_date:
+        note += (
+            f" {outcome.remaining_on_date} further entr"
+            f"{'y' if outcome.remaining_on_date == 1 else 'ies'} for it remain "
+            f"on {outcome.date} -- call this again to remove the next one."
+        )
+
+    return UnscheduleResult(
+        name=outcome.name,
+        date=outcome.date,
+        workout_id=outcome.workout_id,
+        scheduled_workout_id=outcome.scheduled_workout_id,
+        removed=outcome.removed,
+        template_kept=True,
+        remaining_on_date=outcome.remaining_on_date,
+        requests_made=outcome.requests_made,
+        warnings=outcome.warnings,
+        id_keys=outcome.id_keys,
+        note=note,
     )
