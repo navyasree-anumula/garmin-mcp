@@ -703,13 +703,21 @@ def unschedule(
         )
 
     if entry.matches == 0:
-        others = total_on_date
+        # Spelled out rather than "workout(s)". This sentence is read aloud to a
+        # human by a client, and 2026-11-02 is the day it was pasted back
+        # verbatim -- a refusal is the one message guaranteed to be read
+        # closely, so it should not look machine-assembled.
+        if total_on_date == 0:
+            holds = "Nothing else is scheduled on that date"
+        elif total_on_date == 1:
+            holds = "That date holds 1 other scheduled workout"
+        else:
+            holds = f"That date holds {total_on_date} other scheduled workouts"
         raise WriteRefused(
             f"nothing called {wanted!r} is on the calendar for {day}, so there "
-            f"was nothing to remove and nothing was changed. That date holds "
-            f"{others} scheduled workout(s) in total. If the session was "
-            "expected there, either it was never scheduled or it has already "
-            "been removed."
+            f"was nothing to remove and nothing was changed. {holds}. If the "
+            "session was expected there, either it was never scheduled or it "
+            "has already been removed."
         )
 
     if entry.schedule_id is None:
@@ -760,12 +768,14 @@ def unschedule(
         id_keys=id_keys,
     )
 
-    if outcome.same_workout_left_on_date:
+    left = outcome.same_workout_left_on_date
+    if left:
+        remain = "1 still remains" if left == 1 else f"{left} still remain"
         outcome.warnings.append(
             f"{wanted!r} was on {day} {entry.matches} times and ONE entry was "
-            f"removed, so {outcome.same_workout_left_on_date} still remain on "
-            "that date. Garmin permits the same workout twice on one day. Call "
-            "this again with the same name and date to remove the next one."
+            f"removed, so {remain} on that date. Garmin permits the same "
+            "workout twice on one day. Call this again with the same name and "
+            "date to remove the next one."
         )
 
     return outcome
