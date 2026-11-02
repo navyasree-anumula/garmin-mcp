@@ -3107,6 +3107,18 @@ than the code and the suite wins.
 
 ## OPEN CHECKS — do these first, in this order
 
+**~~0. Push the branch and open its PR.~~ DONE** — the decline was deliberate,
+and it was withdrawn in session rather than lapsing. Branch
+`docs/close-live-checks-2026-10-31` is on the remote and raised as **PR #45**
+against `main`, closing the live checks and adding the v1.7 candidates proposal.
+Tests, Dependency audit and **Build and publish** all green, read off the PR
+*after* the push rather than inferred from the suite being green before it —
+only Build and publish makes an image pullable, so it is the one worth naming.
+The merge is Mahi's, from the laptop, so whether it has landed is not knowable
+here: `git log --oneline -5 main` answers that. The PR number is stable, which
+is why it is the one value quoted; no hashes and no check state beyond the push,
+because this block does not quote values a later merge supersedes.
+
 **~~1. Re-pin the laptop.~~ DONE** — the laptop carries everything on `main` as
 of this block, digest asserted before the config was touched, capability-probed
 inside the image, and confirmed by `docker ps` after relaunch. The tag and the
@@ -3189,9 +3201,18 @@ account. Create the same-named circuit on a different date: expect
 `scheduled: "new"`. Then a third create on the date it already holds, expecting
 `scheduled: "already"` and **no second calendar entry**.
 
-**5. Delete the throwaways from Connect** — `throwaway test` (workout 1742892340
-and its calendar entry) and whatever check 2 leaves behind. There is no delete
-tool by design, so this does not happen on its own.
+**5. Delete the throwaways from Connect** — there is no delete tool by design,
+so none of this happens on its own:
+
+- `throwaway test`, workout **1742892340**, and its calendar entry.
+- `6x800 pace`, workout **1746821178** / scheduled **1825773941**, on the
+  calendar for **2026-11-01**. Keep it until the off-pace run (check 2b) has
+  used it, since that is what it is for.
+- `circuit + warmup`, workout **1746822994** / scheduled **1825775743**, also
+  **2026-11-01**. Its job is done — it settled the warm-up question — so it can
+  go whenever.
+- `6x300m`, workout **1746800115** / scheduled **1825752591**, **2026-11-01**.
+  Its job is done too: it settled the recompute question.
 
 **6. Cassettes (§8).** The transport is now known: writes go through
 `requests` via `_api_session` and are recordable; login is `curl_cffi` and is
@@ -3273,7 +3294,19 @@ path, §7a's bind address, §9's location exposure).
   step carrying `no.target` — so both of the preview session's recorded assumptions are answered
   yes. Delete it in Connect; there is no delete tool by design.
 
-**The laptop runs `sha-7ac390f` with writes ENABLED** (`-e GARMIN_MCP_ENABLE_WRITES=1` in the
+**SUPERSEDED 2026-10-31 (evening): the laptop was re-pinned, and the new tag was
+never measured.** Pace targets and strength warm-ups both worked from Desktop,
+so it carries at least `sha-10071be`; whether it went to `sha-b51c859` was never
+confirmed, because `docker ps` was not run after the relaunch. **So this file
+does not name the laptop's tag.** The instrument is the Desktop config plus
+`docker ps --format '{{.Names}} | {{.Image}}'` — never this file, never
+`server_version`. Run it before trusting any claim about what the laptop serves.
+**Writes are still enabled** — that half did not go stale, and two creates on 31 Oct
+prove it. It is the *tag* that is unknown. The paragraph below is kept as the last
+measured state, and the `args`-not-`env` detail in it is the part worth re-reading
+before any re-pin:
+
+**The laptop ran `sha-7ac390f` with writes ENABLED** (`-e GARMIN_MCP_ENABLE_WRITES=1` in the
 Desktop config's `args`, before the image name — **not** an `env` block: `docker run` does not
 forward the parent process's environment into the container, so an `env` block looks configured
 and leaves writes off). Measured 2026-10-31 15:34 local: digest
@@ -3357,9 +3390,37 @@ confirmed the first workout, not the response.
   operand's type.
 - **In a PowerShell script, a quote inside a native command's argument will not survive.** Use a
   template with no string literal, or pass the payload over stdin.
+- **A long `python -c "..."` line in a `.ps1` silently becomes a multi-line payload.** A
+  double-quoted PowerShell string spans newlines, so when the line wraps on its way into the file
+  the newline **and the wrap indentation** land inside the `-c` argument, and Python fails with
+  `IndentationError: unexpected indent` on line 2 — which reads like a Docker or image fault and
+  is not. Build the payload in short `+=` lines with no string literals, then collapse it with
+  `-replace '\s+', ' '` so a newline that sneaks in anyway becomes a space. A here-string is not
+  the fix: its terminator must sit at column 1 and it breaks when pasted interactively.
+- **`Set-Content -Encoding UTF8` writes a BOM on PowerShell 5.1.** The Desktop config has never
+  had one, so that flag rewrites a working config into one a strict parser can reject. Use
+  `[System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding $false))` and
+  assert the first character is not `[char]0xFEFF`.
+- **Only "Build and publish" publishes.** Green "Tests" and "Dependency audit" on the Docker
+  workflow mean nothing is pullable yet — a `sha-` tag 404s from ghcr until the build job
+  finishes. **The registry is the instrument, not the workflow:** a 200 on
+  `/v2/.../manifests/<tag>` is the check, a green tick is only evidence it should be.
+- **`gh pr edit` fails silently on this box.** It dies on the projects-classic GraphQL
+  deprecation (`repository.pullRequest.projectCards`) and **changes nothing**, so the PR looks
+  updated until re-read. Patch with
+  `gh api -X PATCH repos/navyasree-anumula/garmin-mcp/pulls/<n> --input <json>`, build the JSON
+  with `json.dumps` so em dashes survive, and re-read the PR afterwards. `gh pr create` is fine.
 
 **Still open:**
 
+- **A LEAD, not a finding: Desktop may cache the tool schema for the life of a conversation.**
+  On 2026-10-31 Mahi reported `garmin_workouts` still describing targets as refused and strength
+  as unratified. **That text is not in `main`** — the shipped description has said the opposite
+  since the pace commit. What *was* verifiably stale was the `kind` field, which still omitted
+  strength's `warmup`/`cooldown`; that is fixed and now asserted. The hypothesis is that calls hit
+  the re-pinned container while the descriptions came from a schema fetched before the relaunch.
+  If it holds, the fix is to start a fresh Desktop conversation after a re-pin and no code
+  changes. **One paraphrase is a lead; this goes in the indicative only after a second reading.**
 - **Whether the watch alerts off-pace, and in which direction** — pending the 1 Nov run. The
   pace *data* is confirmed (workout 1746821178 displays 4:20-4:40/km as prescribed, so
   `targetValueOne` is the faster bound), so this is the watch's behaviour and not our bytes.
