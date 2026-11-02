@@ -106,9 +106,11 @@ TIME_BUILDERS = {
 #: drop them: v1.6 offered `exercise` and `rest` only, so a real 30-minute
 #: session came out as a bare circuit and the human was told to warm up on
 #: their own. The builders are upstream's and generic across sports, but
-#: **Garmin's acceptance of a warmup step inside a `strength_training` workout
-#: is unverified** -- the next live strength create settles it, and it is cheap
-#: because that create was going to happen anyway.
+#: **Garmin accepts a warmup step inside a `strength_training` workout.
+#: CONFIRMED live 2026-10-31** -- workout 1746822994 ("circuit + warmup",
+#: scheduled 1825775743 for 2026-11-01): accepted with no warnings, both the
+#: warmup and the cooldown present. It settled on the next live strength create,
+#: as planned, and cost nothing extra.
 STRENGTH_TIME_BUILDERS = {
     "warmup": create_warmup_step,
     "rest": create_strength_rest_step,
@@ -168,12 +170,26 @@ class PaceContract:
     the faster bound** are community convention, and the library writes none of
     them: it writes `"no.target"` and nothing else.
 
-    **[Mahi-verify]** by building one pace step in Connect and reading it back:
-    the key string, the unit, the `displayOrder`, and which value Garmin expects
-    first. Until that read-back all four are unverified. They are one constant
-    rather than four literals at four call sites because the failure this guards
-    is a swapped bound -- the watch alerting continuously, the easy end becoming
-    the hard end -- and a wrong constant is wrong in one place.
+    **CONFIRMED live 2026-10-31** -- workout 1746821178 ("6x800 pace", scheduled
+    1825773941 for 2026-11-01): Connect displays the range as **4:20-4:40/km**,
+    exactly as prescribed. That one reading settles three of the four:
+    `"pace.zone"` is the key Garmin accepts, **m/s** is the unit (a wrong unit
+    would render a wrong pace), and **`targetValueOne` carries the faster
+    bound** -- a swapped pair would have displayed the range inverted. The
+    `[Mahi-verify]` on the ordering is closed.
+
+    `display_order` remains unverified and is **inert**: nothing observed so far
+    depends on it, and a wrong value would not show in Connect or on the watch.
+    It stays here rather than being quietly promoted to verified.
+
+    Still pending, and a different question: whether the watch **alerts** when
+    the athlete runs outside the range, and in which direction. That needs a run
+    rather than a reading. It is no longer load-bearing -- the data is confirmed
+    correct -- so what is left is the watch's behaviour, not our bytes.
+
+    They are one constant rather than four literals at four call sites because
+    the failure this guarded was a swapped bound, which would have been visible
+    only on the watch mid-run.
     """
 
     target_key: str

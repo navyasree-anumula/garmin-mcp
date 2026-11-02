@@ -818,3 +818,56 @@ def test_an_unpaced_distance_session_still_previews_zero_with_its_reason():
     assert preview.estimated_duration_secs == 0
     assert "contribute 0" in preview.estimated_duration_basis
     assert "no measured pace" in preview.estimated_duration_basis
+
+
+# --------------------------------------------------------------------------
+# The published descriptions must match the shipped behaviour. Added after a
+# live session on 2026-10-31 found the `kind` field still listing strength as
+# "exercise, rest, or repeat" — five days after warmup and cooldown shipped.
+# A description that lags the code is worse than a missing one: the agent
+# believes it and refuses on the server's behalf, so the feature is unreachable
+# while every test still passes.
+# --------------------------------------------------------------------------
+
+
+def test_the_tool_description_does_not_still_refuse_every_target():
+    """v0's blanket refusal is the claim most likely to be left behind, because
+    it was true for longer than it has been false."""
+    described = registered_tool("garmin_workouts").description
+
+    assert "pace_min_km" in described or "pace range" in described
+    assert "Every target Garmin" not in described
+    assert "No pace or heart-rate target" not in described
+
+
+def test_the_published_strength_kinds_include_the_warmup_and_cooldown():
+    """The stale one actually found in the field. `warmup` and `cooldown` have
+    been valid in strength since 2026-10-31, and an agent reading this field is
+    how a kind gets used -- or doesn't."""
+    schema = registered_tool("garmin_workouts").input_schema
+    described = schema["$defs"]["WorkoutStep"]["properties"]["kind"]["description"]
+
+    for kind in ("exercise", "rest", "warmup", "cooldown", "repeat"):
+        assert kind in described
+
+
+def test_every_published_step_kind_is_one_the_composer_builds():
+    """The description is prose and can drift; the enum cannot. Asserted
+    against the composer's own list so a kind can never be offered without a
+    builder behind it, nor a builder hidden behind an unmentioned kind."""
+    schema = registered_tool("garmin_workouts").input_schema
+    enum = schema["$defs"]["WorkoutStep"]["properties"]["kind"]["enum"]
+
+    assert set(enum) == set(compose_module.STEP_KINDS) | {"repeat"}
+
+
+def test_no_agent_facing_text_still_calls_the_settled_claims_unverified():
+    """Three claims settled live on 2026-10-31: the pace key and unit, the
+    bound order, and a warmup inside a strength workout. An agent that reads
+    "unverified" hedges on the human's behalf, so the hedges are asserted gone
+    from the text it actually reads."""
+    described = registered_tool("garmin_workouts").description
+
+    assert "side of a pace target is unverified" not in described
+    assert "acceptance of a warmup" not in described
+    assert "1746821178" in described or "Confirmed live" in described
