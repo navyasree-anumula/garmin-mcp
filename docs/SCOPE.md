@@ -1913,7 +1913,7 @@ the mechanism it describes because that is what makes the next review cheap.
 
 | Item | Shape | State |
 |---|---|---|
-| **Unschedule-by-lookup** (§15.13 option 2) | `garmin_workout_unschedule(name, date)`, destructive-annotated, behind the existing writes gate | Built **and confirmed live** 2026-11-02 |
+| **Unschedule-by-lookup** (§15.13 option 2) | `garmin_workout_unschedule(name, date)`, destructive-annotated, behind the existing writes gate | Built **and confirmed live** 2026-11-02, across four calls and two calendar months. `template_kept` read directly, not inferred: the templates were still there to delete by hand afterwards |
 | **The §5 tool split** | One paragraph in §5 | Ratified 2026-11-02 and written. The code and this document had disagreed since v1.5 |
 | **The live update path** | No code — a live test | **Done 2026-11-02.** Uploaded, then updated in place keeping the id, then `already` with no second entry |
 | **Two now-false claims about undo** | `WriteResult.scheduled_workout_id`'s description and the unreadable-schedule-id warning both sent the human to Connect | Corrected in the same commit as the tool that made them false |
@@ -1961,6 +1961,11 @@ Both defects came out of one live call, and neither was found by the suite.
 - **A success still taught less than it could.** The undo reported the two ids and left the
   calendar's **container** key and **date** key unmeasured. Both are recorded now, so the next
   undo settles them at no cost — the 2026-10-27 lesson applied one layer in.
+- **A refusal is written for a human to read aloud.** The already-gone refusal said "1 scheduled
+  workout(s) in total" and was pasted back verbatim. It is the one message guaranteed to be read
+  closely, because it is what a client repeats when nothing happened. Three sentences now for
+  none, one and many. **It was only visible because the output was quoted rather than
+  summarised** — the same mechanism that surfaced the field-name defect above.
 
 ### §16.3 Deferred, and one of them for the fourth time
 

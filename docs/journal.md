@@ -3222,11 +3222,26 @@ quiet about what it had just learned.
 Fixtures move from `# invented:` to **`# recorded in part:`** — the ids are measured, the
 container and date keys are not, and the label says which half.
 
-**Still pending, and small:** that `zz throwaway A` is in the workout library was not read
-directly. It is all but settled — A is still on 1 Dec, and a calendar entry points at a template
-— but the direct check is the library view in Connect, so it stays named rather than assumed.
+**`template_kept` is confirmed, and the undo ran three more times doing it.** A was unscheduled
+from **1 Dec** (schedule 1829276338 for B on 30 Nov, 1829276178 for A on 1 Dec), both reporting
+`removed: true` and `template_kept: true`, and **both templates were then still there to delete
+by hand in Connect** — which is the direct reading the earlier inference was standing in for.
+Test data is fully cleaned up. So the undo has now been exercised on two different months, and
+the 1 Dec call read December's calendar rather than November's.
 
-Tests: 739 → **748** (+9). Build: passed.
+**What those three extra calls did NOT measure:** they ran on `sha-75551ab`, the build *before*
+this entry's fixes, so they reported the two id keys and nothing else. The calendar's
+**container** key and **date** key are still unmeasured, and the first undo on the next build
+settles them.
+
+**The refusal was pasted back word for word, and it read "1 scheduled workout(s) in total".**
+Fixed. A refusal is the one message guaranteed to be read closely — it is what a client repeats
+when nothing happened — so it should not look machine-assembled. Three sentences now for none,
+one and many, and the duplicate warning stops saying "1 still remain". Small, and the reason it
+is worth a note: **the only reason anyone saw it is that the output was quoted rather than
+summarised**, which is the same mechanism that caught the field-name bug an hour earlier.
+
+Tests: 739 → **752** (+13). Build: passed.
 
 ## RESUME HERE
 
@@ -3234,7 +3249,7 @@ Tests: 739 → **748** (+9). Build: passed.
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **748 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **752 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -3389,11 +3404,10 @@ so none of this happens on its own. **Mahi deletes these by hand** (decided
 2026-11-02), and checks 4 and 4b will add `zz throwaway A` and `zz throwaway B`
 to the list:
 
-- `zz throwaway A`, workout **1750279892**, on **1 Dec** as schedule
-  **1829276178**. Its 30 Nov entry (1829276077) is already gone — that was the
-  undo's first live test.
-- `zz throwaway B`, workout **1750280163**, on **30 Nov** as schedule
-  **1829276338**.
+- ~~`zz throwaway A` (workout 1750279892) and `zz throwaway B` (workout
+  1750280163).~~ **GONE 2026-11-02** — both unscheduled through the tool, then
+  both templates deleted by hand in Connect. That deletion is what confirmed
+  `template_kept`: the templates were still there to delete.
 - `throwaway test`, workout **1742892340**, and its calendar entry.
 - `6x800 pace`, workout **1746821178** / scheduled **1825773941**, on the
   calendar for **2026-11-01**. Keep it until the off-pace run (check 2b) has

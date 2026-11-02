@@ -208,8 +208,49 @@ def test_an_absent_entry_says_what_that_date_does_hold(api):
     or the date is wrong, the second says the whole month may be."""
     api.calendar = CALENDAR_OTHERS_ONLY
 
-    with pytest.raises(WriteRefused, match="2 scheduled workout"):
+    with pytest.raises(WriteRefused, match="holds 2 other scheduled workouts"):
         run(api)
+
+
+@pytest.mark.parametrize(
+    "items,expected",
+    [
+        ([], "Nothing else is scheduled on that date"),
+        ([{"workoutId": 999, "date": DAY, "id": 66666}], "holds 1 other scheduled workout."),
+        (
+            [
+                {"workoutId": 999, "date": DAY, "id": 66666},
+                {"workoutId": 888, "date": DAY, "id": 44444},
+            ],
+            "holds 2 other scheduled workouts",
+        ),
+    ],
+    ids=["none", "one", "two"],
+)
+def test_the_refusal_is_written_for_a_human_to_read_aloud(api, items, expected):
+    """Mahi pasted this refusal back word for word on 2026-11-02 and it read
+    '1 scheduled workout(s) in total'. A refusal is the one message guaranteed
+    to be read closely -- it is what a client repeats when nothing happened --
+    so it should not look machine-assembled. Singular, plural and none are three
+    sentences."""
+    api.calendar = {"calendarItems": items}
+
+    with pytest.raises(WriteRefused) as caught:
+        run(api)
+
+    message = str(caught.value)
+    assert expected in message
+    assert "(s)" not in message
+
+
+def test_a_single_duplicate_remainder_reads_as_singular(api):
+    """Same rule in the warning: '1 still remain' is the other half of the
+    same tic."""
+    api.calendar = CALENDAR_TWICE
+
+    outcome = run(api)
+
+    assert "1 still remains" in outcome.warnings[0]
 
 
 def test_an_unreadable_calendar_is_not_an_absent_entry(api):
