@@ -31,32 +31,56 @@ ENTRY = 55555
 # is sourced even though the surrounding item is not.
 WORKOUTS = [{"workoutName": NAME, "workoutId": WORKOUT}]
 
-# invented: a month holding the entry, plus a different workout on the same day.
-# The second item is not decoration -- it is the assertion that a lookup matches
-# on the workout id and not on "whatever is on that date".
+# recorded in part: 2026-11-02, the first live undo (`zz throwaway A`, workout
+# 1750279892, schedule 1829276077, 30 Nov). `id_keys` reported `calendarItem.id`
+# for the SCHEDULE id and `calendarItem.workoutId` for the template -- so a
+# calendar item spells the schedule id **`id`**, the third candidate in
+# `SCHEDULE_ID_KEYS` and NOT what `schedule_workout` returns. Partly recorded,
+# and the missing part is named: that call did not report the **container** or
+# **date** key, so `calendarItems` and `date` are still guesses. `id_keys`
+# records both from now on, so the next undo settles them.
 CALENDAR_WITH_IT = {
     "calendarItems": [
-        {"workoutId": WORKOUT, "date": DAY, "workoutScheduleId": ENTRY},
-        {"workoutId": 999, "date": DAY, "workoutScheduleId": 66666},
+        {"workoutId": WORKOUT, "date": DAY, "id": ENTRY},
+        {"workoutId": 999, "date": DAY, "id": 66666},
     ]
 }
 
-# invented: the same workout twice on one date. Garmin's UI permits this, and
-# `unschedule_workout` takes one id, so it takes two calls to clear.
+# recorded in part: same shape, the same workout twice on one date. Garmin's UI
+# permits this, and `unschedule_workout` takes one id, so it takes two calls to
+# clear.
 CALENDAR_TWICE = {
     "calendarItems": [
-        {"workoutId": WORKOUT, "date": DAY, "workoutScheduleId": ENTRY},
-        {"workoutId": WORKOUT, "date": DAY, "workoutScheduleId": 77777},
+        {"workoutId": WORKOUT, "date": DAY, "id": ENTRY},
+        {"workoutId": WORKOUT, "date": DAY, "id": 77777},
     ]
 }
 
-# invented: that date holds sessions, none of them this one.
+# recorded in part: that date holds sessions, none of them this one.
 CALENDAR_OTHERS_ONLY = {
     "calendarItems": [
-        {"workoutId": 999, "date": DAY, "workoutScheduleId": 66666},
-        {"workoutId": 888, "date": DAY, "workoutScheduleId": 44444},
+        {"workoutId": 999, "date": DAY, "id": 66666},
+        {"workoutId": 888, "date": DAY, "id": 44444},
     ]
 }
+
+# invented: still a guess, and kept for that reason. `SCHEDULE_ID_KEYS` lists
+# `workoutScheduleId` first because that IS what `schedule_workout` returns, and
+# the live undo proved the two endpoints disagree about the name of the same
+# number. This fixture is the half nobody has seen in a calendar item.
+CALENDAR_SCHEDULE_ID_SPELLING = {
+    "calendarItems": [
+        {"workoutId": WORKOUT, "date": DAY, "workoutScheduleId": ENTRY}
+    ]
+}
+
+# invented: an item with NO `workoutId`, carrying only `id` -- and `id` is now
+# known to be the schedule id. If the workout-id lookup fell back to `id`, this
+# item would match a workout whose template id happened to equal a schedule id
+# and the undo would remove **someone else's session**. Invented because no such
+# item has been seen; kept because the live measurement is what makes it
+# dangerous.
+CALENDAR_ID_ONLY = {"calendarItems": [{"id": WORKOUT, "date": DAY}]}
 
 # invented: the entry is there and carries no id in any candidate key. The one
 # case where the lookup can see the session and still cannot remove it.
@@ -254,7 +278,9 @@ def test_the_entry_is_found_and_removed_and_both_ids_are_reported(api):
     assert outcome.scheduled_workout_id == ENTRY
     assert outcome.name == NAME
     assert outcome.date == DAY
-    assert outcome.remaining_on_date == 0
+    assert outcome.same_workout_left_on_date == 0
+    # One other session (workout 999) is on that date and it stays there.
+    assert outcome.entries_left_on_date == 1
     assert outcome.warnings == []
     assert outcome.requests_made == 3
 
@@ -300,10 +326,45 @@ def test_two_entries_of_the_same_workout_remove_one_and_say_another_remains(api)
 
     assert outcome.removed is True
     assert outcome.scheduled_workout_id == ENTRY
-    assert outcome.remaining_on_date == 1
+    assert outcome.same_workout_left_on_date == 1
+    assert outcome.entries_left_on_date == 1
     assert outcome.warnings, "a remainder that only exists in a field is not delivered"
     assert "still remain" in outcome.warnings[0]
     assert DAY in outcome.warnings[0]
+
+
+def test_a_calendar_items_id_is_never_read_as_a_workout_id(api):
+    """**The hazard the first live undo exposed.** That item spelled the schedule
+    id `id`, and `WORKOUT_ID_KEYS` falls back to `id` -- so an item with no
+    `workoutId` could have matched a schedule id against a template id and
+    removed a different athlete's session while reporting success. The workout
+    lookup inside a calendar item has no `id` fallback, so this reads as "not on
+    that date" and refuses."""
+    api.calendar = CALENDAR_ID_ONLY
+
+    with pytest.raises(WriteRefused, match="nothing called"):
+        run(api)
+
+    assert "unschedule_workout" not in names(api)
+
+
+def test_the_two_remainder_counts_answer_different_questions(api):
+    """Reported as an ambiguity from the first live undo: the old single field
+    counted this workout and was named as though it counted the date, so it read
+    0 while another session was still there. Both numbers now, separately."""
+    outcome = run(api)
+
+    assert outcome.same_workout_left_on_date == 0, "nothing of this name is left"
+    assert outcome.entries_left_on_date == 1, "but the day is not empty"
+
+
+def test_a_date_with_nothing_else_on_it_reports_zero_left(api):
+    api.calendar = {"calendarItems": [{"workoutId": WORKOUT, "date": DAY, "id": ENTRY}]}
+
+    outcome = run(api)
+
+    assert outcome.entries_left_on_date == 0
+    assert outcome.same_workout_left_on_date == 0
 
 
 def test_the_removal_records_which_calendar_key_carried_each_id(api):
@@ -312,33 +373,43 @@ def test_the_removal_records_which_calendar_key_carried_each_id(api):
     put `id_keys` on the write path, where a success used to teach nothing."""
     outcome = run(api)
 
-    assert outcome.id_keys["scheduled_workout_id"] == "calendarItem.workoutScheduleId"
+    assert outcome.id_keys["scheduled_workout_id"] == "calendarItem.id"
     assert outcome.id_keys["workout_id"] == "calendarItem.workoutId"
+    # Added after the first live undo reported the ids and left these two
+    # unmeasured. A success that teaches nothing is this module's old mistake.
+    assert outcome.id_keys["calendar_container"] == "calendarItems"
+    assert outcome.id_keys["calendar_date"] == "calendarItem.date"
 
 
-def test_a_later_candidate_key_is_recorded_as_itself(api):
-    """The candidate list exists because nobody has read this shape. If the
-    second candidate answers, the record must say the second candidate."""
+@pytest.mark.parametrize(
+    "spelling", ["workoutScheduleId", "scheduledWorkoutId", "id"]
+)
+def test_any_candidate_spelling_of_the_schedule_id_is_recorded_as_itself(api, spelling):
+    """The candidate list earned its keep: `schedule_workout` returns
+    `workoutScheduleId` and a calendar item returns `id`, measured, for the same
+    number. So whichever answers must be recorded as itself rather than
+    normalised away."""
     api.calendar = {
-        "calendarItems": [
-            {"workoutId": WORKOUT, "date": DAY, "scheduledWorkoutId": ENTRY}
-        ]
+        "calendarItems": [{"workoutId": WORKOUT, "date": DAY, spelling: ENTRY}]
     }
 
     outcome = run(api)
 
-    assert outcome.id_keys["scheduled_workout_id"] == "calendarItem.scheduledWorkoutId"
+    assert outcome.scheduled_workout_id == ENTRY
+    assert outcome.id_keys["scheduled_workout_id"] == f"calendarItem.{spelling}"
 
 
 def test_a_calendar_date_key_is_read_as_well_as_date(api):
-    """Two spellings are tolerated because which one Garmin uses is unmeasured."""
+    """Two spellings are tolerated because which one Garmin uses is unmeasured,
+    and which one answered is now recorded so the next undo settles it."""
     api.calendar = {
-        "calendarItems": [
-            {"workoutId": WORKOUT, "calendarDate": DAY, "workoutScheduleId": ENTRY}
-        ]
+        "calendarItems": [{"workoutId": WORKOUT, "calendarDate": DAY, "id": ENTRY}]
     }
 
-    assert run(api).scheduled_workout_id == ENTRY
+    outcome = run(api)
+
+    assert outcome.scheduled_workout_id == ENTRY
+    assert outcome.id_keys["calendar_date"] == "calendarItem.calendarDate"
 
 
 def test_a_timestamped_date_still_matches_the_day(api):
@@ -349,7 +420,7 @@ def test_a_timestamped_date_still_matches_the_day(api):
             {
                 "workoutId": WORKOUT,
                 "date": f"{DAY}T00:00:00.0",
-                "workoutScheduleId": ENTRY,
+                "id": ENTRY,
             }
         ]
     }

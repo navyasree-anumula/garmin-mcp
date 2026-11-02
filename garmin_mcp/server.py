@@ -1038,12 +1038,20 @@ class UnscheduleResult(BaseModel):
             "the template itself is a separate act this server does not do."
         )
     )
-    remaining_on_date: int = Field(
+    same_workout_left_on_date: int = Field(
         description=(
-            "Entries for this workout STILL on that date, normally 0. Garmin "
+            "Entries for THIS workout still on that date, normally 0. Garmin "
             "permits the same workout twice on one day and a removal takes one "
             "entry at a time, so a non-zero value here means calling again "
             "removes the next one. Also stated in warnings."
+        )
+    )
+    entries_left_on_date: int = Field(
+        description=(
+            "Scheduled workouts of ANY kind still on that date. Separate from "
+            "the field above because they answer different questions: that one "
+            "says whether to call again, this one says whether the day is now "
+            "empty."
         )
     )
     requests_made: int = Field(description="Garmin requests this call made.")
@@ -1124,12 +1132,20 @@ def garmin_workout_unschedule(
         f"itself (id {outcome.workout_id}) still exists in Garmin Connect and "
         "can be scheduled again; only the calendar entry was removed."
     )
-    if outcome.remaining_on_date:
+    same = outcome.same_workout_left_on_date
+    if same:
         note += (
-            f" {outcome.remaining_on_date} further entr"
-            f"{'y' if outcome.remaining_on_date == 1 else 'ies'} for it remain "
+            f" {same} further entr{'y' if same == 1 else 'ies'} for it remain "
             f"on {outcome.date} -- call this again to remove the next one."
         )
+    left = outcome.entries_left_on_date
+    if left:
+        note += (
+            f" {outcome.date} still holds {left} scheduled "
+            f"workout{'' if left == 1 else 's'} in total."
+        )
+    else:
+        note += f" Nothing else is scheduled on {outcome.date}."
 
     return UnscheduleResult(
         name=outcome.name,
@@ -1138,7 +1154,8 @@ def garmin_workout_unschedule(
         scheduled_workout_id=outcome.scheduled_workout_id,
         removed=outcome.removed,
         template_kept=True,
-        remaining_on_date=outcome.remaining_on_date,
+        same_workout_left_on_date=outcome.same_workout_left_on_date,
+        entries_left_on_date=outcome.entries_left_on_date,
         requests_made=outcome.requests_made,
         warnings=outcome.warnings,
         id_keys=outcome.id_keys,
