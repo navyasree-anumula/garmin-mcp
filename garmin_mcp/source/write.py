@@ -57,12 +57,28 @@ MAX_PAGES = 10
 #: confirmed key would be reading one endpoint's evidence as three endpoints'.
 WORKOUT_ID_KEYS = ("workoutId", "id")
 
+#: **A calendar item is a different shape, measured 2026-11-02 on the first live
+#: undo, and the difference is dangerous.** That item carried `workoutId` for the
+#: template and **`id` for the SCHEDULE** -- so `WORKOUT_ID_KEYS`' `id` fallback
+#: would read a schedule id as a workout id. On this account every item carries
+#: `workoutId`, so the fallback never fired; an item that omits it (a scheduled
+#: course, a race, an item type nobody has seen) would have matched on a number
+#: that means something else, and the undo would have removed **a different
+#: session** while reporting success. No `id` fallback here, on purpose: a
+#: missing `workoutId` must read as "no match" and not as a guess.
+CALENDAR_WORKOUT_ID_KEYS = ("workoutId",)
+
 #: Same, for the schedule. §5: undo needs the scheduled id and NOT the workout
 #: id -- `unschedule_workout` takes the former -- so a miss here costs the only
 #: rollback path and has to be said out loud.
 #:
 #: `workoutScheduleId` is CONFIRMED for `schedule_workout`, same measurement.
-#: The fallbacks stay for the calendar read, whose shape is still unmeasured.
+#:
+#: **And `id` is CONFIRMED for a calendar ITEM, measured 2026-11-02** -- the
+#: third candidate answered, and the undo it drove removed the right entry, so
+#: the candidate list earned its keep on the one shape nobody had read. The two
+#: endpoints genuinely disagree about the key name for the same number, which is
+#: why this stayed a list of candidates rather than becoming one constant.
 SCHEDULE_ID_KEYS = ("workoutScheduleId", "scheduledWorkoutId", "id")
 
 #: Containers a calendar month might arrive in. The distinction that matters is
@@ -70,6 +86,13 @@ SCHEDULE_ID_KEYS = ("workoutScheduleId", "scheduledWorkoutId", "id")
 #: and "none of these keys exist" (we are not reading the shape we think we
 #: are) -- those have opposite conclusions and look identical otherwise.
 CALENDAR_KEYS = ("calendarItems", "items", "workoutScheduleList")
+
+#: How a calendar item might spell its date. Both are tried and **which one
+#: answered is recorded**, because the first live undo settled the ids and left
+#: this unmeasured. Prefix-matched against `YYYY-MM-DD` rather than compared,
+#: since Garmin's dates carry a time on some endpoints -- and that prefix match
+#: is also what makes a month view containing neighbouring days harmless.
+CALENDAR_DATE_KEYS = ("date", "calendarDate")
 
 UPLOADED = "uploaded"
 UPDATED = "updated"
@@ -475,6 +498,13 @@ class CalendarEntry:
     schedule_id: int | None
     schedule_key: str
     workout_key: str
+    #: Which of `CALENDAR_KEYS` held the list, and which date spelling matched.
+    #: Recorded for the same reason the id keys are: this shape had no measured
+    #: key names at all until the first live undo, and these two are still
+    #: unmeasured because the undo reported the ids and nothing else. A success
+    #: that teaches nothing is the mistake this module already made once.
+    container_key: str
+    date_key: str
     matches: int
     understood: bool
 
@@ -496,32 +526,46 @@ def _schedule_entry_on(payload: Any, workout_id: int, day: str) -> CalendarEntry
     `id_keys` settled the write's.
     """
     if not isinstance(payload, dict):
-        return CalendarEntry(None, "", "", 0, False)
+        return CalendarEntry(None, "", "", "", "", 0, False)
 
     items = None
+    container_key = ""
     for key in CALENDAR_KEYS:
         if key in payload:
             items = payload[key]
+            container_key = key
             break
     if not isinstance(items, list):
-        return CalendarEntry(None, "", "", 0, False)
+        return CalendarEntry(None, "", "", "", "", 0, False)
 
     matches = []
+    date_key = ""
     for item in items:
         if not isinstance(item, dict):
             continue
-        if _first_id(item, WORKOUT_ID_KEYS) != workout_id:
+        if _first_id(item, CALENDAR_WORKOUT_ID_KEYS) != workout_id:
             continue
-        on = str(item.get("date") or item.get("calendarDate") or "")
-        if on.startswith(day):
-            matches.append(item)
+        for candidate in CALENDAR_DATE_KEYS:
+            on = str(item.get(candidate) or "")
+            if on.startswith(day):
+                matches.append(item)
+                date_key = candidate
+                break
 
     if not matches:
-        return CalendarEntry(None, "", "", 0, True)
+        return CalendarEntry(None, "", "", container_key, "", 0, True)
 
     schedule_id, schedule_key = _first_id_with_key(matches[0], SCHEDULE_ID_KEYS)
-    _, workout_key = _first_id_with_key(matches[0], WORKOUT_ID_KEYS)
-    return CalendarEntry(schedule_id, schedule_key, workout_key, len(matches), True)
+    _, workout_key = _first_id_with_key(matches[0], CALENDAR_WORKOUT_ID_KEYS)
+    return CalendarEntry(
+        schedule_id,
+        schedule_key,
+        workout_key,
+        container_key,
+        date_key,
+        len(matches),
+        True,
+    )
 
 
 def _entries_on(payload: Any, day: str) -> int:
@@ -547,9 +591,10 @@ def _entries_on(payload: Any, day: str) -> int:
     for item in items:
         if not isinstance(item, dict):
             continue
-        on = str(item.get("date") or item.get("calendarDate") or "")
-        if on.startswith(day):
-            count += 1
+        for candidate in CALENDAR_DATE_KEYS:
+            if str(item.get(candidate) or "").startswith(day):
+                count += 1
+                break
     return count
 
 
@@ -562,10 +607,19 @@ class UnscheduleOutcome:
     workout_id: int
     scheduled_workout_id: int
     removed: bool
-    #: Entries for this workout still on that date. Normally 0. Garmin's own UI
-    #: permits the same workout twice on one day, and `unschedule_workout` takes
-    #: one id, so a duplicate is removed one call at a time.
-    remaining_on_date: int = 0
+    #: Entries for **this workout** still on that date. Normally 0. Garmin's own
+    #: UI permits the same workout twice on one day, and `unschedule_workout`
+    #: takes one id, so a duplicate is removed one call at a time.
+    same_workout_left_on_date: int = 0
+    #: Entries of **any** workout still on that date.
+    #:
+    #: Added 2026-11-02, after the first live undo. `remaining_on_date` counted
+    #: only this workout and was named as though it counted the date: it read 0
+    #: while another session was still there, and the refusal on the next call
+    #: said the date "holds 1 in total". Two true numbers, one name, and the
+    #: name belonged to the other one. Both are reported now, because an undo
+    #: whose point is "that day was wrong" should say what is left on the day.
+    entries_left_on_date: int = 0
     requests_made: int = 0
     warnings: list[str] = field(default_factory=list)
     id_keys: dict[str, str] = field(default_factory=dict)
@@ -637,6 +691,7 @@ def unschedule(
     requests += 1
 
     entry = _schedule_entry_on(calendar, plan.workout_id, day)
+    total_on_date = _entries_on(calendar, day)
 
     if not entry.understood:
         raise WriteRefused(
@@ -648,7 +703,7 @@ def unschedule(
         )
 
     if entry.matches == 0:
-        others = _entries_on(calendar, day)
+        others = total_on_date
         raise WriteRefused(
             f"nothing called {wanted!r} is on the calendar for {day}, so there "
             f"was nothing to remove and nothing was changed. That date holds "
@@ -685,6 +740,10 @@ def unschedule(
         id_keys["scheduled_workout_id"] = f"calendarItem.{entry.schedule_key}"
     if entry.workout_key:
         id_keys["workout_id"] = f"calendarItem.{entry.workout_key}"
+    if entry.container_key:
+        id_keys["calendar_container"] = entry.container_key
+    if entry.date_key:
+        id_keys["calendar_date"] = f"calendarItem.{entry.date_key}"
 
     outcome = UnscheduleOutcome(
         name=wanted,
@@ -692,17 +751,21 @@ def unschedule(
         workout_id=plan.workout_id,
         scheduled_workout_id=entry.schedule_id,
         removed=True,
-        remaining_on_date=entry.matches - 1,
+        same_workout_left_on_date=entry.matches - 1,
+        # One entry went, and the calendar was read before it did. No second
+        # request: subtracting the removal from the count we already have is
+        # exact, and a re-read would cost a request to learn what we know.
+        entries_left_on_date=max(total_on_date - 1, 0),
         requests_made=requests,
         id_keys=id_keys,
     )
 
-    if outcome.remaining_on_date:
+    if outcome.same_workout_left_on_date:
         outcome.warnings.append(
             f"{wanted!r} was on {day} {entry.matches} times and ONE entry was "
-            f"removed, so {outcome.remaining_on_date} still remain on that "
-            "date. Garmin permits the same workout twice on one day. Call this "
-            "again with the same name and date to remove the next one."
+            f"removed, so {outcome.same_workout_left_on_date} still remain on "
+            "that date. Garmin permits the same workout twice on one day. Call "
+            "this again with the same name and date to remove the next one."
         )
 
     return outcome

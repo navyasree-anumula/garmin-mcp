@@ -3172,13 +3172,69 @@ run in Desktop on the laptop.
 
 Tests: 695 → **739** (+44). Build: passed. Image: built and probed locally.
 
+## 2026-11-02 (live) — the undo works, and it found the bug I had written
+
+**Both of v1.7's live checks passed on the first attempt, and the useful part is not the pass.**
+`zz throwaway A` uploaded for 30 Nov (workout **1750279892**, schedule **1829276077**, 3
+requests), updated in place for 1 Dec keeping the same `workout_id` (schedule **1829276178**, 4
+requests), then `scheduled: "already"` on a third create with one entry in Connect. **The update
+branch has now run live** — four code paths and one Garmin behaviour that had never been near a
+real account. `zz throwaway B` went on 30 Nov (workout **1750280163**, schedule **1829276338**),
+the undo removed A from 30 Nov and left B there, A stayed on 1 Dec, and a second undo refused
+naming the date and saying it "holds 1 in total".
+
+**The measurement that mattered: `id_keys` came back `calendarItem.id` and
+`calendarItem.workoutId`.** A calendar item spells the schedule id **`id`** — the *third*
+candidate in `SCHEDULE_ID_KEYS`, and not `workoutScheduleId`, which is what `schedule_workout`'s
+own response uses. **Two endpoints disagree about the name of the same number**, which is
+exactly why that stayed a candidate list instead of being narrowed to the one key the write path
+had confirmed. The comment on it said narrowing would be "reading one endpoint's evidence as
+three endpoints'". That was right for a reason nobody had checked.
+
+**And it exposed a bug I had shipped the same day.** `WORKOUT_ID_KEYS` is `("workoutId", "id")`,
+and `_schedule_entry_on` used it to decide which calendar item is *this workout*. Now that `id`
+is known to be the **schedule** id in that shape, the fallback was a loaded gun: an item with no
+`workoutId` — a scheduled course, a race, an item type nobody has seen — would have had its
+schedule id compared against a template id, and on a collision the undo would have removed **a
+different session while reporting success**. It never fired, because every item on this account
+carries `workoutId`. **A fallback is only safe while every key in it means the same thing, and
+the live call is what proved one of them does not.** There is now a
+`CALENDAR_WORKOUT_ID_KEYS = ("workoutId",)` with no fallback: a missing `workoutId` reads as "not
+on that date" and refuses, which is the right answer for a lookup that is about to delete
+something.
+
+**Mahi found the second one by reading the fields against each other.** `remaining_on_date`
+returned **0** right after removing A while B was still on 30 Nov — and the *refusal* on the next
+call said the date "holds 1 in total". Both numbers were true. The field counted *this workout*
+and was named as though it counted *the date*, and the name belonged to the other number. Split
+in two: `same_workout_left_on_date` (call again?) and `entries_left_on_date` (is the day clear?),
+and the note says both in prose. **The bug was not in either number. It was that one name
+answered two questions, and the response had no way to show the discrepancy** — it took a human
+comparing a field against a later refusal to see it.
+
+**A success still taught less than it could have.** `id_keys` reported the two ids and left the
+**container** key and the **date** key unmeasured, so `calendarItems` and `date` are still
+guesses in every fixture. Both are now recorded on every undo as `calendar_container` and
+`calendar_date`, which makes the *next* undo settle them for free. This is the same lesson as
+2026-10-27, applied one layer in: the response explained what it had been asked about and stayed
+quiet about what it had just learned.
+
+Fixtures move from `# invented:` to **`# recorded in part:`** — the ids are measured, the
+container and date keys are not, and the label says which half.
+
+**Still pending, and small:** that `zz throwaway A` is in the workout library was not read
+directly. It is all but settled — A is still on 1 Dec, and a calendar entry points at a template
+— but the direct check is the library view in Connect, so it stays named rather than assumed.
+
+Tests: 739 → **748** (+9). Build: passed.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **739 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **748 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -3268,7 +3324,15 @@ Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
 `# recorded:`. If a key differs from our first candidate, narrow
 `WORKOUT_ID_KEYS` / `SCHEDULE_ID_KEYS` to what Garmin actually sends and say so.
 
-**4. The update path has never run live.** The live cycle so far has only taken
+**~~4. The update path has never run live.~~ DONE 2026-11-02** — it has now,
+and it passed on the first attempt. `zz throwaway A`: uploaded for 30 Nov
+(workout **1750279892**, schedule **1829276077**, 3 requests), then **updated in
+place** for 1 Dec with the **same `workout_id`** (schedule **1829276178**, 4
+requests), then `scheduled: "already"` on a third create with a single entry in
+Connect. The original item follows, because what it predicted is what happened
+and that is worth keeping legible.
+
+The live cycle so far has only taken
 the **upload** branch: no match ⇒ `upload_workout` ⇒ `schedule_workout`. The
 other branch — match ⇒ read the target month ⇒ `update_workout` in place ⇒ skip
 or schedule — is four code paths and one Garmin behaviour never near a real
@@ -3289,10 +3353,17 @@ have tied an internal branch to how the week happens to look.
 - Create `zz throwaway A` for D2 again: expect `scheduled: "already"` and **no
   second calendar entry** — confirmed in Connect, not in the response.
 
-**4b. The undo has never run live either**, and it is new code. Needs the merge,
-the publish, a re-pin and a **fresh Desktop conversation** (the schema-cache
-lead). Set the two-workout case up deliberately, since nothing is naturally on a
-Tuesday:
+**~~4b. The undo has never run live either.~~ DONE 2026-11-02** — `zz throwaway
+B` on 30 Nov (workout **1750280163**, schedule **1829276338**), then the undo
+removed A from 30 Nov: `removed: true`, `template_kept: true`, both ids right, 3
+requests. Connect showed **only B on 30 Nov** and A still on 1 Dec. The second
+undo **refused naming the date** and said it holds 1 in total. It also found two
+defects — see the 2026-11-02 (live) entry — one of them a latent wrong-entry
+deletion in code shipped the same day. The original item follows.
+
+Needs the merge, the publish, a re-pin and a **fresh Desktop conversation** (the
+schema-cache lead). Set the two-workout case up deliberately, since nothing is
+naturally on a Tuesday:
 
 - Create `zz throwaway B` for D1, so D1 holds two different workouts.
 - `garmin_workout_unschedule("zz throwaway A", D1)`: expect `removed: true`,
@@ -3302,8 +3373,12 @@ Tuesday:
 - Call it again for the same name and date: expect a **refusal naming the name
   and the date**. Nothing removed.
 
-**What 4b records beyond pass/fail**, and this is most of its value: `id_keys`
-settles the **calendar item's** key names, which no session has ever measured —
+**What 4b recorded beyond pass/fail, 2026-11-02:** `calendarItem.id` for the
+schedule id — the **third** candidate, and not `workoutScheduleId` — and
+`calendarItem.workoutId` for the template. The container key and the date key
+were **not** reported and are still guesses; `id_keys` now records both, so the
+next undo settles them for free. The original item follows: `id_keys`
+settles the **calendar item's** key names, which no session had ever measured —
 every `# invented:` calendar fixture in `test_unschedule.py` and
 `test_garmin_workout_unschedule.py` is waiting on it. It also records which
 `CALENDAR_KEYS` container Garmin actually uses, and whether a month view includes
@@ -3314,6 +3389,11 @@ so none of this happens on its own. **Mahi deletes these by hand** (decided
 2026-11-02), and checks 4 and 4b will add `zz throwaway A` and `zz throwaway B`
 to the list:
 
+- `zz throwaway A`, workout **1750279892**, on **1 Dec** as schedule
+  **1829276178**. Its 30 Nov entry (1829276077) is already gone — that was the
+  undo's first live test.
+- `zz throwaway B`, workout **1750280163**, on **30 Nov** as schedule
+  **1829276338**.
 - `throwaway test`, workout **1742892340**, and its calendar entry.
 - `6x800 pace`, workout **1746821178** / scheduled **1825773941**, on the
   calendar for **2026-11-01**. Keep it until the off-pace run (check 2b) has
@@ -3456,6 +3536,22 @@ path, §7a's bind address, §9's location exposure).
   structure `compose` builds** — `estimatedDurationInSecs` summed from time steps only, every
   step carrying `no.target` — so both of the preview session's recorded assumptions are answered
   yes. Delete it in Connect; there is no delete tool by design.
+
+**MEASURED 2026-11-02: the laptop runs `sha-75551ab`**, which is the merge of PR #46 and
+carries `garmin_workout_unschedule`. The instrument was the whole chain, not one link: the
+digest `sha256:10afa15703b8a0534499fdf541d4619957f44b0dc6c7046026861f10dc98938c` was read from
+ghcr **independently** and asserted against the pull before the config was touched, a capability
+probe inside the image answered seven tools, and `docker ps` after relaunch showed **both**
+containers on `sha-75551ab` and none on an older tag. Writes stayed enabled. The paragraph below
+is kept because its lesson is not spent: a build claim is a measurement with a date on it.
+
+**The re-pin script now lives on the laptop** at
+`C:\Users\<user>\Documents\Personal stuff\garmin\repin.ps1` and takes `-NewTag`, `-Digest`,
+`-ExpectTool` and `-ExpectTools`, so a session hands over one invocation line instead of a
+script. Two runs in a row had failed on how the script was *delivered* rather than on what it
+did — a long `Join-Path` line that did not survive a paste, and then prose between fenced blocks
+that got saved into the `.ps1` and ran as a command. The digest argument stays mandatory: a
+re-pin that only pulls a tag is how this file carried a wrong pin for five days.
 
 **SUPERSEDED 2026-10-31 (evening): the laptop was re-pinned, and the new tag was
 never measured.** Pace targets and strength warm-ups both worked from Desktop,

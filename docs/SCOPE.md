@@ -991,7 +991,7 @@ they were written — never their contents.
 | Two containers, one token file | **Observed** 2026-08-30 | Concurrent refresh could lose an update | Cross-process file lock around refresh. Structural risk; not yet observed to bite |
 | Single-maintainer bus factor | Low now | Fork treadmill | Accepted. MIT means forking is at least possible |
 | A pace range written with its bounds swapped (v1.6) | **Resolved 2026-10-31** | The watch alerts continuously and the easy end becomes the hard end | **Closed by measurement.** Workout 1746821178 displays 4:20-4:40/km as prescribed, so `targetValueOne` is the faster bound and the risk is retired. The mitigation is kept: the ordering still lives in **one named constant**, which is what made the check a one-line fix had it gone the other way. Whether the watch *alerts* outside the range is a separate, non-structural question, pending a run |
-| An important id exists only in a tool response (v1.6) | **Observed five times** | `unschedule_workout` takes the scheduled id and nothing else, so a calendar entry becomes removable only by hand in Connect | **Decided 2026-10-31: no ledger.** The id is looked up from Garmin's calendar at undo time (§15.13 option 2), so a dropped id is *recoverable* rather than stored twice. A returned field is not a delivered one — summarising clients dropped `server_version`, the provenance note, the refusal distinction, the write's ids and `id_keys` — which is why the answer is a lookup and not a louder response. Unschedule-by-lookup **shipped in v1.7 as `garmin_workout_unschedule(name, date)`** — the id is looked up from the calendar, so the tool cannot be handed a remembered one. The residual risk is now narrower and different: the **calendar item's** key names are still unmeasured, so the lookup's candidate keys are an assumption until the first live undo records them, and a refusal that cannot read an entry is deliberately worded so it cannot be mistaken for an entry that is absent |
+| An important id exists only in a tool response (v1.6) | **Observed five times** | `unschedule_workout` takes the scheduled id and nothing else, so a calendar entry becomes removable only by hand in Connect | **Decided 2026-10-31: no ledger.** The id is looked up from Garmin's calendar at undo time (§15.13 option 2), so a dropped id is *recoverable* rather than stored twice. A returned field is not a delivered one — summarising clients dropped `server_version`, the provenance note, the refusal distinction, the write's ids and `id_keys` — which is why the answer is a lookup and not a louder response. Unschedule-by-lookup **shipped in v1.7 as `garmin_workout_unschedule(name, date)`** — the id is looked up from the calendar, so the tool cannot be handed a remembered one. **Confirmed live 2026-11-02** — the undo removed the right entry and left the other session on that date. It measured the shape it depended on: a calendar item carries the schedule id under **`id`**, not `workoutScheduleId`, so the two endpoints disagree about the name of one number. That measurement also closed a latent defect, which is the residual risk restated: `WORKOUT_ID_KEYS`' `id` fallback would have read a schedule id as a template id for any item lacking `workoutId`, and removed a different session while reporting success. Calendar items now use a fallback-free key tuple. Still unmeasured: the container key and the date key, both now recorded on every undo |
 | Datacenter-IP flag | **Resolved** | — | Eliminated by the laptop decision (§7) |
 
 ---
@@ -1913,9 +1913,9 @@ the mechanism it describes because that is what makes the next review cheap.
 
 | Item | Shape | State |
 |---|---|---|
-| **Unschedule-by-lookup** (§15.13 option 2) | `garmin_workout_unschedule(name, date)`, destructive-annotated, behind the existing writes gate | Built 2026-11-02. 44 tests added; **live undo still owed** |
+| **Unschedule-by-lookup** (§15.13 option 2) | `garmin_workout_unschedule(name, date)`, destructive-annotated, behind the existing writes gate | Built **and confirmed live** 2026-11-02 |
 | **The §5 tool split** | One paragraph in §5 | Ratified 2026-11-02 and written. The code and this document had disagreed since v1.5 |
-| **The live update path** | No code — a live test | Owed. The update branch has never run against a real account |
+| **The live update path** | No code — a live test | **Done 2026-11-02.** Uploaded, then updated in place keeping the id, then `already` with no second entry |
 | **Two now-false claims about undo** | `WriteResult.scheduled_workout_id`'s description and the unreadable-schedule-id warning both sent the human to Connect | Corrected in the same commit as the tool that made them false |
 
 ### §16.2 Decisions taken while building
@@ -1940,6 +1940,27 @@ the mechanism it describes because that is what makes the next review cheap.
   pushed workout alerted "too fast" at the start, so the watch receives and acts on the pace
   target. Whether the athlete's pace at that moment was outside the planned range is Mahi's to
   confirm; the mechanism question is answered.
+
+### §16.2a What the first live undo changed in the code it was testing
+
+Both defects came out of one live call, and neither was found by the suite.
+
+- **A calendar item's `id` is the SCHEDULE id** (measured). `WORKOUT_ID_KEYS` falls back from
+  `workoutId` to `id`, and `_schedule_entry_on` used it to decide which item is this workout —
+  so an item without `workoutId` could have matched a schedule id against a template id and had
+  the undo remove **a different session while reporting success**. It never fired because every
+  item on this account carries `workoutId`. Calendar items now use
+  `CALENDAR_WORKOUT_ID_KEYS = ("workoutId",)` with no fallback, so a missing key refuses rather
+  than guesses. **A fallback is only safe while every key in it means the same thing.**
+- **One field name answered two questions.** `remaining_on_date` counted entries of *this
+  workout* and was named for *the date*: it read 0 immediately after an undo that left another
+  session on that day, while the next call's refusal said the date held 1. Split into
+  `same_workout_left_on_date` (call again?) and `entries_left_on_date` (is the day clear?), both
+  also stated in the note. Found by Mahi reading a field against a later refusal — a discrepancy
+  the response itself had no way to show.
+- **A success still taught less than it could.** The undo reported the two ids and left the
+  calendar's **container** key and **date** key unmeasured. Both are recorded now, so the next
+  undo settles them at no cost — the 2026-10-27 lesson applied one layer in.
 
 ### §16.3 Deferred, and one of them for the fourth time
 

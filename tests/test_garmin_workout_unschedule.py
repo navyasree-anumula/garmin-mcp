@@ -28,21 +28,21 @@ ENTRY = 55555
 # library itself reads; the item around them is a guess.
 WORKOUTS = [{"workoutName": NAME, "workoutId": WORKOUT}]
 
-# invented: a calendar month. No calendar item's key names have been measured,
-# which is the assumption the first live undo settles. Mirrors
-# `test_unschedule.py` deliberately -- if the live call shows a different shape,
+# recorded in part: 2026-11-02, the first live undo. A calendar item spells the
+# schedule id **`id`** and the template `workoutId`. The container key and the
+# date key were not reported by that call, so `calendarItems` and `date` are
+# still guesses -- `id_keys` records both from now on. Mirrors
+# `test_unschedule.py` deliberately: if a later call shows a different shape,
 # both files change together.
 CALENDAR = {
-    "calendarItems": [
-        {"workoutId": WORKOUT, "date": DAY, "workoutScheduleId": ENTRY}
-    ]
+    "calendarItems": [{"workoutId": WORKOUT, "date": DAY, "id": ENTRY}]
 }
 
-# invented: the same workout twice on one day, which Garmin permits.
+# recorded in part: the same workout twice on one day, which Garmin permits.
 CALENDAR_TWICE = {
     "calendarItems": [
-        {"workoutId": WORKOUT, "date": DAY, "workoutScheduleId": ENTRY},
-        {"workoutId": WORKOUT, "date": DAY, "workoutScheduleId": 77777},
+        {"workoutId": WORKOUT, "date": DAY, "id": ENTRY},
+        {"workoutId": WORKOUT, "date": DAY, "id": 77777},
     ]
 }
 
@@ -187,7 +187,8 @@ def test_the_result_carries_both_ids_and_the_date(api, writes_on):
     assert result.scheduled_workout_id == ENTRY
     assert result.date == DAY
     assert result.name == NAME
-    assert result.remaining_on_date == 0
+    assert result.same_workout_left_on_date == 0
+    assert result.entries_left_on_date == 0
 
 
 def test_a_duplicate_entry_is_reported_in_the_note_as_well(monkeypatch, tokenfile, writes_on):
@@ -198,10 +199,37 @@ def test_a_duplicate_entry_is_reported_in_the_note_as_well(monkeypatch, tokenfil
 
     result = garmin_workout_unschedule(NAME, DAY)
 
-    assert result.remaining_on_date == 1
+    assert result.same_workout_left_on_date == 1
+    assert result.entries_left_on_date == 1
     assert "1 further entry" in result.note
     assert DAY in result.note
     assert result.warnings
+
+
+def test_the_note_says_whether_the_day_is_now_empty(api, writes_on):
+    """The ambiguity the first live undo surfaced, fixed where the human will
+    actually read it. `same_workout_left_on_date` says whether to call again;
+    this says whether the day is clear -- and the note carries both, because a
+    field may never be shown."""
+    result = garmin_workout_unschedule(NAME, DAY)
+
+    assert "Nothing else is scheduled on " + DAY in result.note
+
+
+def test_a_day_with_another_session_says_so_in_the_note(monkeypatch, tokenfile, writes_on):
+    other = {
+        "calendarItems": [
+            {"workoutId": WORKOUT, "date": DAY, "id": ENTRY},
+            {"workoutId": 999, "date": DAY, "id": 66666},
+        ]
+    }
+    fake = FakeApi(calendar=other)
+    monkeypatch.setattr(source, "_connect", lambda: fake)
+
+    result = garmin_workout_unschedule(NAME, DAY)
+
+    assert result.entries_left_on_date == 1
+    assert "still holds 1 scheduled workout in total" in result.note
 
 
 def test_a_refusal_reaches_the_client_as_a_tool_error(api, writes_on):
