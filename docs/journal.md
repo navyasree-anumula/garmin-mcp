@@ -3094,13 +3094,91 @@ Tests: 691 -> 695.
 the target block's `displayOrder`, which is unverified and inert; the four unverified metric rows;
 and the §5 tool-split deviation, still undecided.
 
+## 2026-11-02 — an undo that finds its own id, and two claims it made false
+
+**v1.7's scope was cut to one week's real use**, ratified in-session: plan next week's classes
+from Desktop, and be able to take a wrong entry off the calendar from the conversation that put
+it there. `garmin_workout_unschedule(name, date)` is built, 44 tests, nothing live yet.
+
+**It takes a name and a date, and there is no way to pass an id.** That is the design and not a
+convenience. `unschedule_workout` wants the `scheduledWorkoutId`, which has been dropped by
+summarising clients five times, so §15.13 ratified the lookup: Garmin's calendar already holds
+the fact, and an undo is a read followed by a delete. The signature enforces what a sentence
+could only ask for — the model may be holding a schedule id from a create earlier in the same
+conversation, and the calendar is the current state while that id is a memory of one.
+
+**The plan was written first, and walked, and then one of its findings was overturned by Mahi.**
+`docs/plan-2026-11-02-unschedule-by-lookup.md` holds the ten dimensions plus passes A and B,
+before any code — the order v1.6 got wrong. Three of the ten are recorded as small-but-not-nil
+rather than skipped. What changed under review: the plan proposed **refusing** when the same
+workout sits on one date twice, reasoning by analogy with `resolve`'s two-match refusal.
+**Mahi rejected the analogy and he was right.** Two templates sharing a name are different
+things and picking one is an invisible arbitrary act. Two calendar entries of one workout on one
+date are *interchangeable* — the athlete sees one session either way — so removing one is not a
+choice between outcomes, and refusing would have dead-ended an undo on a state only the Connect
+app could fix. One entry goes per call and the remainder is reported. **The lesson is narrower
+than "don't refuse": a refusal is right when choosing would be invisible, and wrong when the
+choice does not exist.**
+
+**The remainder is said in prose as well as in a field**, because this repo has measured five
+times that a returned field is not a delivered one. The same reason `template_kept` has a
+sentence in `note` and not only a boolean: an undo that reads as "the workout is gone" produces
+a duplicate on the next write, since a write resolves by name and the name is still taken. That
+failure would surface a week later, on a watch.
+
+**Building it made two shipped claims false, and both were corrected in the same commit.**
+`WriteResult.scheduled_workout_id`'s description said that without that id "the calendar entry
+can only be removed in Garmin Connect", and the unreadable-schedule-id warning sent the human to
+the app for the same reason. Both were true while an undo meant being *handed* the id. The
+lookup makes them wrong, and a description that sends someone to the app for nothing is worse
+than silence. **Worth generalising: shipping the fix for a limitation means hunting the prose
+that documented it.** `test_an_unreadable_schedule_id_still_reports_success_and_the_gap` now
+asserts the new sentence, which is a test changed with a reason rather than a test weakened.
+
+**A failed delete is `UnscheduleUncertain`, not `WriteRefused`.** `WriteRefused` promises the
+account is untouched and nothing can promise that after the request leaves — a timeout on a
+DELETE may have been applied server-side. "Unknown" is the only honest word, and it carries both
+ids so one look in Connect settles it. This is the write path's "once it exists, nothing raises"
+rule meeting a case where the right answer is still an exception, just a differently named one.
+
+**One parser, two callers.** The undo needed two more facts out of the same calendar read — how
+many entries matched, and which key carried each id — and growing `_scheduled_ids_on`'s return
+tuple would have changed the create path for the undo's benefit. `_schedule_entry_on` is the one
+parser now; `_scheduled_ids_on` is a thin call into it with its signature untouched, so the
+create path's 46 tests passed unchanged and the two paths cannot drift. A test asserts its three
+answers are still the create path's contract.
+
+**Three refusals that must never read alike**, which is where the unmeasured shape bites. The
+calendar item's key names have **never** been measured: `workoutId` and `workoutScheduleId` were
+confirmed for `upload_workout` and `schedule_workout` *responses* on 2026-10-31, and reading them
+out of a calendar item is a third assumption wearing the same clothes. So "nothing of that name
+on that date" (which says how many sessions that date *does* hold), "the entry is there and its
+id is in no key this server recognises", and "the month is not a shape this server recognises"
+are three sentences. Collapsing them into one "not found" would have produced the worst of
+them — a silent absence reads as evidence the undo happened.
+
+**The first live undo is also a measurement, for free.** `id_keys` records the calendar item's
+keys as `calendarItem.<key>`, so the undo that works also settles the shape — the fix for the
+lesson that a response explaining itself only on failure teaches nothing when it works.
+
+**Built and probed, not assumed:** the image builds and a capability probe inside it answers
+seven tools, `destructive_hint` true, arguments `['date', 'name']`. The laptop does **not** have
+this build; it reaches Desktop only after merge, publish, re-pin and a fresh conversation.
+
+**What is owed, and it is all live.** The update branch has still never run against a real
+account, and now neither has the undo. Both are open checks below. **Neither can run from this
+box** — there are no Garmin tokens here, `/data` holds the lock and budget files only — so both
+run in Desktop on the laptop.
+
+Tests: 695 → **739** (+44). Build: passed. Image: built and probed locally.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **695 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **739 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -3190,19 +3268,51 @@ Expect something like `{"workout_id": "workoutId", "scheduled_workout_id":
 `# recorded:`. If a key differs from our first candidate, narrow
 `WORKOUT_ID_KEYS` / `SCHEDULE_ID_KEYS` to what Garmin actually sends and say so.
 
-**4. The update path has never run live**, and the second create of the same
-circuit is how it gets exercised — which is also the normal weekly
-re-prescription rather than an artificial test. The live cycle so far has only
-taken the **upload** branch: no match ⇒ `upload_workout` ⇒ `schedule_workout`.
-The other branch — match ⇒ read the target month ⇒ `update_workout` in place ⇒
-skip or schedule — is four code paths and one Garmin behaviour never near a real
-account. Create the same-named circuit on a different date: expect
-`action: "updated"`, the **same** `workout_id`, `requests_made: 4`, and
-`scheduled: "new"`. Then a third create on the date it already holds, expecting
-`scheduled: "already"` and **no second calendar entry**.
+**4. The update path has never run live.** The live cycle so far has only taken
+the **upload** branch: no match ⇒ `upload_workout` ⇒ `schedule_workout`. The
+other branch — match ⇒ read the target month ⇒ `update_workout` in place ⇒ skip
+or schedule — is four code paths and one Garmin behaviour never near a real
+account.
+
+**It runs on the laptop's current image and needs no new build**, which is why
+it is numbered before the undo. **Decided 2026-11-02: it is a deliberate test
+with throwaway names, not a piggy-back on real planning.** Repeats were going to
+be the vehicle, but whether a create takes the upload or the update branch is
+internal and must make no difference to the caller — Desktop just calls create
+with a name and a date — so verifying it by waiting for a class to repeat would
+have tied an internal branch to how the week happens to look.
+
+- Create `zz throwaway A` for a date D1: expect `action: "uploaded"`,
+  `scheduled: "new"`, `requests_made: 3`.
+- Create `zz throwaway A` for D2: expect `action: "updated"`, the **same**
+  `workout_id`, `requests_made: 4`, `scheduled: "new"`.
+- Create `zz throwaway A` for D2 again: expect `scheduled: "already"` and **no
+  second calendar entry** — confirmed in Connect, not in the response.
+
+**4b. The undo has never run live either**, and it is new code. Needs the merge,
+the publish, a re-pin and a **fresh Desktop conversation** (the schema-cache
+lead). Set the two-workout case up deliberately, since nothing is naturally on a
+Tuesday:
+
+- Create `zz throwaway B` for D1, so D1 holds two different workouts.
+- `garmin_workout_unschedule("zz throwaway A", D1)`: expect `removed: true`,
+  both ids, `template_kept: true`, `requests_made: 3`.
+- In Connect: `zz throwaway B` **still on D1**, and `zz throwaway A` still in the
+  workout library with no D1 entry.
+- Call it again for the same name and date: expect a **refusal naming the name
+  and the date**. Nothing removed.
+
+**What 4b records beyond pass/fail**, and this is most of its value: `id_keys`
+settles the **calendar item's** key names, which no session has ever measured —
+every `# invented:` calendar fixture in `test_unschedule.py` and
+`test_garmin_workout_unschedule.py` is waiting on it. It also records which
+`CALENDAR_KEYS` container Garmin actually uses, and whether a month view includes
+neighbouring days.
 
 **5. Delete the throwaways from Connect** — there is no delete tool by design,
-so none of this happens on its own:
+so none of this happens on its own. **Mahi deletes these by hand** (decided
+2026-11-02), and checks 4 and 4b will add `zz throwaway A` and `zz throwaway B`
+to the list:
 
 - `throwaway test`, workout **1742892340**, and its calendar entry.
 - `6x800 pace`, workout **1746821178** / scheduled **1825773941**, on the
@@ -3232,13 +3342,19 @@ though `tests/test_runtime_lock.py` already lists it as dev-only.
   B were walked before the commit, in §15, which is what the standing orders ask
   and what the draft was waiting on. The order was still wrong — the code shipped
   first and §15.1 says so.
-- **Ratify or reject the §5 tool-split deviation** — `garmin_workouts` (preview,
-  read-only) and `garmin_workout_create` (write) as two tools, because
-  `ToolAnnotations` are per tool and §5 asks for per-action honesty. If rejected,
-  one tool and preview loses its read-only hint.
+- **~~Ratify or reject the §5 tool-split deviation.~~ RATIFIED 2026-11-02** —
+  the split is the design and §5 now says so, in its own paragraph. It reads
+  better with three tools than it did with two: `garmin_workout_unschedule` is
+  the first tool here whose `destructive_hint` is honestly true, so a client that
+  gates destructive tools behind a confirmation now puts it in front of the one
+  call that removes something, and not in front of the preview the human approves
+  from.
 - **`id_keys` surfacing Garmin's response key names.** Argued as schema rather
   than account data, by analogy with `probe --explain`. Remove it if you read key
   names as account information.
+- **Three CI/tag items, logged as open issues OUTSIDE any version** (decided
+  2026-11-02): the two below plus the latest-tag question. Not v1.7 scope, not
+  forgotten.
 - **`paths-ignore: ['docs/**']` on `docker.yml`.** Confirmed live on 2026-10-31:
   the docs-only merge of #38 ran a full multi-arch build and moved `latest` to
   `sha-0c20fd8`, whose application code is identical to `sha-43ba988`. The fix
@@ -3257,6 +3373,53 @@ code, a recommended small v1.7 ("the write path becomes reversible, and the docs
 stop lying"), and what is deliberately pushed to v1.8. The chosen set gets the
 ten dimensions plus passes A and B before any code, which is the order v1.6 got
 wrong.
+
+**7c. The four unverified metric rows — half the comparison is in hand.**
+`training_status`, `load_balance`, `readiness`, `recovery_time` are the only four
+rows in the map that are not `verified` (20 rows, checked), and they are settled
+the free way `hrv_status` was: against what the Connect **app** displays for the
+same day. **`probe --explain` cannot do it** — it prints value types, never
+values.
+
+**Mahi's app readings, 2026-11-02, 21:14–21:15 Europe/Amsterdam (20:14 UTC):**
+
+| Row | App | Verifies if the tool returns |
+|---|---|---|
+| `training_status` | "Maintaining" (home In Focus card) | a phrase keyed on **MAINTAINING** — the recorded shape is `PRODUCTIVE_1`, so a key and not prose |
+| `load_balance` | "Anaerobic Shortage", window Oct 6 – Nov 2. Anaerobic 214, High Aerobic 1642, Low Aerobic 656 | a phrase naming **anaerobic shortage**; the recorded shape is `BALANCED_2` |
+| `readiness` | **27 / 100**, "Low", updated 19:26 "After Activity" | **27** — which settles the field name *and* the scale, so the unit stops saying "scale unconfirmed" |
+| `recovery_time` | **38h**, "High Need" | **38** ⇒ hours. 2280 would be minutes, 136800 seconds |
+
+Also recorded: HRV Status Unbalanced at 81 ms, Sleep Score 65 (Fair), and
+**one** Garmin device on the account — which settles the `primary_device`
+decoder by itself, since with one device there is nothing to pick wrongly. Half
+of what made the first two rows uncertain was never about the field name.
+
+**The other half has to be read in Desktop and has NOT been**: this box has no
+Garmin tokens, so `garmin_training` cannot be called from here. One call with
+the four keys costs two requests (two rows per payload). If `readiness` and
+`recovery_time` both match, that also confirms the `latest_timestamp` decoder —
+four snapshots a day, selected by timestamp and never confirmed live. Three
+settlements from one call.
+
+**Those two rows have a short shelf life.** "Updated @ 19:26 · After Activity"
+means a newer snapshot can appear, so a call made hours later needs a fresh card
+reading or a drifted number will look like a failed verification.
+
+**One consequence to decide before verifying, because it is a test-count drop:**
+these four are the only unverified rows left, so verifying all four leaves
+`test_an_unverified_row_carries_its_note_on_a_present_reading`
+(`tests/test_garmin_training.py`) with no row to stand on. Its own docstring
+authorises deleting it — but that deletes the only guard on `readings.read`
+attaching a note to a **present** reading, which is the 2026-10-26 behaviour and
+the thing that went wrong in the first place. **Recommended instead: rewrite it
+against a synthetic `verified=False` row injected into the map.** Same behaviour
+guarded, count unchanged. Mahi's call.
+
+**And a user-visible side effect:** a verified row stops carrying its note
+(`readings.read` attaches one only when a row is not both verified and measured).
+After verification those readings go quiet in Desktop, which is correct and will
+look like something went missing.
 
 **8. Longer-lived, in rough order of value:** the four unverified metric rows
 (`training_status`, `load_balance`, `readiness`, `recovery_time`) settled the

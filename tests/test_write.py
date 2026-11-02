@@ -469,8 +469,15 @@ def test_an_unreadable_workout_id_reports_the_raw_response(api):
 
 
 def test_an_unreadable_schedule_id_still_reports_success_and_the_gap(api):
-    """Scheduled, but undo is unavailable: `unschedule_workout` takes the
-    schedule id and not the workout id, so losing it costs the only rollback."""
+    """Scheduled, and the schedule id was not readable from the response.
+
+    The warning's *conclusion* changed on 2026-11-02 and the assertion changed
+    with it. It used to say the entry could only be removed in Garmin Connect,
+    which was true while undo meant being handed the id. `unschedule` looks it
+    up from the calendar by name and date, so a lost schedule id is now
+    recoverable -- which is the whole argument of §15.13 option 2, and the
+    warning has to say so or it sends the human to the app for nothing.
+    """
     api.schedule_response = {"ok": True}
 
     outcome = run(api)
@@ -479,6 +486,7 @@ def test_an_unreadable_schedule_id_still_reports_success_and_the_gap(api):
     assert outcome.scheduled_workout_id is None
     assert outcome.raw == {"schedule_response": {"ok": True}}
     assert "Undo needs that id" in outcome.warnings[0]
+    assert "garmin_workout_unschedule" in outcome.warnings[0]
 
 
 def test_a_successful_write_records_which_key_carried_each_id(api):
