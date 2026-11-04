@@ -29,6 +29,34 @@ jobs:
       - name: Test
         run: pytest -q
 
+  test-lock:
+    name: Tests (shipped lock)
+    # The gap this closes: `test` above resolves pyproject's ranges fresh, so it
+    # has been running against garminconnect 0.3.20 while the image installs the
+    # 0.3.11 the lock pinned -- nine releases apart, and every green tick was
+    # evidence about a dependency set the container did not contain. Found
+    # 2026-11-04 by comparing the lock against PyPI.
+    #
+    # `-c requirements.lock` when installing the test runner is the point: if
+    # pytest ever demanded a version of a locked package, pip fails loudly here
+    # instead of quietly upgrading it and testing something else again.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the shipped dependency set
+        run: |
+          pip install -r requirements.lock
+          pip install --no-deps -e .
+          pip install -c requirements.lock "pytest>=9.0.3,<10"
+
+      - name: Test
+        run: pytest -q
+
   audit:
     # Deliberately duplicated in .github/workflows/audit.yml, which runs this same
     # step weekly on a schedule. Kept as two copies rather than a composite action
@@ -54,8 +82,10 @@ jobs:
   build-and-push:
     name: Build and publish
     # An image built from code whose tests fail is worse than no image, and one
-    # with a known-vulnerable pinned wheel is worse still.
-    needs: [test, audit]
+    # with a known-vulnerable pinned wheel is worse still. `test-lock` is here
+    # because `test` alone proves the code against a FRESH resolve of
+    # pyproject's ranges, which is not what this image installs.
+    needs: [test, test-lock, audit]
     runs-on: ubuntu-latest
     permissions:
       contents: read

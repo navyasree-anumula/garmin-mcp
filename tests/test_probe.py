@@ -239,9 +239,70 @@ def test_capabilities_write_is_atomic(tmp_path):
 
 def test_every_candidate_has_a_known_call_shape():
     """A typo in `kind` would surface as a TypeError mid-probe, after real
-    requests had already been spent."""
-    assert {c.kind for c in CANDIDATES} <= {"date", "range", "none", "activities"}
+    requests had already been spent.
+
+    The set is written out rather than read from the module so that adding a
+    call shape is a deliberate edit here -- `_call` dispatches on these, and the
+    two added in v1.8 step 0b each take an argument no other shape does.
+    """
+    assert {c.kind for c in CANDIDATES} <= {
+        "date",
+        "range",
+        "none",
+        "activities",
+        "activity_id",
+        "weeks",
+    }
     assert len({c.key for c in CANDIDATES}) == len(CANDIDATES)
+
+
+def test_an_activity_candidate_is_skipped_without_an_id_not_failed():
+    """`skipped` and `error` must not be confused: `error` means our call
+    failed, and this call was never made. Blaming Garmin for an argument we did
+    not pass is the mislabel that cost race_predictions a month."""
+    from garmin_mcp.source import probe as probe_mod
+
+    candidate = next(c for c in CANDIDATES if c.kind == "activity_id")
+
+    with pytest.raises(probe_mod.NeedsActivityId):
+        probe_mod._call(object(), candidate, "2026-11-04", None)
+
+
+def test_an_activity_candidate_passes_the_id_through():
+    from garmin_mcp.source import probe as probe_mod
+
+    candidate = next(c for c in CANDIDATES if c.kind == "activity_id")
+    seen: list = []
+
+    class FakeApi:
+        def __getattr__(self, name):
+            def call(*args):
+                seen.append((name, args))
+                return {"ok": 1}
+
+            return call
+
+    probe_mod._call(FakeApi(), candidate, "2026-11-04", "1746821178")
+
+    assert seen == [(candidate.method, ("1746821178",))]
+
+
+def test_weekly_stress_is_called_with_a_week_count_not_a_range():
+    """`get_weekly_stress(end, weeks)` takes an end date and a COUNT. Passing it
+    two dates would be the race_predictions call-shape bug again."""
+    from garmin_mcp.source import probe as probe_mod
+
+    candidate = next(c for c in CANDIDATES if c.kind == "weeks")
+    seen: list = []
+
+    class FakeApi:
+        def get_weekly_stress(self, *args):
+            seen.append(args)
+            return [{"value": 1}]
+
+    probe_mod._call(FakeApi(), candidate, "2026-11-04")
+
+    assert seen == [("2026-11-04", 1)]
 
 
 def test_every_candidate_method_exists_on_the_client():

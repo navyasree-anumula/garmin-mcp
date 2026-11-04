@@ -3470,13 +3470,212 @@ option (ii) from the candidates doc, which is the recommendation already read an
 Tests: 752 → **789** (+37). Build: passed, and the image was capability-probed rather than trusted
 — `readiness`' decoder reads `morning_snapshot` inside the container.
 
+## 2026-11-04 (v1.8 session A) — what was actually done, and an allowlist that could be written blind
+
+Walked in `docs/plan-2026-11-04-session-a-activities.md` — ten dimensions §4, Pass A §5, Pass B
+§6, before the code. `garmin_activities` reads a date window and returns what training needs;
+**`workout_id` is the link that makes planned and done comparable**, which nothing in this server
+could do until now.
+
+**The session split itself, and the split is the finding.** A2 — per-lap detail — **cannot be
+built yet**, because step 0 ruled out the only source it could see (`splitSummaries` aggregates per
+split type and carries **no HR at all**) and the three remaining candidates all take an activity
+id that nothing in the probe can supply. A1 — the list — **can**, and the argument is worth
+keeping: the one thing still unmeasured about it is whether a GPS run's row carries coordinates,
+and **an allowlist cannot be hurt by an unknown field, because an unknown field is exactly what it
+drops.** The measurement confirms rather than gates. **And A1 produces the input step 0b needs** —
+a real run's id — so the order A1 → step 0b → A2 has each step handing the next its input.
+
+**The privacy work turned out to be two risks, not one.** §9's carried debt is location, and the
+projection handles it. But step 0 found `ownerDisplayName`, `ownerFullName`, `ownerId` and three
+profile-image URLs **in every row** — and `ownerDisplayName` is the GUID §10 calls load-bearing
+and deliberately does not record, because this repository is public. So the allowlist is required
+for **identity** as much as for location, and §9 owes two rows. The test asserts against
+`NEVER_RETURNED`, the module's own list of measured-present keys, so the prose cannot drift from
+the behaviour.
+
+**The privacy test has a positive half, and it had to be invented to exist.** An assertion that no
+coordinate leaves would pass vacuously against the only real row anyone has: step 0's activity was
+indoors and carries none. So the fixture carries synthetic coordinates, a synthetic location name
+and a synthetic owner GUID, the assertion runs against `model_dump_json()` rather than against
+attribute names, and the forbidden *values* are what it looks for. Same shape as the cassette
+scrubber's positive half (§8), which is still unbuilt and which this is now the precedent for.
+
+**The finding that is not fixable from here: the request budget under-counts a paginated read.**
+`get_activities_by_date` pages 20 at a time **inside one call**, and `client._garmin_access` wraps
+that call — so §6's limiter takes **one token for `ceil(n/20)+1` HTTP requests**, and the
+pagination loop is past the only doorway we have. There is no hook. The mitigations are a **31-day
+window cap**, refused rather than truncated, and an honest `requests_basis` saying the count is
+derived from the rows returned rather than observed. The real alternative — our own pagination
+with `get_activities(start, limit)` — cannot filter by date and would walk backwards through
+history to reach an old window. **That is a decision for Mahi, not a cleanup**, and Pass B records
+it as a wrong *order*: one token spent before a loop whose length is unknown at that moment.
+
+**`requests_made` now means two things across two tools** (Pass A.2): measured `1` on
+`garmin_zones`, derived on `garmin_activities`. A field that silently means something different
+depending on which tool returned it is worse than no field, so this one ships beside
+`requests_basis`. Session C inherits the question when it adds the field to the metric tools.
+
+**Small things decided on evidence rather than taste:**
+
+- **Two tools, not one with an `action` enum.** §5's table describes `garmin_activities` as doing
+  both list and detail. It ships as two because a one-value enum is what left `server.py:725`
+  claiming "Only 'preview' exists" for three versions after that stopped being true.
+- **`workoutId` of `0` is not an id.** §16.2a in a new place: a zero read as an id would link a
+  session to a workout that does not exist. `0` and absent are both reported as "not from a
+  scheduled workout".
+- **`hrTimeInZone_*` is never padded.** A zero is the claim "no time in that zone"; an absent key
+  means Garmin did not say. "Was the easy run easy" needs those told apart — and that question is
+  answerable **from the list alone**, with no detail call, no zone table and no targets, which is
+  item 3's purpose arriving two sessions early.
+- **No pace where a pace is meaningless.** `0:00` is a pace; `None` is the truth. Driven off the
+  data (distance and speed both positive), not off a list of sports.
+- **`format_pace_min_km` is public now** — one converter for a pace prescribed and a pace run, so
+  the rounding cannot differ. What it does **not** share is `parse_pace_min_km`'s 150-720 s/km
+  band: that refuses a typo in a prescription, and a 9:00/km walk happened anyway. Asserted.
+- **No totals.** Rows out, no weekly sum, no verdict on the week — which is §1's division of
+  labour and also what makes multi-sport parent activities harmless, since nothing can
+  double-count what nothing adds up.
+
+**Step 0b shipped with it**, CLI-only: candidates for the three per-run endpoints plus the four
+session C needs, a `--activity-id` flag, and two new call shapes. `get_weekly_stress(end, weeks)`
+takes an end date and a **count of weeks**, which is neither DATE nor RANGE — the odd one out, and
+asserted so that passing it two dates cannot become the `race_predictions` call-shape bug again. A
+candidate with no id is **`SKIPPED`, not `ERROR`**: `error` means our call failed, and this call
+was never made. The check runs **before** the client is touched, so it needs neither an api object
+nor a token to say what is missing.
+
+**The suite caught my own mistake immediately**, which is worth recording as evidence the guards
+work: rewriting `_call`'s dispatch, I replaced the `NONE` fall-through with a raise, and
+`test_the_call_passes_no_arguments` failed on `race_predictions` — the exact endpoint whose call
+shape cost a month the first time.
+
+**Still unmeasured, and labelled:** whether a GPS run's row carries coordinates (step 0b, aimed at
+a run); whether an unplanned activity omits `workoutId` or carries `0`; **and the units** — step 0
+printed `distance: float`, which is a type and not a value, so metres and seconds rest on §10's
+measured metric account setting rather than on a reading. The fields say `distance_m` and
+`duration_s` and the note says inferred, until one activity is read against Connect.
+
+Tests: 789 → **815** (+26). Build: passed, and capability-probed inside the image — nine tools,
+`garmin_activities` read-only, the 31-day cap, and all seven new candidates present.
+
+## 2026-11-04 (the lock) — nine releases behind, and CI had been testing the bump all along
+
+**The lock pinned `garminconnect==0.3.11` while PyPI was at 0.3.20, and `pyproject.toml` allows
+`>=0.3.11,<0.4`.** So the `Tests` job — which installs `pip install -e ".[dev]"`, a **fresh
+resolve of the ranges** — has been running the suite against **0.3.20**, while the image installs
+the lock and shipped **0.3.11**. Every green tick this repo has ever shown was evidence about a
+dependency set the container did not contain. Found by comparing the lock against PyPI rather than
+by anything failing, which is the point: nothing could fail, because nothing was looking.
+
+**§2's reasoning was being quietly defeated.** The floor-and-ceiling pin exists because *"the
+floor gets us the current Cloudflare handling"* — and the lock pinned the floor **exactly**, so the
+image had August's handling, not the current one, against §9's own top row (*"Garmin breaks auth
+again — High… track releases"*). The CI divergence was **masking** the staleness: green on 0.3.20
+meant nothing ever complained about 0.3.11.
+
+**The bump, measured rather than hoped.** A throwaway runtime-only venv resolved the ranges fresh
+and `pip freeze` produced the new lock — **17 packages moved**, the notable ones being
+`garminconnect` 0.3.11 → **0.3.20**, `curl_cffi` 0.16.2 → 0.17.0, `pydantic` 2.13.5 → 2.14.2,
+`starlette` 1.6.0 → 1.10.0, `uvicorn` 0.52.4 → 0.54.0. `mcp` stays at **2.2.0** because it is
+pinned with `==` and is the one pin this project treats as fragile.
+
+Then the whole suite against that lock in a clean venv: **815 passed, 2 skipped** — the same
+result as on 0.3.11. `pip-audit -r requirements.lock --strict`: **no known vulnerabilities.**
+Four structural checks beyond the suite, because the tests mostly drive a `FakeApi` and would not
+notice a moved surface:
+
+- **0.3.20 restructured the package** into `api/` and `client/` *packages* (0.3.11 had a flat
+  `__init__.py` and a `client.py`). §11 confines all of it to `source/`, so the blast radius was
+  contained — but every method had to be checked, and **all fifteen we call still exist**, with
+  `Garmin` and the exception names still re-exported from `__init__`.
+- **The exercise catalogue is still 1527 entries** under 0.3.20, so `compose.py` and §5 remain
+  right and SCOPE §11/§14's "~2,550" remains wrong in two places.
+- **The workout enums are unchanged** — `PACE_ZONE=6`, `HEART_RATE_ZONE=4`, `LAP_BUTTON=1`, and
+  `WEIGHT_UNIT_KILOGRAM` with its grams factor — so v1.9's HR-target plan and the deferred
+  reps-and-weight trap both still stand on the numbers they were written against.
+- **The image was built and capability-probed**: it reports `garminconnect 0.3.20`, nine tools,
+  and `readiness`' decoder reading `morning_snapshot`.
+
+**`get_morning_training_readiness` still returns `data[0]`** when no entry matches the wake
+context — byte-for-byte identical in 0.3.20, at `api/metrics.py:270` rather than
+`__init__.py:2102`. So session B's decision not to call it holds for the version that now ships,
+and only the citation was version-specific.
+
+**The CI gap is closed, not just the lock.** A new `Tests (shipped lock)` job installs
+`requirements.lock`, then the package with `--no-deps`, then the test runner **with the lock as a
+constraints file** — `pip install -c requirements.lock pytest` — so if pytest ever demands a
+version of a locked package, pip fails loudly instead of quietly upgrading it and testing
+something else again. `build-and-push` now needs `[test, test-lock, audit]`: the publish gate
+covers the dependency set that actually ships.
+
+**Two jobs, two different claims, both wanted.** `test` proves the code against what a *fresh
+install today* would resolve, which is the early warning for the next upstream release.
+`test-lock` proves it against what the container will contain. Neither subsumes the other, and the
+old arrangement had only the first while believing it had both.
+
+**Also in this commit, from the build list's item 5:** the `garmin_workouts` description. The text
+reported stale on 2026-10-31 — targets refused, strength unratified — was never in the code and is
+still not; that remains the schema-cache lead. What *was* genuinely stale is what nobody had
+named: the action field said "Only 'preview' exists" and the docstring said "There is no create or
+schedule action yet", both written before `garmin_workout_create` and `garmin_workout_unschedule`
+shipped as siblings. It now **names the two sibling tools** and says why the split exists, so an
+agent reading the preview tool can find the write path. Item 5's other half,
+`remaining_on_date`, was already fixed in 034bacf.
+
+Tests: **815, unchanged** — and that is the finding, not a non-event: the same 815 pass on
+0.3.11 and on 0.3.20. Build: passed, image probed, now shipping 0.3.20.
+
+## 2026-11-04 (SCOPE §5) — the zones tool is ratified, and the deviation did not wait a version
+
+Mahi ratified the `garmin_zones` paragraph in-session. §5 now carries the tool in its table, a
+fourth note under it explaining why zones are **not** metric rows, and a decision-log row — three
+places, because the thing that went wrong last time was a decision recorded in one place and
+missing from the index.
+
+**What the note says beyond the ratified sentence**, all of it from the build rather than invented
+for the document: zones are configuration and **have no date**, while every map row carries a
+`measured_on`, and bending that field would weaken the one thing that makes a reading auditable.
+Garmin stores **floors**, so every ceiling is derived and the response says which way — the next
+zone's floor, measured, or the inferred `maxHeartRateUsed` for zone 5 only — and a ceiling that
+cannot be derived is **reported absent rather than fabricated**, because a fabricated bound
+becomes a wrong heart-rate target in v1.9. Two consequences are written down now rather than
+rediscovered: `max_hr_bpm`, `threshold_hr_bpm` and `resting_hr_used_bpm` are **health numbers in
+a payload that reads as settings**, so §9 applies to them like any other health data; and
+`trainingMethod` is returned although nothing in v1.8 reads it, because the same zone number
+means different bpm under a different method and a tidy-up must not delete it as unused.
+
+**The version header is deliberately not bumped.** It reads v1.7 and should: v1.8's scope is not
+ratified as a whole — session C is unbuilt, and §9 still owes its two rows for location and
+identity. The paragraph carries its own "ratified 2026-11-04", which is how §15.15 and §16.2
+record an in-session decision. **A version number is a claim about a whole version**, and this was
+one tool.
+
+**This closes the deviation in the same week it opened**, which is the point worth keeping: the §5
+tool split shipped in v1.5 and sat undecided until 2026-11-02 — a whole version where the code and
+the document disagreed. `garmin_zones` shipped on 2026-11-04 and §5 says so on 2026-11-04.
+
+**Also done: the stale remote branch is deleted.** Mahi merged PR #49 mid-session, and
+`delete_branch_on_merge` removed `feature/v1.8-b-readiness-and-zones` — so the next push
+**recreated** it, which is the trap this file has warned about since the merge-crossing note was
+written. Caught before a PR was opened against the wrong name: the work moved to
+`feature/v1.8-a-activities-and-lock` (PR #50) and the recreated branch is gone from the remote and
+locally. PR #49's record is intact, as a merged PR's is after its head branch goes.
+
+**Still untouched, still wrong:** SCOPE §11 and §14 say the exercise catalogue holds "~2,550"
+entries. It is **1527**, measured under both 0.3.11 and 0.3.20, which is what `compose.py` and §5
+have said all along. Two numbers for one catalogue in one document, now in its third session of
+being noticed and not fixed.
+
+Tests: **815, unchanged** — documentation only. Build: not run (no code changed).
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **789 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **815 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -3503,12 +3702,33 @@ the morning snapshot exists looks exactly like the bug.
 - Reporting rule: the full response, verbatim, every field. The last three defects were all found
   by quoting output rather than summarising it.
 
-**B. Step 0b — the probe candidates session A needs.** CLI-only, prints no value, makes no tool
-reachable. Candidates for `get_activity`, `get_activity_splits`, `get_activity_hr_in_timezones`,
-`get_hrv_data_range`, `get_rhr_daily`, `get_sleep_daily` and `get_weekly_stress`; plus a way to
-aim the activities candidate at a **running** activity, which is the only thing that settles
-whether a GPS run's list row carries coordinates. Step 0's activity was indoors, so its lack of
-coordinate fields proves nothing.
+**~~B. Step 0b — the probe candidates session A needs.~~ BUILT 2026-11-04, not yet run.** All
+seven candidates exist, plus `--activity-id` and two new call shapes. **It needs a RUNNING
+activity's id**, which is what A1's list is for:
+
+```
+garmin-mcp probe --explain activity_detail,activity_splits,activity_hr_zones --activity-id <id>
+garmin-mcp probe --explain hrv_range,sleep_daily,rhr_daily,weekly_stress
+```
+
+The first settles **which call carries per-lap HR** (session A2 cannot be designed without it) and
+**whether a GPS run's row carries coordinates** — step 0's activity was indoors, so its lack of
+coordinate fields proves nothing. The second is session C's input and costs one extra run.
+
+**C. The live check for session A.** List last week and compare against Connect: the five
+sessions, their names, and which carry a `workout_id`. Two readings to take while there:
+
+- **One run's `distance_m` and `duration_s` against what Connect shows**, which turns the unit
+  from inferred into measured. Step 0 printed `float`, which is a type and not a value.
+- **An activity that did NOT come from a scheduled workout** — an unplanned run or a class — to
+  see whether `workout_id` is absent or zero.
+
+**D. A decision, not a check: the request budget under-counts a paginated read.**
+`get_activities_by_date` pages inside one call, so the limiter takes one token for several
+requests and the pagination is past the only doorway there is. Shipped mitigations are a 31-day
+cap and a `requests_basis` that says the count is derived. The alternative is our own pagination
+with `get_activities(start, limit)`, which cannot filter by date and would walk backwards through
+history to reach an old window. Worth a decision rather than a drive-by fix.
 
 
 **~~0. Push the branch and open its PR.~~ DONE** — the decline was deliberate,

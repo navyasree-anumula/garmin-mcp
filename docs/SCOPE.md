@@ -76,6 +76,7 @@ check. §7a's prose is knowingly wrong for a third version and for no more than 
 | Targets | **Explicit pace ranges only.** Zone-based targets stay refused | v1.6 |
 | Reps and weight | **Not built.** Strength is prescribed by time in v1.6 | v1.6 |
 | Undoing a schedule | **Look the scheduled id up on Garmin's calendar at undo time.** No ledger, no second store | v1.6, ships v1.7 |
+| Heart-rate zones | **A tool of their own, not metric rows** — configuration has no date, and the map's every row carries one | v1.8 |
 
 ---
 
@@ -277,11 +278,12 @@ composition above per-run detail.
 | `garmin_training` | training status and its phrase, acute/chronic load and ratio, aerobic–anaerobic balance against Garmin's targets, VO2 max, race predictions, threshold, zones |
 | `garmin_activities` | list, **and per-run detail: splits, pace, cadence, HR through the run** — date-windowed |
 | `garmin_health(metric, range)` | sleep, HRV, resting HR, stress, body battery, respiration, skin temperature |
+| `garmin_zones` | the configured heart-rate zones, with max and threshold HR (v1.8) |
 | `garmin_workouts` | list / get / create / update / schedule / unschedule |
 | `garmin_body` | weight, composition |
 | `garmin_auth_status` | token state and expiry, and the tool set actually in force |
 
-Three notes on that table, each from measurement rather than preference:
+Four notes on that table, each from measurement rather than preference:
 
 - **`garmin_activities` per-run detail is unverified as of v1.4.** The probe has only ever
   called the activity *list*. Every per-run endpoint — detail, splits, typed splits, HR in
@@ -291,6 +293,21 @@ Three notes on that table, each from measurement rather than preference:
   from `training_status`; readiness and recovery time from `training_readiness`. Splitting
   them per endpoint would decode the same payload twice and leak the source layout into the
   tool names.
+- **`garmin_zones` is a tool, not metric rows — ratified 2026-11-04.** Heart-rate zones are
+  **configuration and have no date**, while every row in the metric map carries a `measured_on`.
+  Bending that field to hold a profile would weaken the one thing that makes every reading
+  auditable, so the zones get their own read tool: one request, every profile Garmin returns,
+  with max and threshold HR out of the same payload — which is why `get_lactate_threshold` and
+  `get_user_profile` are not needed. **Garmin stores floors**, so each ceiling is derived and the
+  response says which way: the next zone's floor (measured), or, for zone 5 only, the inferred
+  `maxHeartRateUsed`. A ceiling that cannot be derived is reported absent rather than
+  fabricated, because a fabricated bound becomes a wrong heart-rate target in v1.9 and a wrong
+  number on a watch. Two further consequences worth stating here rather than discovering later:
+  `max_hr_bpm`, `threshold_hr_bpm` and `resting_hr_used_bpm` are **health numbers inside a
+  payload that reads as settings** (§9 applies to them like any other health data), and
+  `trainingMethod` is returned although nothing in v1.8 reads it — the same zone number means
+  different bpm under percentage-of-max than under percentage-of-threshold, so v1.9's converter
+  is wrong without it and a tidy-up must not delete it as unused.
 - **SpO2 is deliberately absent from `garmin_health`'s metric list, and the tool still
   answers about it.** This watch measures none — `get_spo2_data` returns a full envelope of
   window timestamps with every reading null, confirmed 2026-10-09. "This watch does not
