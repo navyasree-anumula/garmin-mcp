@@ -3559,6 +3559,73 @@ measured metric account setting rather than on a reading. The fields say `distan
 Tests: 789 → **815** (+26). Build: passed, and capability-probed inside the image — nine tools,
 `garmin_activities` read-only, the 31-day cap, and all seven new candidates present.
 
+## 2026-11-04 (the lock) — nine releases behind, and CI had been testing the bump all along
+
+**The lock pinned `garminconnect==0.3.11` while PyPI was at 0.3.20, and `pyproject.toml` allows
+`>=0.3.11,<0.4`.** So the `Tests` job — which installs `pip install -e ".[dev]"`, a **fresh
+resolve of the ranges** — has been running the suite against **0.3.20**, while the image installs
+the lock and shipped **0.3.11**. Every green tick this repo has ever shown was evidence about a
+dependency set the container did not contain. Found by comparing the lock against PyPI rather than
+by anything failing, which is the point: nothing could fail, because nothing was looking.
+
+**§2's reasoning was being quietly defeated.** The floor-and-ceiling pin exists because *"the
+floor gets us the current Cloudflare handling"* — and the lock pinned the floor **exactly**, so the
+image had August's handling, not the current one, against §9's own top row (*"Garmin breaks auth
+again — High… track releases"*). The CI divergence was **masking** the staleness: green on 0.3.20
+meant nothing ever complained about 0.3.11.
+
+**The bump, measured rather than hoped.** A throwaway runtime-only venv resolved the ranges fresh
+and `pip freeze` produced the new lock — **17 packages moved**, the notable ones being
+`garminconnect` 0.3.11 → **0.3.20**, `curl_cffi` 0.16.2 → 0.17.0, `pydantic` 2.13.5 → 2.14.2,
+`starlette` 1.6.0 → 1.10.0, `uvicorn` 0.52.4 → 0.54.0. `mcp` stays at **2.2.0** because it is
+pinned with `==` and is the one pin this project treats as fragile.
+
+Then the whole suite against that lock in a clean venv: **815 passed, 2 skipped** — the same
+result as on 0.3.11. `pip-audit -r requirements.lock --strict`: **no known vulnerabilities.**
+Four structural checks beyond the suite, because the tests mostly drive a `FakeApi` and would not
+notice a moved surface:
+
+- **0.3.20 restructured the package** into `api/` and `client/` *packages* (0.3.11 had a flat
+  `__init__.py` and a `client.py`). §11 confines all of it to `source/`, so the blast radius was
+  contained — but every method had to be checked, and **all fifteen we call still exist**, with
+  `Garmin` and the exception names still re-exported from `__init__`.
+- **The exercise catalogue is still 1527 entries** under 0.3.20, so `compose.py` and §5 remain
+  right and SCOPE §11/§14's "~2,550" remains wrong in two places.
+- **The workout enums are unchanged** — `PACE_ZONE=6`, `HEART_RATE_ZONE=4`, `LAP_BUTTON=1`, and
+  `WEIGHT_UNIT_KILOGRAM` with its grams factor — so v1.9's HR-target plan and the deferred
+  reps-and-weight trap both still stand on the numbers they were written against.
+- **The image was built and capability-probed**: it reports `garminconnect 0.3.20`, nine tools,
+  and `readiness`' decoder reading `morning_snapshot`.
+
+**`get_morning_training_readiness` still returns `data[0]`** when no entry matches the wake
+context — byte-for-byte identical in 0.3.20, at `api/metrics.py:270` rather than
+`__init__.py:2102`. So session B's decision not to call it holds for the version that now ships,
+and only the citation was version-specific.
+
+**The CI gap is closed, not just the lock.** A new `Tests (shipped lock)` job installs
+`requirements.lock`, then the package with `--no-deps`, then the test runner **with the lock as a
+constraints file** — `pip install -c requirements.lock pytest` — so if pytest ever demands a
+version of a locked package, pip fails loudly instead of quietly upgrading it and testing
+something else again. `build-and-push` now needs `[test, test-lock, audit]`: the publish gate
+covers the dependency set that actually ships.
+
+**Two jobs, two different claims, both wanted.** `test` proves the code against what a *fresh
+install today* would resolve, which is the early warning for the next upstream release.
+`test-lock` proves it against what the container will contain. Neither subsumes the other, and the
+old arrangement had only the first while believing it had both.
+
+**Also in this commit, from the build list's item 5:** the `garmin_workouts` description. The text
+reported stale on 2026-10-31 — targets refused, strength unratified — was never in the code and is
+still not; that remains the schema-cache lead. What *was* genuinely stale is what nobody had
+named: the action field said "Only 'preview' exists" and the docstring said "There is no create or
+schedule action yet", both written before `garmin_workout_create` and `garmin_workout_unschedule`
+shipped as siblings. It now **names the two sibling tools** and says why the split exists, so an
+agent reading the preview tool can find the write path. Item 5's other half,
+`remaining_on_date`, was already fixed in 034bacf.
+
+Tests: **815, unchanged** — and that is the finding, not a non-event: the same 815 pass on
+0.3.11 and on 0.3.20. Build: passed, image probed, now shipping 0.3.20.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at

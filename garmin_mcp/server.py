@@ -1012,7 +1012,14 @@ def _summarise(steps: list[WorkoutStep]) -> list[str]:
 def garmin_workouts(
     action: Annotated[
         WorkoutAction,
-        Field(description="Only 'preview' exists. It sends nothing to Garmin."),
+        Field(
+            description=(
+                "Only 'preview' exists on THIS tool, and it sends nothing to "
+                "Garmin. Writing is a different tool: `garmin_workout_create` "
+                "uploads and schedules an approved preview, and "
+                "`garmin_workout_unschedule` removes one from a date."
+            )
+        ),
     ],
     name: Annotated[str, Field(description="What to call this session.")],
     steps: Annotated[
@@ -1047,8 +1054,16 @@ def garmin_workouts(
     """Compose a session and show what would be sent to Garmin.
 
     **Sends nothing.** A preview makes zero Garmin requests, so it cannot fail
-    on a rate limit and costs nothing to run twice. There is no create or
-    schedule action yet; this is the structure that one would carry.
+    on a rate limit and costs nothing to run twice.
+
+    **Creating and scheduling are separate tools, and that is deliberate.**
+    Hand an approved preview to `garmin_workout_create` to upload and schedule
+    it, and use `garmin_workout_unschedule(name, date)` to take one off a date.
+    They are split because a tool's annotations are per tool: this one is
+    honestly read-only, and only the unschedule is honestly destructive, so a
+    client that gates destructive tools puts the confirmation in front of the
+    one call that removes something rather than in front of the preview a human
+    approves from (docs/SCOPE.md §5).
 
     **This tool does not design the session.** It composes the steps it is
     given. Which distance, how many reps, how long the recovery, whether today
