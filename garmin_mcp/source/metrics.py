@@ -136,39 +136,89 @@ METRICS: tuple[Metric, ...] = (
             "`mostRecentVO2Max.cycling` is null on this account: running only."
         ),
     ),
-    # ---- get_training_readiness: list(4) a day ----------------------------
+    # ---- get_training_readiness: one payload, four rows -------------------
+    # The root was list(4) in 5b and list(1) on 2026-11-04, so "four a day" is a
+    # property of one response. Selection is therefore by timestamp -- whose
+    # type is `str`, measured 2026-11-04 by `probe --explain`, and which
+    # `latest_by_timestamp` required to be numeric until that reading. That one
+    # type assumption is why both rows below reported `no_data` for weeks
+    # against a payload holding the data, and why `verified` was pointing at the
+    # wrong half of the row: the PATHS were right all along.
     Metric(
         key="readiness",
         group="training",
         source_method="get_training_readiness",
-        decoder="latest_timestamp",
+        decoder="morning_snapshot",
         path="score",
         unit="index, scale unconfirmed",
-        verified=False,
+        verified=True,
         provenance=PROV_MEASURED,
         note=(
-            "The root being list(4) for one day, selected by `timestamp` rather "
-            "than by index, is recorded (5b). The score's own field name and its "
-            "scale are NOT: both are inferred and 5c settles them. The unit "
-            "string says so rather than asserting 0-100, because §5 forbids a "
-            "bare number and a confidently wrong scale is worse than an honest "
-            "one."
+            "`score` is recorded (probe --explain, 2026-11-04). The SCALE is "
+            "still not: the unit string says so rather than asserting 0-100, "
+            "because a confidently wrong scale is worse than an honest one, and "
+            "only the Connect app settles a value. This row reads the MORNING "
+            "snapshot (v1.8 decision 4) and is `no_data` on a day that holds "
+            "only later ones -- ask for `readiness_latest` out of the same "
+            "payload to tell that apart from a day with no snapshot at all. "
+            "Prefer `readiness_level`, which carries Garmin's own word and "
+            "needs no scale."
+        ),
+    ),
+    Metric(
+        key="readiness_level",
+        group="training",
+        source_method="get_training_readiness",
+        decoder="morning_snapshot",
+        path="level",
+        kind=KIND_PHRASE,
+        verified=True,
+        provenance=PROV_MEASURED,
+        note=(
+            "Garmin's own word for readiness, recorded (probe --explain, "
+            "2026-11-04) in the same payload as the score, so it costs no extra "
+            "request. §5 prefers a sourced phrase to a number whose scale "
+            "cannot be sourced, which is what makes the score's unconfirmed "
+            "scale non-blocking. `feedbackShort` and `feedbackLong` are in the "
+            "payload too and are deliberately NOT rows: whether they are "
+            "sentences or message keys is unmeasured, and `hrv_feedback` is the "
+            "standing example of that trap."
         ),
     ),
     Metric(
         key="recovery_time",
         group="training",
         source_method="get_training_readiness",
-        decoder="latest_timestamp",
+        decoder="morning_snapshot",
         path="recoveryTime",
         unit="hours (inferred)",
-        verified=False,
+        verified=True,
         provenance=PROV_MEASURED,
         note=(
-            "Same payload as readiness, so it costs no extra request. Neither "
-            "the field name nor the unit is recorded anywhere -- 5c confirms "
-            "both. Flagged rather than omitted because it is the second half of "
-            "the question readiness answers."
+            "`recoveryTime` is recorded (probe --explain, 2026-11-04) as an "
+            "int, in the same payload as readiness, so it costs no extra "
+            "request. The UNIT is still inferred -- hours rather than minutes -- "
+            "and only the Connect app settles it. Reads the morning snapshot, "
+            "like readiness."
+        ),
+    ),
+    Metric(
+        key="readiness_latest",
+        group="training",
+        source_method="get_training_readiness",
+        decoder="latest_timestamp",
+        path="score",
+        unit="index, scale unconfirmed",
+        verified=True,
+        provenance=PROV_MEASURED,
+        note=(
+            "The most recent snapshot of the day rather than the morning one, "
+            "out of the SAME payload and the same request. It exists so that a "
+            "`no_data` from `readiness` can be read: both empty means the day "
+            "has no snapshot, while this one answering means the day has no "
+            "MORNING snapshot and decision 4's source is the thing to revisit. "
+            "§5 forbids a silent fallback between two sources, so this is a row "
+            "asked for by name instead."
         ),
     ),
     # ---- get_race_predictions: no arguments -------------------------------

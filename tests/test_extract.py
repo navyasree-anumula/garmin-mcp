@@ -10,6 +10,7 @@ from garmin_mcp.source.extract import (
     MISSING,
     at_path,
     latest_by_timestamp,
+    morning_snapshot,
     match_calendar_date,
     select_primary_device,
 )
@@ -112,6 +113,92 @@ class TestLatestByTimestamp:
 
     def test_no_entry_has_a_timestamp(self):
         assert latest_by_timestamp([{"score": 1}]) is MISSING
+
+    # ---- the real type, measured 2026-11-04 ------------------------------
+    #
+    # Everything above this line uses a NUMERIC timestamp, and every one of
+    # those fixtures was invented. `probe --explain training_readiness` on
+    # 2026-11-04 shows `timestamp: str` -- so the five tests above passed for
+    # weeks over a decoder that discarded every real snapshot. A test written
+    # from the same assumption as the code cannot catch the assumption, and
+    # these are the tests that would have.
+
+    def test_picks_the_newest_string_timestamp(self):
+        """ISO-8601, which is what Garmin actually sends."""
+        snaps = [
+            {"timestamp": "2026-11-03T06:12:00.0", "score": 40},
+            {"timestamp": "2026-11-03T21:45:00.0", "score": 71},
+            {"timestamp": "2026-11-03T13:30:00.0", "score": 55},
+        ]
+        assert latest_by_timestamp(snaps)["score"] == 71
+
+    def test_mixed_timestamp_types_are_missing(self):
+        """`max()` over str and int is a TypeError, and coercing one would pick
+        an arbitrary winner from a list whose order means nothing."""
+        snaps = [
+            {"timestamp": "2026-11-03T06:12:00.0", "score": 40},
+            {"timestamp": 900, "score": 71},
+        ]
+        assert latest_by_timestamp(snaps) is MISSING
+
+    def test_a_boolean_timestamp_is_not_a_number(self):
+        """`isinstance(True, int)` is True in Python, so a bool would compare as
+        1 -- older than every real timestamp, losing a max silently."""
+        snaps = [{"timestamp": True, "score": 40}, {"timestamp": "x", "score": 7}]
+        assert latest_by_timestamp(snaps) is MISSING
+
+    def test_a_none_timestamp_is_skipped_not_compared(self):
+        snaps = [
+            {"timestamp": None, "score": 40},
+            {"timestamp": "2026-11-03T06:12:00.0", "score": 71},
+        ]
+        assert latest_by_timestamp(snaps)["score"] == 71
+
+
+class TestMorningSnapshot:
+    """v1.8 decision 4: the post-wake snapshot is the source that wins.
+
+    Deliberately NOT `api.get_morning_training_readiness`, which returns
+    `data[0]` when nothing matches -- a silent fallback, by position, which §5
+    forbids and which this class asserts we do not do.
+    """
+
+    WAKEUP = "AFTER_WAKEUP_RESET"
+
+    def test_picks_the_wakeup_entry_not_the_newest(self):
+        snaps = [
+            {"timestamp": "2026-11-03T06:12:00.0", "inputContext": self.WAKEUP,
+             "score": 62},
+            {"timestamp": "2026-11-03T21:45:00.0", "inputContext": "MANUAL",
+             "score": 88},
+        ]
+        assert morning_snapshot(snaps)["score"] == 62
+
+    def test_is_missing_when_no_entry_is_the_morning_one(self):
+        """The library would return the first entry here. We return nothing,
+        and `readiness_latest` is the named alternative."""
+        snaps = [
+            {"timestamp": "2026-11-03T21:45:00.0", "inputContext": "MANUAL",
+             "score": 88},
+        ]
+        assert morning_snapshot(snaps) is MISSING
+
+    def test_is_missing_when_the_context_key_is_absent(self):
+        assert morning_snapshot([{"timestamp": "2026-11-03T06:12:00.0"}]) is MISSING
+
+    def test_picks_the_latest_of_several_mornings(self):
+        """A device reset or a re-wear can leave two. By timestamp, not by
+        position -- the rule the whole module is built on."""
+        snaps = [
+            {"timestamp": "2026-11-03T06:12:00.0", "inputContext": self.WAKEUP,
+             "score": 62},
+            {"timestamp": "2026-11-03T08:30:00.0", "inputContext": self.WAKEUP,
+             "score": 70},
+        ]
+        assert morning_snapshot(snaps)["score"] == 70
+
+    def test_a_non_list_is_missing(self):
+        assert morning_snapshot({"inputContext": "AFTER_WAKEUP_RESET"}) is MISSING
 
 
 class TestMatchCalendarDate:

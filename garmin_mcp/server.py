@@ -21,6 +21,7 @@ from .source import compose as source_compose
 from .source import metrics as metric_map
 from .source import write as source_write
 from .source import readings as source_readings
+from .source import zones as source_zones
 from .source.errors import GarminSourceError
 
 logger = logging.getLogger(__name__)
@@ -341,6 +342,116 @@ def garmin_health(
     measured_on, readings = _read_group("health", list(metrics), date)
     return HealthReadings(
         date=measured_on, date_basis=DATE_BASIS, readings=readings
+    )
+
+
+# --------------------------------------------------------------------------
+# Heart-rate zones -- configuration, not a measurement (docs/SCOPE.md §5, v1.8)
+# --------------------------------------------------------------------------
+
+
+class HeartRateZone(BaseModel):
+    zone: int = Field(description="Zone number, 1 to 5.")
+    floor_bpm: int = Field(description="The lowest heart rate in this zone, measured.")
+    ceiling_bpm: int | None = Field(
+        description=(
+            "The highest heart rate in this zone, DERIVED -- Garmin stores "
+            "floors only. None means it could not be derived, and "
+            "`ceiling_basis` says why."
+        )
+    )
+    ceiling_basis: str = Field(
+        description="Where the ceiling came from, including when it is an inference."
+    )
+
+
+class ZoneProfile(BaseModel):
+    sport: str = Field(description="Garmin's sport key for this profile.")
+    training_method: str = Field(
+        description=(
+            "How Garmin computed these zones -- percentage of max, of "
+            "threshold, or of reserve. The same zone number means different "
+            "bpm under different methods."
+        )
+    )
+    max_hr_bpm: int | None = Field(description="Max heart rate Garmin used, bpm.")
+    threshold_hr_bpm: int | None = Field(
+        description="Lactate threshold heart rate Garmin used, bpm."
+    )
+    resting_hr_used_bpm: int | None = Field(
+        description="Resting heart rate Garmin used for these zones, bpm."
+    )
+    zones: list[HeartRateZone]
+    change_state: str = Field(description="Garmin's own change-state string.")
+
+
+class ZoneReadings(BaseModel):
+    profiles: list[ZoneProfile]
+    requests_made: int = Field(description="Garmin requests this call made.")
+    note: str = Field(description="What these numbers are and are not.")
+
+
+@mcp.tool(
+    title="Garmin heart rate zones",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True
+    ),
+)
+def garmin_zones() -> ZoneReadings:
+    """Read the heart-rate zones this account has configured.
+
+    **Configuration, not a measurement.** These numbers have no date: they are
+    how the watch is set up, not something it recorded on a day. That is why
+    they are not metrics in `garmin_training`.
+
+    **Garmin stores zone FLOORS, so every ceiling here is derived** and each
+    zone says which way: the next zone's floor (measured), or -- for zone 5
+    only -- `maxHeartRateUsed`, which is an **inference**, because no field
+    carries the top of the top zone. A zone whose ceiling could not be derived
+    reports `None` and says so rather than guessing, because a fabricated bound
+    becomes a wrong target on a watch.
+
+    **It reports every profile Garmin returns and assumes nothing about their
+    order.** On 2026-11-04 this account returned exactly one, and which sport it
+    belongs to is in `sport` -- read it rather than taking the first row as the
+    one you wanted.
+
+    `max_hr_bpm`, `threshold_hr_bpm` and `resting_hr_used_bpm` are health
+    numbers sitting in a payload that reads as settings; they travel like any
+    other health data (docs/SCOPE.md §9).
+
+    **Which zone to run in is not here.** That needs how the legs feel, how much
+    time there is and what the session is for, none of which any Garmin endpoint
+    holds, so it belongs in the conversation (docs/SCOPE.md §1).
+    """
+    try:
+        reading = source_zones.read_zones()
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return ZoneReadings(
+        profiles=[
+            ZoneProfile(
+                sport=p.sport,
+                training_method=p.training_method,
+                max_hr_bpm=p.max_hr_bpm,
+                threshold_hr_bpm=p.threshold_hr_bpm,
+                resting_hr_used_bpm=p.resting_hr_used_bpm,
+                zones=[
+                    HeartRateZone(
+                        zone=z.zone,
+                        floor_bpm=z.floor_bpm,
+                        ceiling_bpm=z.ceiling_bpm,
+                        ceiling_basis=z.ceiling_basis,
+                    )
+                    for z in p.zones
+                ],
+                change_state=p.change_state,
+            )
+            for p in reading.profiles
+        ],
+        requests_made=reading.requests_made,
+        note=reading.note,
     )
 
 

@@ -51,11 +51,56 @@ TRAINING_STATUS = {
     },
 }
 
-# recorded: 5a/5b probe sessions -- the list(4) of snapshots
+# This fixture was labelled `# recorded: 5a/5b probe sessions` while carrying
+# INTEGER timestamps, and that one wrong type is what hid the readiness bug for
+# weeks: the decoder demanded a number, the fixture supplied one, and five tests
+# agreed with the code about a shape neither had ever seen.
+#
+# The root was list(4) in 5b and list(1) on 2026-11-04, so the count is a
+# property of one response. Three here, one of them the morning snapshot,
+# because telling those apart is what the decoders are for.
+#
+# recorded in part: probe --explain training_readiness, 2026-11-04 -- key names
+# and types measured (`timestamp`, `inputContext`, `level` are `str`; `score`
+# and `recoveryTime` are `int`); values invented.
 READINESS = [
-    {"timestamp": 100, "score": 40, "recoveryTime": 30},
-    {"timestamp": 900, "score": 71, "recoveryTime": 6},
-    {"timestamp": 500, "score": 55, "recoveryTime": 18},
+    {
+        "timestamp": "2026-11-03T06:12:00.0",
+        "inputContext": "AFTER_WAKEUP_RESET",
+        "level": "HIGH",
+        "score": 62,
+        "recoveryTime": 18,
+    },
+    {
+        "timestamp": "2026-11-03T21:45:00.0",
+        "inputContext": "MANUAL",
+        "level": "LOW",
+        "score": 88,
+        "recoveryTime": 6,
+    },
+    {
+        "timestamp": "2026-11-03T13:30:00.0",
+        "inputContext": "MANUAL",
+        "level": "MODERATE",
+        "score": 55,
+        "recoveryTime": 30,
+    },
+]
+
+# The same payload with no post-wake entry -- the state that makes `readiness`
+# read `no_data` while `readiness_latest` still answers.
+#
+# recorded in part: probe --explain training_readiness, 2026-11-04 -- same
+# measured key names and types as READINESS above; values invented, and the
+# ABSENCE of a morning entry is our construction, not an observation.
+READINESS_NO_MORNING = [
+    {
+        "timestamp": "2026-11-03T21:45:00.0",
+        "inputContext": "MANUAL",
+        "level": "LOW",
+        "score": 88,
+        "recoveryTime": 6,
+    },
 ]
 
 # recorded: 5a/5b probe sessions
@@ -135,14 +180,59 @@ def test_the_secondary_device_is_not_read(api):
     assert _by_metric(result)["training_status"].value != "DETRAINING_3"
 
 
-def test_readiness_comes_from_the_newest_snapshot(api):
-    """list(4) for one day, selected by timestamp rather than by index."""
+def test_readiness_comes_from_the_morning_snapshot(api):
+    """v1.8 decision 4. NOT the newest -- the newest here scores 88, and taking
+    it would be the old behaviour passing for the new one."""
     result = garmin_training(["readiness", "recovery_time"], "2026-10-15")
     readings = _by_metric(result)
 
-    assert readings["readiness"].value == 71
-    assert readings["recovery_time"].value == 6
+    assert readings["readiness"].value == 62
+    assert readings["recovery_time"].value == 18
     assert len(api.calls) == 1, "both come from one payload"
+
+
+def test_a_string_timestamp_is_what_garmin_actually_sends(api):
+    """The regression test for the whole session. Before the fix this payload
+    produced `no_data` for both rows while holding both values."""
+    result = garmin_training(["readiness", "readiness_latest"], "2026-10-15")
+    readings = _by_metric(result)
+
+    assert readings["readiness"].verdict == verdicts.PRESENT
+    assert readings["readiness_latest"].verdict == verdicts.PRESENT
+
+
+def test_readiness_level_is_garmins_own_phrase(api):
+    """A phrase row has no unit, and the score's unconfirmed scale is why this
+    row exists."""
+    result = garmin_training(["readiness_level"], "2026-10-15")
+    reading = _by_metric(result)["readiness_level"]
+
+    assert reading.value == "HIGH"
+    assert reading.unit == ""
+
+
+def test_readiness_latest_is_the_newest_not_the_morning_one(api):
+    """Two rows, one payload, two different snapshots -- which is the point:
+    they disagree on purpose."""
+    result = garmin_training(["readiness", "readiness_latest"], "2026-10-15")
+    readings = _by_metric(result)
+
+    assert readings["readiness"].value == 62
+    assert readings["readiness_latest"].value == 88
+    assert len(api.calls) == 1
+
+
+def test_no_morning_snapshot_is_no_data_while_latest_still_answers(api):
+    """The state the live check is most likely to meet, and the reason
+    `readiness_latest` ships: `no_data` from `readiness` alone cannot tell "the
+    day has no reading" from "the day has no MORNING reading"."""
+    api.payloads["get_training_readiness"] = READINESS_NO_MORNING
+
+    result = garmin_training(["readiness", "readiness_latest"], "2026-10-15")
+    readings = _by_metric(result)
+
+    assert readings["readiness"].verdict == verdicts.NO_DATA
+    assert readings["readiness_latest"].value == 88
 
 
 def test_race_predictions_are_four_metrics_from_one_request(api):
