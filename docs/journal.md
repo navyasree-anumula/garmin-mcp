@@ -3626,6 +3626,49 @@ agent reading the preview tool can find the write path. Item 5's other half,
 Tests: **815, unchanged** — and that is the finding, not a non-event: the same 815 pass on
 0.3.11 and on 0.3.20. Build: passed, image probed, now shipping 0.3.20.
 
+## 2026-11-04 (SCOPE §5) — the zones tool is ratified, and the deviation did not wait a version
+
+Mahi ratified the `garmin_zones` paragraph in-session. §5 now carries the tool in its table, a
+fourth note under it explaining why zones are **not** metric rows, and a decision-log row — three
+places, because the thing that went wrong last time was a decision recorded in one place and
+missing from the index.
+
+**What the note says beyond the ratified sentence**, all of it from the build rather than invented
+for the document: zones are configuration and **have no date**, while every map row carries a
+`measured_on`, and bending that field would weaken the one thing that makes a reading auditable.
+Garmin stores **floors**, so every ceiling is derived and the response says which way — the next
+zone's floor, measured, or the inferred `maxHeartRateUsed` for zone 5 only — and a ceiling that
+cannot be derived is **reported absent rather than fabricated**, because a fabricated bound
+becomes a wrong heart-rate target in v1.9. Two consequences are written down now rather than
+rediscovered: `max_hr_bpm`, `threshold_hr_bpm` and `resting_hr_used_bpm` are **health numbers in
+a payload that reads as settings**, so §9 applies to them like any other health data; and
+`trainingMethod` is returned although nothing in v1.8 reads it, because the same zone number
+means different bpm under a different method and a tidy-up must not delete it as unused.
+
+**The version header is deliberately not bumped.** It reads v1.7 and should: v1.8's scope is not
+ratified as a whole — session C is unbuilt, and §9 still owes its two rows for location and
+identity. The paragraph carries its own "ratified 2026-11-04", which is how §15.15 and §16.2
+record an in-session decision. **A version number is a claim about a whole version**, and this was
+one tool.
+
+**This closes the deviation in the same week it opened**, which is the point worth keeping: the §5
+tool split shipped in v1.5 and sat undecided until 2026-11-02 — a whole version where the code and
+the document disagreed. `garmin_zones` shipped on 2026-11-04 and §5 says so on 2026-11-04.
+
+**Also done: the stale remote branch is deleted.** Mahi merged PR #49 mid-session, and
+`delete_branch_on_merge` removed `feature/v1.8-b-readiness-and-zones` — so the next push
+**recreated** it, which is the trap this file has warned about since the merge-crossing note was
+written. Caught before a PR was opened against the wrong name: the work moved to
+`feature/v1.8-a-activities-and-lock` (PR #50) and the recreated branch is gone from the remote and
+locally. PR #49's record is intact, as a merged PR's is after its head branch goes.
+
+**Still untouched, still wrong:** SCOPE §11 and §14 say the exercise catalogue holds "~2,550"
+entries. It is **1527**, measured under both 0.3.11 and 0.3.20, which is what `compose.py` and §5
+have said all along. Two numbers for one catalogue in one document, now in its third session of
+being noticed and not fixed.
+
+Tests: **815, unchanged** — documentation only. Build: not run (no code changed).
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
