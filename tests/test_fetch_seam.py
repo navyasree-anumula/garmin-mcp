@@ -156,6 +156,11 @@ ALLOWED = {
     "source/fetch.py",
     "source/probe.py",
     "source/write.py",
+    # v1.8-B: heart-rate zones are configuration, not a metric row -- no date,
+    # five bounds per sport profile, and nothing for the metric seam to
+    # coalesce them with. Added deliberately, with the reason in
+    # `source/zones.py`'s own docstring.
+    "source/zones.py",
     "cli.py",
 }
 

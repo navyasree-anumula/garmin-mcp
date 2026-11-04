@@ -9,7 +9,9 @@ None of them is defensive programming in the abstract:
 - `select_primary_device` -- `training_status` keys its DTOs by **device id**:
   `mostRecentTrainingStatus.latestTrainingStatusData.3612870660`. The key is
   data, not a field name.
-- `latest_by_timestamp` -- `training_readiness` returns `list(4)` for one day.
+- `latest_by_timestamp` -- `training_readiness` returned `list(4)` for one day in 5b
+  and `list(1)` on 2026-11-04, which is why selection is by timestamp and not by
+  position. Its timestamp is a **`str`**, measured 2026-11-04.
 - `match_calendar_date` -- resting HR's `DATE` argument returns a statistics
   window, so the reading carries its own `calendarDate` and must be matched
   against the date that was asked for.
@@ -94,12 +96,48 @@ def select_primary_device(dto_map: Any) -> Any:
     return primary[0] if len(primary) == 1 else MISSING
 
 
+#: The `inputContext` value Garmin tags the post-wake snapshot with. Upstream's
+#: own morning helper filters on this string; the string is the only part of
+#: that helper this module borrows (see `morning_snapshot`).
+WAKEUP_CONTEXT = "AFTER_WAKEUP_RESET"
+
+
+def _is_number(value: Any) -> bool:
+    """A number, and **not** a bool.
+
+    `isinstance(True, int)` is `True` in Python, so a timestamp of `True` would
+    pass a naive numeric test and then compare as 1 -- older than every real
+    timestamp, which would make it win a `min` and lose a `max` silently.
+    """
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
 def latest_by_timestamp(snapshots: Any, key: str = "timestamp") -> Any:
     """The most recent of several snapshots for one day.
 
-    `training_readiness` returns four for a single date (5b). Selected by the
-    timestamp it carries, not by position: the list's order is not documented
-    anywhere, and `[0]` happening to be newest is a property of one response.
+    Selected by the timestamp it carries, not by position: the list's order is
+    not documented anywhere, and `[0]` happening to be newest is a property of
+    one response.
+
+    **The type of that timestamp is a measurement, and this function had it
+    wrong for as long as it existed.** It required `int | float`; `probe
+    --explain training_readiness` on 2026-11-04 shows `timestamp: str`. So every
+    snapshot was filtered out, this returned `MISSING`, and `readiness` and
+    `recovery_time` reported `no_data` against a payload that held the data --
+    while five tests passed, because every fixture invented a numeric timestamp
+    from the same assumption as the code. **An inferred type is exactly as
+    unsourced as an inferred field name**, and `verified=False` was pointing at
+    the wrong half of the row.
+
+    Both kinds are now accepted, **but never mixed**. A `max()` across `str` and
+    `int` is a `TypeError`, and coercing to make it work would pick an arbitrary
+    winner from a list whose order means nothing. "No data" is the honest answer
+    to a payload we cannot order.
+
+    ISO-8601 strings compare correctly under `max` only while they share one
+    format. That is why the readiness rows read `timestamp` (UTC) and never
+    `timestampLocal`: one basis, one format, and a mix refuses rather than
+    guesses.
     """
     if not isinstance(snapshots, list):
         return MISSING
@@ -107,11 +145,56 @@ def latest_by_timestamp(snapshots: Any, key: str = "timestamp") -> Any:
     stamped = [
         snap
         for snap in snapshots
-        if isinstance(snap, dict) and isinstance(snap.get(key), int | float)
+        if isinstance(snap, dict) and snap.get(key) is not None
     ]
     if not stamped:
         return MISSING
-    return max(stamped, key=lambda snap: snap[key])
+
+    stamps = [snap[key] for snap in stamped]
+    if all(_is_number(stamp) for stamp in stamps):
+        return max(stamped, key=lambda snap: snap[key])
+    if all(isinstance(stamp, str) for stamp in stamps):
+        return max(stamped, key=lambda snap: snap[key])
+    return MISSING
+
+
+def morning_snapshot(snapshots: Any, key: str = "inputContext") -> Any:
+    """The snapshot Garmin took after waking, or nothing.
+
+    SCOPE v1.8 decision 4: the morning reading is the source that wins, because
+    a check-in wants one snapshot taken at a known moment rather than whichever
+    was most recent when the question was asked.
+
+    **Deliberately not `api.get_morning_training_readiness`.** That helper
+    filters on this same string and then, when nothing matches, `return data[0]`
+    (`garminconnect/__init__.py:2102`, admitted in its own docstring). That is a
+    silent fallback, which §5 forbids -- *fallback is explicit or absent* -- and
+    it is a fallback **by position**, which is the one selection rule this
+    module exists to refuse. It also buys nothing: that helper calls
+    `get_training_readiness` internally, so reading the list ourselves is the
+    same single request.
+
+    So a day with snapshots but no morning one is `MISSING`, which surfaces as
+    `no_data`. That is indistinguishable from a day with no snapshots at all,
+    and the two want opposite responses -- which is why `readiness_latest` ships
+    beside `readiness` out of the same payload, as the named alternative rather
+    than a quiet substitution.
+    """
+    if not isinstance(snapshots, list):
+        return MISSING
+
+    morning = [
+        snap
+        for snap in snapshots
+        if isinstance(snap, dict) and snap.get(key) == WAKEUP_CONTEXT
+    ]
+    if not morning:
+        return MISSING
+
+    # More than one is possible -- a device reset, or the watch re-worn after a
+    # nap -- so the latest of the matches wins, by the rule above and not by
+    # position.
+    return latest_by_timestamp(morning)
 
 
 def match_calendar_date(rows: Any, date: str, key: str = "calendarDate") -> Any:
@@ -138,5 +221,6 @@ def match_calendar_date(rows: Any, date: str, key: str = "calendarDate") -> Any:
 DECODERS = {
     "primary_device": select_primary_device,
     "latest_timestamp": latest_by_timestamp,
+    "morning_snapshot": morning_snapshot,
     "calendar_date": match_calendar_date,
 }

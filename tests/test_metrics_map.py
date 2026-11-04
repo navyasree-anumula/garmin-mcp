@@ -153,8 +153,13 @@ def test_a_repeated_metric_does_not_repeat_its_source():
 
 
 def test_the_whole_training_group_is_three_requests():
-    """Nine metrics, three endpoints. Worth asserting as a number: it is the
-    figure §6's budget arithmetic in the read sweep is built on."""
+    """Eleven metrics, three endpoints. Worth asserting as a number: it is the
+    figure §6's budget arithmetic in the read sweep is built on.
+
+    v1.8-B added `readiness_level` and `readiness_latest` and the number did not
+    move, which is the property being protected -- all four readiness rows come
+    out of one `get_training_readiness` payload.
+    """
     calls = metrics.sources_for(metrics.keys_for_group("training"))
     assert len(calls) == 3
     assert {c.method for c in calls} == {
@@ -186,7 +191,14 @@ def test_the_training_group_excludes_health_metrics():
 
 
 def test_lactate_threshold_is_absent_until_it_is_measured():
-    """Deliberate, and asserted so it cannot be added by inference. It is not
-    among the probe's candidates, so a row for it would be invention -- and the
-    map's whole claim is that a field path is a measurement."""
+    """Deliberate, and asserted so it cannot be added by inference. The map's
+    whole claim is that a field path is a measurement.
+
+    **Measured since 2026-11-04, and still not a row here.**
+    `lactateThresholdHeartRateUsed` was found in the `heart_rate_zones` payload
+    by `probe --explain`, so the original reason -- no candidate asks for it --
+    no longer holds. The assertion stays because the new reason is stronger: it
+    is **configuration with no date**, which is why it belongs to `garmin_zones`
+    and not to a map whose every row carries a `measured_on`.
+    """
     assert "lactate_threshold" not in metrics.BY_KEY

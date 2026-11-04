@@ -3243,18 +3243,273 @@ summarised**, which is the same mechanism that caught the field-name bug an hour
 
 Tests: 739 → **752** (+13). Build: passed.
 
+## 2026-11-04 (v1.8 scoping) — the next eight weeks, and four endpoints nobody had looked for
+
+Mahi's build list for an 8-week plan built one week at a time, scoped into
+`docs/plan-2026-11-04-v1.8-candidates.md` and decided in-session. **No code.** The set is
+v1.8 = **A** past activities, **B** readiness fixed + HR zones read, **C** health trends; and
+v1.9 = **D** HR targets, **E** custom non-catalogue strength exercises. Four decisions taken at
+scoping: weekly granularity for stress, both zone and bpm HR targets with the zone converted once
+before the structure exists, morning readiness as the source that wins, and the split itself.
+
+**Reading the library first changed the plan twice.** Both items had been priced from our own
+code rather than from what `garminconnect 0.3.11` actually offers:
+
+- **The trends tool is 4 requests, not 84.** `get_hrv_data_range`, `get_rhr_daily` and
+  `get_sleep_daily` all take a date range, and the sleep one auto-chunks at Garmin's own 28-day
+  limit. Looping the per-day sources already in the map would have been 21 requests for a week and
+  84 for four weeks — **two to three minutes** at one request per two seconds, which is past the
+  patience §5 cites as the reason the probe is a CLI and not a tool. The cheap version was there
+  the whole time and nothing in this repo had looked for it.
+- **The GPS debt may be answerable by not receiving the data.**
+  `get_activity_details(id, maxchart, maxpoly)` validates `maxpoly` with
+  `_validate_non_negative_integer`, so **zero is an accepted argument**. Whether Garmin then sends
+  no polyline is unmeasured and is one of A's live checks — but §9's location row has been written
+  four times as a filtering problem, and it may be a *request* problem.
+
+**Two items on the list turned out not to be work.** `remaining_on_date` was already split into
+`same_workout_left_on_date` and `entries_left_on_date` (§16.2a). And the stale `garmin_workouts`
+description reported on 2026-10-31 is still **not in the code**: `main` contains neither "targets
+refused" nor "unratified", which leaves the schema-cache lead standing. What *is* genuinely stale
+is one line nobody had named — the action field still says "Only 'preview' exists" and the
+docstring "There is no create or schedule action yet", written before create and unschedule
+shipped as sibling tools.
+
+**A cheap find while checking a number: SCOPE says the exercise catalogue holds "~2,550" entries
+in §11 and §14, and `EXERCISES` as installed is a list of 1527** — which is what `compose.py` and
+§5 have said all along. One catalogue, two numbers, in one document.
+
+**Step 0 is free and is the gate on three of the five items.**
+`garmin-mcp probe --explain training_readiness,heart_rate_zones,activities` prints key paths and
+value types and never a value, so it separates "our map invented a field name" from "Garmin
+returned an empty envelope" — the two hypotheses behind readiness reading `no_data`, which need
+opposite work. It also answers, for free, whether an activity carries `workoutId` when it came
+from a scheduled workout, which is the single assumed field the whole planned-versus-done feature
+rests on. The per-run and range endpoints have **no probe candidates at all**, so adding them is
+session A's first commit: CLI-only, prints no value, makes no tool reachable. §5 has owed exactly
+this since v1.4 — *"the probe has only ever called the activity list… phase 5c probes it before
+the tool is designed."*
+
+**What this entry does not claim:** at the time it was written nothing had been probed, nothing
+had been read off the watch or the Connect app, and no field name in the plan document was in the
+indicative. Every one was in the plan's own assumptions table. **Step 0 then ran, in the same
+session — see the next entry, which is where four of those assumptions died and one of this
+entry's own claims was wrong.**
+
+Tests: **752, unchanged** — docs only. Build: not run (no code changed).
+
+## 2026-11-04 (step 0) — the field names were right, and the type one line below them was not
+
+`garmin-mcp probe --explain training_readiness,heart_rate_zones,activities` on the laptop. All
+three answered. Key paths and value types only, no value printed or stored, which is why the
+output could be pasted into the session at all (§8) — and it is the whole reason this cost an
+hour instead of a release.
+
+**The readiness bug is not the one anyone was looking for, including me.** Both hypotheses in the
+plan document were wrong. `score: int` and `recoveryTime: int` are **exactly the paths the map
+already carries**, and the endpoint reported HAS DATA with 26 populated fields — so no field name
+was invented and Garmin did not return an empty envelope. The defect is one line below the path:
+
+```
+if isinstance(snap.get(key), int | float)      # extract.py:110
+```
+
+`timestamp` is a **`str`**. Every snapshot is filtered out, `stamped` is empty,
+`latest_by_timestamp` returns `MISSING`, and both rows report `no_data` **against a payload that
+holds the data**. The map's note had recorded that selection is by timestamp *rather than by
+index*; nobody recorded the timestamp's **type**. **An inferred type is exactly as unsourced as
+an inferred name, and `verified=False` was pointing at the wrong half of the row.** That is the
+generalisable part, and it belongs beside the rule about fallbacks: a path can be measured and
+the thing that reads it can still be a guess.
+
+Two readings nobody asked for, both free:
+
+- **The root is `list(1)`, not the `list(4)` recorded in 5b.** Four snapshots a day is a property
+  of one response. The decoder's *reason* for picking by timestamp survives intact; only its type
+  check fails.
+- **`level: str`, `feedbackShort` and `feedbackLong` are in the same payload** — Garmin's own
+  words for readiness. §5 prefers a sourced phrase to a number with an unsourced scale, so **the
+  scale question stops being load-bearing**: `level` can answer while the score keeps its honest
+  `"index, scale unconfirmed"`.
+
+**Zones: one request covers everything v1.9 needs.** `maxHeartRateUsed` and
+`lactateThresholdHeartRateUsed` are in the same payload as the five zone floors, so
+`get_lactate_threshold` and `get_user_profile` are not needed at all. Two things to carry
+forward: the zones are **floors**, so zone 5's ceiling is an **inference** (`maxHeartRateUsed`)
+and the only one in the converter; and `trainingMethod` is there, which matters because the same
+zone number means different bpm under percentage-of-max than under percentage-of-threshold. A
+converter that silently assumed one would be the pace bound-order risk in a new axis.
+
+**Activities: the link is real, the easy-run question is answerable two sessions early, and the
+exposure is not the one §9 names.**
+
+- **`workoutId: int` is present**, so planned-versus-done is a real link rather than a
+  name-and-date match. It was the single assumed field the whole feature rested on.
+- **`hrTimeInZone_1..5` are in the LIST.** "Was the easy run actually easy" needs one list call —
+  no detail request, no zone table, no targets. The purpose behind item 3 arrives in session A.
+- **Per-lap HR is not in the list.** `splitSummaries` aggregates per split type and carries no HR
+  at all, so detail still needs `get_activity_splits`, which has no probe candidate.
+- **The exposure finding: account identity, in every row.** `ownerDisplayName`, `ownerFullName`,
+  `ownerId`, three `ownerProfileImageUrl*`, `userRoles: list(38)`, `deviceId`, `timeZoneId`.
+  **`ownerDisplayName` is the GUID §10 calls load-bearing and deliberately does not record,
+  because this repository is public.** The allowlist had been argued for coordinates; it is now
+  required for identity, and §9 owes two rows rather than one.
+- **The over-reading I nearly committed:** the payload carries *no* coordinate field, and that
+  proves nothing. `get_activities(0, 1)` returns the most recent activity whatever it is, and
+  this one is a strength session — `summarizedExerciseSets`, `totalReps`, `activeSets` — so it
+  had no coordinates to carry. `hasPolyline: bool` is there, which says geometry is referenced
+  from the list. **A GPS run is the case that matters and it is still unmeasured**, which makes
+  step 0b "aim the activities candidate at a run" rather than "the list is clean".
+
+Also noted, not built: `summarizedExerciseSets[]` carries `reps`, `sets`, `volume` and
+`maxWeight`, so Garmin **reports** what a strength session actually did even though v1.6
+prescribes by time. Reading that is far cheaper than writing it, which is worth knowing before
+the reps-and-weight deferral is reconsidered.
+
+**Nine assumptions are still open and three of them are values no schema dump can answer** — the
+score's scale, which sport the one zone profile is, and whether the day's single snapshot is the
+morning one. Those need the Connect app or a live read, and they are listed as such.
+
+Tests: **752, unchanged** — docs only, absorbed into the plan document. Build: not run.
+
+## 2026-11-04 (v1.8 session B) — one type check, and the fixture that agreed with it
+
+Walked in `docs/plan-2026-11-04-session-b-readiness-and-zones.md` — ten dimensions in §4, Pass A
+in §5, Pass B in §6, **before the code**, which is the order v1.7 got right and v1.6 did not.
+Mahi confirmed B before A in the same message that approved the walk.
+
+**The fix is one filter, and the bug was never where it was priced.** `readiness` and
+`recovery_time` had carried `verified=False` and a note promising that 5c would settle the field
+names. The names were right the whole time. `latest_by_timestamp` kept only snapshots whose
+timestamp was `int | float`, and `timestamp` is a **`str`** — so `stamped` emptied, the decoder
+returned `MISSING`, and `readings.read` reported `no_data` for a payload holding 26 populated
+fields. **An inferred type is exactly as unsourced as an inferred field name**, and the row's own
+label was pointing at the wrong half of itself.
+
+**Five tests passed over it, and that is the part worth keeping.** Every fixture in
+`TestLatestByTimestamp` invented a numeric timestamp — and the module-level `READINESS` fixture in
+`test_garmin_training.py` was labelled **`# recorded: 5a/5b probe sessions`** while carrying
+integer timestamps. The provenance system this repo built to stop exactly this had been defeated
+on its own ground: a `recorded:` label over an invented type. **A test written from the same
+assumption as the code cannot catch the assumption.** Both fixtures are now
+`# recorded in part:` with the 2026-11-04 shape, and the new tests drive strings, refuse a mixed
+list, and refuse a `bool` (`isinstance(True, int)` is `True`, so a `True` timestamp would compare
+as 1 and lose a `max` silently).
+
+**Decision 4 is implemented in our decoder and not by calling the library's morning method**,
+which was the walk's sharpest finding (§4.3, 3.e). `get_morning_training_readiness` filters on
+`inputContext == "AFTER_WAKEUP_RESET"` and then, when nothing matches, `return data[0]` — a
+**silent fallback, by position**, which §5 forbids outright and which is the one selection rule
+`extract.py` exists to refuse. It also buys nothing: that helper calls `get_training_readiness`
+internally, so reading the list ourselves is the same single request. `morning_snapshot` returns
+`MISSING` instead.
+
+**Which creates a state that needed an answer, not a shrug.** A day with snapshots but no morning
+one is `no_data`, and that is indistinguishable from a day with no snapshot at all — two states
+wanting opposite responses. So **`readiness_latest` ships beside `readiness`, out of the same
+payload and the same request**, as the alternative asked for by name rather than a quiet
+substitution. If the live read shows `readiness` empty and `readiness_latest` answering, the
+decoder is right and **decision 4's source is the thing to revisit, not the code**. That is the
+whole reason it is there.
+
+**`readiness_level` is the free one.** `level`, `feedbackShort` and `feedbackLong` were sitting in
+the same payload. §5 prefers Garmin's own word to a number whose scale cannot be sourced, so the
+score's unconfirmed scale **stops being load-bearing**. `feedbackShort`/`feedbackLong` are
+deliberately **not** rows: whether they are sentences or message keys is unmeasured, and
+`hrv_feedback` is the standing example of that trap.
+
+**Four readiness rows, still three requests for the whole training group** — asserted as a
+literal, which is what made adding two rows a deliberate act rather than a quiet cost.
+
+**`garmin_zones` is the second half, and the zones are FLOORS.** One request, no arguments, every
+profile Garmin returns and no assumption that the one you want is first (this account returns
+`list(1)` and which sport it is was not printed, because `--explain` prints types and never
+values). Every ceiling is therefore **derived**, and each zone carries a `ceiling_basis` saying
+which way: the next zone's floor, measured — or, for zone 5 only, `maxHeartRateUsed`, **labelled
+INFERRED in the response itself** rather than only in a document, because v1.9 converts a zone to
+bpm against exactly these bounds and a fabricated bound is a wrong number on a watch. A missing
+floor, a floor that does not ascend, or a missing max HR leaves the ceiling **unset with its
+reason attached**. `max_hr_bpm` and `threshold_hr_bpm` came free in the same payload, so
+`get_lactate_threshold` and `get_user_profile` are not needed at all.
+
+`trainingMethod` is returned although **nothing in v1.8 reads it** (Pass A.4). Deliberate: the
+same zone number means different bpm under percentage-of-max than under percentage-of-threshold,
+so D's converter is wrong without it, and a future tidy-up should not delete an unused field that
+is load-bearing one version out.
+
+**Two things the walk found that are not B's to fix:** `garmin_training` and `garmin_health` do
+not report `requests_made` at all while `garmin_zones` does, so two read tools now disagree about
+whether they tell you the cost (Pass A.2 — session C aligns them). And `readings._decode`
+collapses a container miss, a decoder miss and a path miss into one `MISSING`, so no response can
+say which stage failed; 1.d was solved with an explicit second row instead of new plumbing, and
+the next decoder-shaped bug will want it.
+
+**Also: no test anywhere enumerates the exposed tool set**, so nothing in the suite would have
+caught a tool that failed to register. Proven by hand instead, inside the image: eight tools, with
+`garmin_zones` carrying `read_only_hint=True` and `garmin_workout_unschedule` still the only
+`destructive_hint=True`. The standing §5 item — `garmin_auth_status` reporting the live tool set —
+is what would make that a test.
+
+**What the suite does not prove.** The real payload lives behind the laptop's tokens; 789 green
+tests prove the decoder's behaviour against a fixture whose *shape* is measured and whose values
+are invented. **The live read is the claim**, it needs a fresh Desktop conversation after the
+re-pin (the schema-cache lead, and two new metric keys have to be offered before they can be
+asked for), and it must be run after the watch has synced — reading before the morning snapshot
+exists would look exactly like the bug. Ask for all four readiness rows in one call; the plan's §8
+lists the three states and what each one means.
+
+**Still unmeasured, and labelled:** whether `inputContext`'s value is `"AFTER_WAKEUP_RESET"` on
+this account (the one assumption that can masquerade as a failed fix), the readiness scale, the
+recovery-time unit, which sport the single zone profile is, and zone 5's ceiling.
+
+**One decision waiting, and it is the shape that sat undecided for a whole version last time**
+(§4.6, 6.c): **§5's tool table does not contain `garmin_zones`.** Ratify it there, or fold the
+scalars into `garmin_training` and drop the zone table until v1.9 needs it. The code ships on
+option (ii) from the candidates doc, which is the recommendation already read and not yet ratified.
+
+Tests: 752 → **789** (+37). Build: passed, and the image was capability-probed rather than trusted
+— `readiness`' decoder reads `morning_snapshot` inside the container.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **752 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **789 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
 
 ## OPEN CHECKS — do these first, in this order
+
+**A. Readiness and zones, live — the check that closes v1.8 session B.** The suite proves a
+decoder against an invented-value fixture; it does not prove the fix. Needs the merge, the
+publish, a re-pin and a **fresh Desktop conversation** (two new metric keys have to be offered
+before they can be asked for), and it must run **after the watch has synced** — reading before
+the morning snapshot exists looks exactly like the bug.
+
+- `garmin_training(["readiness", "readiness_level", "recovery_time", "readiness_latest"])`,
+  naming today's date. Three outcomes, all informative:
+  **both scores answer** ⇒ fixed, and the day has a morning snapshot;
+  **`readiness` empty, `readiness_latest` answers** ⇒ the decoder is right and `inputContext` is
+  not `"AFTER_WAKEUP_RESET"` on this account, so **decision 4 is what to revisit, not the code**;
+  **both empty** ⇒ no snapshot that day, or the fix is wrong, and `probe --explain` on the same
+  date separates those for free.
+- `garmin_zones()`, then compare the five floors, max HR and threshold HR against Connect's own
+  zone screen. Settles which **sport** the single profile is.
+- Read the readiness **score against the Connect app** (the scale) and the **recovery time's
+  unit** — hours or minutes. Both are values, so only the app answers them.
+- Reporting rule: the full response, verbatim, every field. The last three defects were all found
+  by quoting output rather than summarising it.
+
+**B. Step 0b — the probe candidates session A needs.** CLI-only, prints no value, makes no tool
+reachable. Candidates for `get_activity`, `get_activity_splits`, `get_activity_hr_in_timezones`,
+`get_hrv_data_range`, `get_rhr_daily`, `get_sleep_daily` and `get_weekly_stress`; plus a way to
+aim the activities candidate at a **running** activity, which is the only thing that settles
+whether a GPS run's list row carries coordinates. Step 0's activity was indoors, so its lack of
+coordinate fields proves nothing.
+
 
 **~~0. Push the branch and open its PR.~~ DONE** — the decline was deliberate,
 and it was withdrawn in session rather than lapsing. Branch
