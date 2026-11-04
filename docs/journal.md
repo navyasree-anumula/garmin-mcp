@@ -3669,7 +3669,66 @@ being noticed and not fixed.
 
 Tests: **815, unchanged** — documentation only. Build: not run (no code changed).
 
+## 2026-11-04 (wrap-up) — v1.8 A and B are in, C is the only unbuilt part
+
+PR #50 merged. `main` carries sessions A and B, the lock bump and §5's zones ratification;
+`sha-66d2dec` and `latest` both answer **200** from ghcr, checked against the registry rather
+than read off a green tick. Four checks green on the merge commit, including **`Tests (shipped
+lock)` on its first run** — the first time this project has ever asserted that the suite passes
+against the dependency set the image installs.
+
+**What one day added, in the order it happened:** a scoping doc and a decided set; step 0, which
+falsified that doc's own diagnosis; session B walked and built; session A walked and built; the
+lock bump; and §5's amendment. Three plan docs, each carrying its own ten dimensions plus passes
+A and B **before** its code — which is the order v1.6 got wrong and §15.1 recorded, and it held
+for three sessions running.
+
+**The two findings worth carrying out of today, neither of them a feature:**
+
+- **An inferred TYPE is as unsourced as an inferred field name.** `readiness` carried
+  `verified=False` and a note promising phase 5c would settle its field *names* — which were
+  right all along. The defect was one line below them, in a decoder that demanded a numeric
+  timestamp from a payload that sends a string. The label was pointing at the wrong half of the
+  row, and five tests agreed with the code about a shape neither had seen because **the fixture
+  was labelled `recorded:` while its type was invented.** The provenance system was defeated on
+  its own ground; both fixtures are now `recorded in part:`.
+- **Green CI can be evidence about something you do not ship.** The lock pinned
+  `garminconnect==0.3.11` while the `Tests` job resolved `>=0.3.11,<0.4` fresh and got **0.3.20**
+  — nine releases apart, for weeks, with nothing able to fail because nothing was looking. §2's
+  floor exists to get "the current Cloudflare handling" and the lock pinned the floor exactly, so
+  the image had August's. Both halves are fixed: the lock is current, and a second job tests the
+  lock with the lock as a **constraints file** so the runner cannot quietly upgrade past it.
+
+**Branch hygiene, after the trap sprang.** Mahi merged #49 mid-session and
+`delete_branch_on_merge` removed its branch, so the next push **recreated** it — the merge-crossing
+case this file has warned about. Caught before a PR was opened against a branch named for other
+work. Local `main` is now fast-forwarded to the merged tip, which matters because the resume block
+tells a reader to run `git log --oneline -1 main`; it had been seventeen commits stale all session
+while saying that. Every merged local and remote branch is deleted; one local branch, one remote
+branch.
+
+**Queued rather than done, by Mahi's decision: a repo-root `CLAUDE.md`.** The absence has been
+noted at the start of every session and acted on by nobody, which is exactly the shape of a
+recurring observation that never becomes work. It is now open check 0, with what it has to carry
+and why each line is there rather than generic — the test and build commands, the capability-probe
+rule for verifying a build, the push protocol including the merge-crossing trap, the provenance
+vocabulary, the walk requirement, the library boundary, and that `docs/SCOPE.md` is the
+ratification artifact. **Drafted next session, not assumed**, and the global orders win on any
+conflict.
+
+**Session C is the only unbuilt part of v1.8** and nothing blocks it but its own walk. Its own
+inherited decision is already named: `requests_made` is measured on `garmin_zones` and derived on
+`garmin_activities`, and the metric tools report it not at all — so C either aligns the three or
+says why it does not.
+
+Tests: **815, unchanged** — documentation only. Build: not run.
+
 ## RESUME HERE
+
+**If `SESSION-HANDOFF.md` exists at the repository root, read it before this block.** It is
+local, untracked and gitignored — this box's state rather than repo content — so it can be newer
+than anything here and it is where an unpushed branch or a half-finished laptop step gets named.
+If it is absent, nothing is pending that this file does not already say.
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
@@ -3678,15 +3737,76 @@ which does not change when a merge lands.
 State: **815 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
+**Where v1.8 stands.** Sessions **A** (past activities, with the allowlist) and **B** (readiness
+fixed, zones readable) are built and merged, each walked across the ten dimensions plus passes A
+and B before its code. **Session C — health trends over a range — is the only unbuilt part**, and
+it is blocked on nothing but its own walk. Its plan is drafted in
+`docs/plan-2026-11-04-v1.8-candidates.md` §5, its field names are what step 0b collects for free,
+and the decision it inherits is named there: `requests_made` means something different on each
+tool that reports it, and C is where the metric tools either gain the field or stay silent about
+cost.
+
+**The next session starts with C.** Everything else below either needs the laptop or needs a
+decision, and none of it blocks C.
+
 ---
 
 ## OPEN CHECKS — do these first, in this order
 
-**A. Readiness and zones, live — the check that closes v1.8 session B.** The suite proves a
-decoder against an invented-value fixture; it does not prove the fix. Needs the merge, the
-publish, a re-pin and a **fresh Desktop conversation** (two new metric keys have to be offered
-before they can be asked for), and it must run **after the watch has synced** — reading before
-the morning snapshot exists looks exactly like the bug.
+**0. A repo-root `CLAUDE.md` for garmin-mcp — DECIDED 2026-11-04, not yet written.** This
+repository has none, which has been noted at the start of every session and acted on by nobody:
+the global standing orders say to flag the absence and **not** to draft one as a first action,
+because it is dedicated work rather than a warm-up. Mahi queued it here on 2026-11-04 to sit
+alongside the existing items, so the flag stops being a recurring observation.
+
+**What it has to carry, and the reason each line exists rather than a generic template** — all
+of it currently living in this journal or in a memory, which is the wrong place for a rule a
+session needs in its first minute:
+
+- **The test and build commands**, and that the suite is run with `.venv/bin/python -m pytest -q`
+  on this box. **Build verification is a capability probe inside the image, never
+  `server_version`** — the stamp reached a client once and was summarised away.
+- **The push protocol**: this repo's account is `navyasree-anumula` while the box defaults to
+  `mahidhark`, so the account switch and the push go in **one** invocation; `gh pr edit` fails
+  silently here on the projects-classic deprecation and the PR must be patched with
+  `gh api -X PATCH`; and `delete_branch_on_merge` is on, so **a push that crosses a merge
+  recreates the remote branch** — which happened on 2026-11-04 and was caught before a PR was
+  opened against the wrong name.
+- **The provenance vocabulary**, because it is this repo's distinguishing discipline and a new
+  session cannot infer it: `# recorded:` / `# recorded in part:` / `# invented:` on every payload
+  fixture, `measured` versus `inferred` on every metric row, and the rule that **a mechanism goes
+  in the indicative only after two readings**. v1.8 session B is the standing example of why: a
+  fixture labelled `recorded:` carried an invented *type*, and five tests agreed with the code
+  about a shape neither had seen.
+- **The walk requirement**: the ten dimensions of `sop/stress-test-10-dimensions.md` plus passes
+  A and B, recorded in the session's own plan doc **before** its code — the order v1.6 got wrong
+  and §15.1 recorded.
+- **Where the library boundary is** (§11: every `garminconnect` import inside `source/`, enforced
+  by `test_layering.py`), and that reaching past the request seam needs a deliberate line in
+  `test_fetch_seam.py`'s allowlist with its reason.
+- **That `docs/SCOPE.md` is the ratification artifact**, so a code change whose scope the
+  document does not mention is a deviation to be named, not a detail.
+
+**Draft it, do not assume it.** The global orders win on any conflict, and a repo file may only
+tighten them.
+
+**00. Two numbers for one catalogue, third session of being noticed.** SCOPE §11 and §14 say the
+exercise catalogue holds "~2,550" entries. It holds **1527**, measured under both `garminconnect`
+0.3.11 and 0.3.20, which is what `compose.py` and §5 have said all along. One word in two places.
+
+**A. Readiness, zones and activities, live — the checks that close v1.8 sessions A and B.** The
+suite proves a decoder and a projection against invented-value fixtures; it does not prove
+either. **The merge and the publish have landed**, so what is left is a **re-pin** and a **fresh
+Desktop conversation** — three new tools and four new metric keys have to be offered before they
+can be asked for, and a conversation open across the re-pin will not see them.
+
+Re-pin to the tag for `main`'s current tip: `git log --oneline -1 main` names the commit, and
+**the registry is the instrument** — a 200 on `/v2/.../manifests/sha-<commit>`, never a green
+tick, because only "Build and publish" publishes and it does nothing on a pull request. The tag
+is deliberately not quoted here; this list does not hold values a later merge supersedes.
+
+The readiness check must run **after the watch has synced** — reading before the morning snapshot
+exists looks exactly like the bug it is testing.
 
 - `garmin_training(["readiness", "readiness_level", "recovery_time", "readiness_latest"])`,
   naming today's date. Three outcomes, all informative:

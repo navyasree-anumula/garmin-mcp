@@ -25,5 +25,11 @@ build/
 # Test recordings — cassettes are scrubbed, but never commit an unreviewed one.
 tests/cassettes/*.unscrubbed.yaml
 
+# Local session handoff. Untracked on purpose: it is this box's state, not repo
+# content, and it is rewritten every session. Listed here BEFORE the accident
+# rather than after it, unlike the runtime-state lines above -- a `git add -A`
+# at the end of a session would otherwise sweep it into a commit.
+SESSION-HANDOFF.md
+
 # OS / editor
 .DS_Store
