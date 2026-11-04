@@ -251,7 +251,13 @@ def _cmd_probe_explain(args: argparse.Namespace) -> int:
             print("    (no payload — the call did not return one)", file=sys.stderr)
 
     try:
-        probe.explain(tokens, requested, day_offsets=offsets, on_progress=progress)
+        probe.explain(
+            tokens,
+            requested,
+            day_offsets=offsets,
+            on_progress=progress,
+            activity_id=args.activity_id or None,
+        )
     except GarminSourceError as exc:
         print(f"\nStopped: {exc}", file=sys.stderr)
         return 1
@@ -367,6 +373,16 @@ def main(argv: list[str] | None = None) -> int:
         "paths and value types of what each returns -- never the values. Answers "
         "'did nothing come back, or did our counter walk past it', which a count "
         "cannot. Writes nothing.",
+    )
+    p_probe.add_argument(
+        "--activity-id",
+        metavar="ID",
+        default="",
+        help="One activity's id, for the per-run candidates that need one "
+        "(activity_detail, activity_splits, activity_hr_zones). Take it from "
+        "garmin_activities or a Connect URL -- a RUNNING activity, since an "
+        "indoor session has no GPS and so answers nothing about location. "
+        "Without it those candidates are skipped, not failed.",
     )
     p_probe.set_defaults(func=_cmd_probe)
 

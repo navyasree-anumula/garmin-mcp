@@ -269,12 +269,19 @@ def _positive(value: float, what: str) -> None:
         raise ComposeError(f"{what} must be greater than zero, not {value!r}.")
 
 
-def _format_pace(secs_per_km: float) -> str:
+def format_pace_min_km(secs_per_km: float) -> str:
     """Seconds per kilometre as `m:ss`, which is the only unit a human sees.
 
     Rendering from the number rather than echoing the input string is what makes
     the preview and the payload two readings of one value. `"04:20"` comes back
     as `4:20` because the canonical form is the one the conversion produced.
+
+    **Public since v1.8-A, and deliberately so.** `source/activities.py` renders
+    a pace that was *run* rather than one being prescribed, and a second
+    formatter would be a second place for the rounding to differ. Note what it
+    does NOT share: `parse_pace_min_km`'s band of 150-720 s/km refuses a typo in
+    a PRESCRIPTION, and a read must not apply it -- a walk or a slow recovery
+    jog sits outside that band and happened anyway.
     """
     whole = int(round(secs_per_km))
     return f"{whole // 60}:{whole % 60:02d}"
@@ -304,15 +311,15 @@ def parse_pace_min_km(text: Any) -> float:
         raise ComposeError(
             f"{text!r} has {seconds} seconds in it. A pace is mm:ss, so the "
             f"seconds must be under 60: as written it would mean "
-            f"{_format_pace(minutes * 60 + seconds)}, which is not what it "
+            f"{format_pace_min_km(minutes * 60 + seconds)}, which is not what it "
             "looks like."
         )
     total = float(minutes * 60 + seconds)
     if not PACE_FASTEST_SECS_PER_KM <= total <= PACE_SLOWEST_SECS_PER_KM:
         raise ComposeError(
             f"{text!r} is outside the pace band this server composes "
-            f"({_format_pace(PACE_FASTEST_SECS_PER_KM)} to "
-            f"{_format_pace(PACE_SLOWEST_SECS_PER_KM)} per km). A pace outside "
+            f"({format_pace_min_km(PACE_FASTEST_SECS_PER_KM)} to "
+            f"{format_pace_min_km(PACE_SLOWEST_SECS_PER_KM)} per km). A pace outside "
             "it is a typo or a unit mistake rather than a session."
         )
     return total
@@ -355,7 +362,7 @@ class PaceTarget:
     @property
     def midpoint_rendered(self) -> str:
         """The midpoint in min/km, for the basis sentence to name."""
-        return f"{_format_pace(self.midpoint_secs_per_km)}/km"
+        return f"{format_pace_min_km(self.midpoint_secs_per_km)}/km"
 
     def seconds_for(self, distance_m: float) -> float:
         """How long `distance_m` takes at the midpoint of this range.
@@ -370,8 +377,8 @@ class PaceTarget:
     def rendered(self) -> str:
         """The range in min/km. A human is never shown m/s."""
         return (
-            f"{_format_pace(self.faster_secs_per_km)}-"
-            f"{_format_pace(self.slower_secs_per_km)}/km"
+            f"{format_pace_min_km(self.faster_secs_per_km)}-"
+            f"{format_pace_min_km(self.slower_secs_per_km)}/km"
         )
 
     def target_block(self) -> dict[str, Any]:
@@ -414,14 +421,14 @@ def pace_target(bounds: Any) -> PaceTarget:
     if faster == slower:
         raise ComposeError(
             f"a pace range needs two different bounds, not "
-            f"{_format_pace(faster)} twice. A zero-width range is not a range, "
+            f"{format_pace_min_km(faster)} twice. A zero-width range is not a range, "
             "and what Garmin does with one has never been measured."
         )
     if faster > slower:
         raise ComposeError(
             f"a pace range is written faster bound first: "
-            f"['{_format_pace(slower)}', '{_format_pace(faster)}'], not "
-            f"['{_format_pace(faster)}', '{_format_pace(slower)}']. It is "
+            f"['{format_pace_min_km(slower)}', '{format_pace_min_km(faster)}'], not "
+            f"['{format_pace_min_km(faster)}', '{format_pace_min_km(slower)}']. It is "
             "refused rather than sorted, because sorting would hide a caller "
             "that has the two fields the wrong way round."
         )

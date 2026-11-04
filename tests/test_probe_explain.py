@@ -230,7 +230,7 @@ class TestExplainDrivesTheRequests:
         api.by_day = {}
         monkeypatch.setattr(
             probe, "_fetch",
-            lambda a, c, d, t: (probe.Result(c.key, c.group, probe.HAS_DATA, 5, d), {"x": 1}),
+            lambda a, c, d, t, i=None: (probe.Result(c.key, c.group, probe.HAS_DATA, 5, d), {"x": 1}),
         )
 
         shapes = probe.explain(str(tmp_path / "t.json"), ["sleep"])
@@ -244,7 +244,7 @@ class TestExplainDrivesTheRequests:
         empty_envelope = {"calendarDate": "2026-08-29", "restingHeartRate": None}
         monkeypatch.setattr(
             probe, "_fetch",
-            lambda a, c, d, t: (probe.Result(c.key, c.group, probe.EMPTY, 0, d), empty_envelope),
+            lambda a, c, d, t, i=None: (probe.Result(c.key, c.group, probe.EMPTY, 0, d), empty_envelope),
         )
         monkeypatch.setattr(probe.source, "_connect", lambda: object())
 
@@ -259,7 +259,7 @@ class TestExplainDrivesTheRequests:
         up as a shape."""
         monkeypatch.setattr(
             probe, "_fetch",
-            lambda a, c, d, t: (probe.Result(c.key, c.group, probe.NOT_FOUND, 0, d), None),
+            lambda a, c, d, t, i=None: (probe.Result(c.key, c.group, probe.NOT_FOUND, 0, d), None),
         )
         monkeypatch.setattr(probe.source, "_connect", lambda: object())
 
@@ -273,7 +273,7 @@ class TestExplainDrivesTheRequests:
         quietly become a second one."""
         monkeypatch.setattr(
             probe, "_fetch",
-            lambda a, c, d, t: (probe.Result(c.key, c.group, probe.HAS_DATA, 3, d), {"a": 1}),
+            lambda a, c, d, t, i=None: (probe.Result(c.key, c.group, probe.HAS_DATA, 3, d), {"a": 1}),
         )
         monkeypatch.setattr(probe.source, "_connect", lambda: object())
 

@@ -22,6 +22,7 @@ from .source import metrics as metric_map
 from .source import write as source_write
 from .source import readings as source_readings
 from .source import zones as source_zones
+from .source import activities as source_activities
 from .source.errors import GarminSourceError
 
 logger = logging.getLogger(__name__)
@@ -342,6 +343,182 @@ def garmin_health(
     measured_on, readings = _read_group("health", list(metrics), date)
     return HealthReadings(
         date=measured_on, date_basis=DATE_BASIS, readings=readings
+    )
+
+
+# --------------------------------------------------------------------------
+# What was actually done (docs/SCOPE.md §5, v1.8-A)
+# --------------------------------------------------------------------------
+
+
+class ExerciseSetDone(BaseModel):
+    category: str = Field(description="Garmin's exercise category for this set.")
+    sets: int | None
+    reps: int | None
+    max_weight_g: int | None = Field(
+        description="Heaviest weight in GRAMS -- Garmin's own unit, not converted."
+    )
+    duration_s: float | None
+
+
+class ActivityRow(BaseModel):
+    """One activity, reduced to what a training decision needs.
+
+    **No location and no account identity.** The projection behind this model is
+    an allowlist, so nothing Garmin adds later can appear here either.
+    """
+
+    activity_id: int = Field(
+        description="Ask about this activity's laps with this id. Returned again "
+        "by any list covering the same date, so it cannot be lost."
+    )
+    name: str
+    start_local: str = Field(description="Garmin's device-local start time, as given.")
+    sport: str = Field(description="Garmin's activity type key, e.g. 'running'.")
+    distance_m: float | None = Field(
+        description="Metres -- INFERRED from the account's metric setting, not read."
+    )
+    duration_s: float | None = Field(description="Seconds -- inferred, as above.")
+    moving_duration_s: float | None
+    avg_pace_min_km: str | None = Field(
+        description=(
+            "Average pace as m:ss per km, derived from Garmin's own average "
+            "speed. None where a pace is meaningless -- a strength circuit has "
+            "no distance, and no pace is the truth rather than 0:00."
+        )
+    )
+    avg_hr_bpm: int | None
+    max_hr_bpm: int | None
+    aerobic_training_effect: float | None
+    anaerobic_training_effect: float | None
+    training_effect_label: str | None = Field(
+        description="Garmin's own word for the effect, where it gives one."
+    )
+    training_load: float | None
+    hr_time_in_zone_s: dict[int, float] = Field(
+        description=(
+            "Seconds in each heart-rate zone Garmin reported, keyed by zone "
+            "number. **Never padded**: a missing zone means Garmin did not say, "
+            "while a zero would be the claim 'no time in that zone'. This is "
+            "what answers whether an easy run was actually easy."
+        )
+    )
+    workout_id: int | None = Field(
+        description=(
+            "The scheduled workout this activity came from, when it came from "
+            "one -- the link between planned and done. None for an unplanned "
+            "session; a zero from Garmin is reported as None, because a zero "
+            "read as an id would point at a workout that does not exist."
+        )
+    )
+    lap_count: int | None
+    has_splits: bool | None
+    exercise_sets: list[ExerciseSetDone] = Field(
+        description="What a strength session actually did, as Garmin summarises it."
+    )
+
+
+class ActivityListResult(BaseModel):
+    activities: list[ActivityRow]
+    date_basis: str
+    requests_made: int
+    requests_basis: str = Field(
+        description="Whether the request count was measured or derived."
+    )
+    note: str
+
+
+@mcp.tool(
+    title="Garmin past activities",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True
+    ),
+)
+def garmin_activities(
+    start_date: Annotated[str, Field(description="YYYY-MM-DD, inclusive.")],
+    end_date: Annotated[str, Field(description="YYYY-MM-DD, inclusive.")],
+    sport: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional Garmin activity type to filter by -- 'running', "
+                "'cycling', 'strength_training' and so on. Omit for everything."
+            )
+        ),
+    ] = None,
+) -> ActivityListResult:
+    """What was actually done in a date window, to compare against what was planned.
+
+    **This is the other half of the loop.** Every other tool here reads a
+    measurement or writes a prescription; this one says what happened.
+    `workout_id` is the link: it is set when an activity came from a scheduled
+    workout, so a week's plan and a week's training can be put side by side.
+
+    **No location and no account identity ever leaves this tool.** Garmin's
+    activity row carries start and end coordinates, a location name, and the
+    account's own display name, full name and profile image URLs in *every* row.
+    This tool names the fields it returns and drops everything else, so a field
+    Garmin adds tomorrow is dropped too (docs/SCOPE.md §9).
+
+    **The window is capped at 31 days** and a wider one is refused rather than
+    truncated. The reason is not politeness: the underlying call pages through
+    history *inside* a single request, so a wide window spends far more of
+    Garmin's patience than the local request budget can see.
+
+    **It computes no totals and offers no verdict on the week.** Rows out. What
+    a week of this means needs how the legs feel, how much time there was and
+    what hurts, which no Garmin endpoint holds (docs/SCOPE.md §1).
+
+    **`hr_time_in_zone_s` is the one to ask for when the question is whether an
+    easy run stayed easy** -- it needs no zone table and no detail call.
+
+    Per-lap splits are not here yet: the list carries only an aggregate per
+    split type, with no heart rate, so the per-lap call has to be probed before
+    it is designed.
+    """
+    try:
+        result = source_activities.read_window(start_date, end_date, sport)
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return ActivityListResult(
+        activities=[
+            ActivityRow(
+                activity_id=a.activity_id,
+                name=a.name,
+                start_local=a.start_local,
+                sport=a.sport,
+                distance_m=a.distance_m,
+                duration_s=a.duration_s,
+                moving_duration_s=a.moving_duration_s,
+                avg_pace_min_km=a.avg_pace_min_km,
+                avg_hr_bpm=a.avg_hr_bpm,
+                max_hr_bpm=a.max_hr_bpm,
+                aerobic_training_effect=a.aerobic_training_effect,
+                anaerobic_training_effect=a.anaerobic_training_effect,
+                training_effect_label=a.training_effect_label,
+                training_load=a.training_load,
+                hr_time_in_zone_s=a.hr_time_in_zone_s,
+                workout_id=a.workout_id,
+                lap_count=a.lap_count,
+                has_splits=a.has_splits,
+                exercise_sets=[
+                    ExerciseSetDone(
+                        category=s.category,
+                        sets=s.sets,
+                        reps=s.reps,
+                        max_weight_g=s.max_weight_g,
+                        duration_s=s.duration_s,
+                    )
+                    for s in a.exercise_sets
+                ],
+            )
+            for a in result.activities
+        ],
+        date_basis=DATE_BASIS,
+        requests_made=result.requests_made,
+        requests_basis=result.requests_basis,
+        note=result.note,
     )
 
 

@@ -81,6 +81,18 @@ RANGE = "range"
 NONE = "none"
 ACTIVITIES = "activities"
 
+#: Takes one activity id. Nothing in this probe can supply one -- the id comes
+#: from `garmin_activities` or from a Connect URL and is passed in with
+#: `--activity-id`. Without it these candidates are SKIPPED with a reason, never
+#: recorded as an error: §5's rule that our own missing input must not be
+#: reported as Garmin's failure.
+ACTIVITY_ID = "activity_id"
+
+#: Takes an end date and a COUNT OF WEEKS, not a start date
+#: (`get_weekly_stress(end, weeks)`). The odd one out, and the reason the trend
+#: tool cannot treat every range source alike.
+WEEKS = "weeks"
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -148,12 +160,52 @@ CANDIDATES: tuple[Candidate, ...] = (
     # suspect rather than the data -- which is exactly how race_predictions
     # failed for a month. The range variant is one request to settle it.
     Candidate("max_metrics_range", "training", "get_max_metrics_range", RANGE),
+    # Added 2026-11-04 (v1.8 step 0b). §5 has owed the first three since v1.4:
+    # "the probe has only ever called the activity list... phase 5c probes it
+    # before the tool is designed". Step 0 then ruled the list out as a source
+    # of per-lap HR -- `splitSummaries` aggregates per split type and carries
+    # none -- so which of these three has it is the open question session A2
+    # cannot be designed without.
+    Candidate("activity_detail", "activity", "get_activity", ACTIVITY_ID,
+              "needs --activity-id; 'summary, including basic splits'"),
+    Candidate("activity_splits", "activity", "get_activity_splits", ACTIVITY_ID,
+              "needs --activity-id; per-lap, if anything is"),
+    Candidate("activity_hr_zones", "activity", "get_activity_hr_in_timezones",
+              ACTIVITY_ID, "needs --activity-id"),
+    # Session C's input, gathered here because one run collects them for free.
+    # Each takes a RANGE and answers a whole window in one request, which is
+    # what makes a 7-28 day trend 4 requests instead of 84 -- but their payload
+    # layouts differ from the single-date sources already in the metric map, so
+    # every trend row starts unmeasured until this prints their shapes.
+    Candidate("hrv_range", "health", "get_hrv_data_range", RANGE),
+    Candidate("sleep_daily", "health", "get_sleep_daily", RANGE,
+              "auto-chunks at Garmin's 28-day limit"),
+    Candidate("rhr_daily", "health", "get_rhr_daily", RANGE,
+              "the library projects this one itself"),
+    Candidate("weekly_stress", "health", "get_weekly_stress", WEEKS,
+              "end date plus a week count, not a range"),
 )
 
 HAS_DATA = "has_data"
 EMPTY = "empty"
 NOT_FOUND = "not_found"
 ERROR = "error"
+
+#: Not asked at all, because we could not supply its input. Distinct from
+#: `ERROR` on purpose: `error` means OUR CALL FAILED and `skipped` means our
+#: call was never made, and recording the second as the first would blame
+#: Garmin for an argument we did not pass -- the mislabel that cost
+#: `race_predictions` a month.
+SKIPPED = "skipped"
+
+
+class NeedsActivityId(Exception):
+    """Raised by `_call` for a candidate that has no activity id to work with.
+
+    Caught in `_fetch` and turned into a `SKIPPED` result. An exception rather
+    than a quiet `None` so that a new ACTIVITY_ID candidate cannot be added and
+    silently never run.
+    """
 
 
 def count_populated(value: Any, _depth: int = 0) -> int:
@@ -182,7 +234,14 @@ def count_populated(value: Any, _depth: int = 0) -> int:
     return 0
 
 
-def _call(api: Any, cand: Candidate, day: str) -> Any:
+def _call(api: Any, cand: Candidate, day: str, activity_id: str | None = None) -> Any:
+    # The input requirement is checked BEFORE the client is touched, the way
+    # `fetch._args_for` resolves arguments before attempting a request: a
+    # candidate we cannot supply an argument for is our own missing input, and
+    # it should not need an api object -- or a token -- to say so.
+    if cand.kind == ACTIVITY_ID and not activity_id:
+        raise NeedsActivityId(cand.key)
+
     method = getattr(api, cand.method)
     if cand.kind == DATE:
         return method(day)
@@ -192,7 +251,17 @@ def _call(api: Any, cand: Candidate, day: str) -> Any:
         # Never get_activities_by_date: it paginates up to MAX_PAGINATED_REQUESTS
         # (2000) with no delay, and our cap would apply only after the fact.
         return method(0, 1)
-    return method()
+    if cand.kind == WEEKS:
+        # One week ending on the probed day. The smallest window that returns a
+        # row, because the shape is the question and the history is not.
+        return method(day, 1)
+    if cand.kind == ACTIVITY_ID:
+        return method(activity_id)
+    if cand.kind == NONE:
+        return method()
+    # An unknown shape is OUR bug, so it crashes in a test rather than becoming
+    # a plausible-looking verdict -- the same rule `fetch._args_for` follows.
+    raise ValueError(f"unknown call shape {cand.kind!r} for {cand.method}")
 
 
 @dataclass(frozen=True)
@@ -206,7 +275,11 @@ class Result:
 
 
 def _fetch(
-    api: Any, cand: Candidate, day: str, tokens_path: str
+    api: Any,
+    cand: Candidate,
+    day: str,
+    tokens_path: str,
+    activity_id: str | None = None,
 ) -> tuple[Result, Any]:
     """One request, returning both the verdict and the payload.
 
@@ -218,7 +291,18 @@ def _fetch(
 
     try:
         with source._garmin_access(tokens_path):
-            payload = _call(api, cand, day)
+            payload = _call(api, cand, day, activity_id)
+    except NeedsActivityId:
+        # Never requested, so no budget was spent and nothing is known about
+        # this endpoint. Says what would make it answerable.
+        return (
+            Result(
+                cand.key, cand.group, SKIPPED, 0, day,
+                "needs --activity-id: pass a running activity's id from "
+                "garmin_activities or a Connect URL",
+            ),
+            None,
+        )
     except GarminConnectNotFoundError:
         # 404 is a clean signal: this endpoint does not exist for this account.
         return Result(cand.key, cand.group, NOT_FOUND, 0, day), None
@@ -425,6 +509,7 @@ def explain(
     keys: list[str],
     day_offsets: tuple[int, ...] = DEFAULT_DAY_OFFSETS,
     on_progress=None,
+    activity_id: str | None = None,
 ) -> list[Shape]:
     """Describe the shape of what each named endpoint returns.
 
@@ -444,11 +529,13 @@ def explain(
         best: tuple[Result, Any] | None = None
 
         for day in days:
-            result, payload = _fetch(api, cand, day, tokens_path)
+            result, payload = _fetch(api, cand, day, tokens_path, activity_id)
             if best is None or result.populated > best[0].populated:
                 best = (result, payload)
-            if result.verdict in (HAS_DATA, NOT_FOUND, ERROR):
-                # Populated, or a verdict no further date will improve.
+            if result.verdict in (HAS_DATA, NOT_FOUND, ERROR, SKIPPED):
+                # Populated, or a verdict no further date will improve. A
+                # SKIPPED candidate has no input, and another date will not
+                # give it one.
                 break
 
         result, payload = best  # type: ignore[misc]

@@ -3470,13 +3470,102 @@ option (ii) from the candidates doc, which is the recommendation already read an
 Tests: 752 → **789** (+37). Build: passed, and the image was capability-probed rather than trusted
 — `readiness`' decoder reads `morning_snapshot` inside the container.
 
+## 2026-11-04 (v1.8 session A) — what was actually done, and an allowlist that could be written blind
+
+Walked in `docs/plan-2026-11-04-session-a-activities.md` — ten dimensions §4, Pass A §5, Pass B
+§6, before the code. `garmin_activities` reads a date window and returns what training needs;
+**`workout_id` is the link that makes planned and done comparable**, which nothing in this server
+could do until now.
+
+**The session split itself, and the split is the finding.** A2 — per-lap detail — **cannot be
+built yet**, because step 0 ruled out the only source it could see (`splitSummaries` aggregates per
+split type and carries **no HR at all**) and the three remaining candidates all take an activity
+id that nothing in the probe can supply. A1 — the list — **can**, and the argument is worth
+keeping: the one thing still unmeasured about it is whether a GPS run's row carries coordinates,
+and **an allowlist cannot be hurt by an unknown field, because an unknown field is exactly what it
+drops.** The measurement confirms rather than gates. **And A1 produces the input step 0b needs** —
+a real run's id — so the order A1 → step 0b → A2 has each step handing the next its input.
+
+**The privacy work turned out to be two risks, not one.** §9's carried debt is location, and the
+projection handles it. But step 0 found `ownerDisplayName`, `ownerFullName`, `ownerId` and three
+profile-image URLs **in every row** — and `ownerDisplayName` is the GUID §10 calls load-bearing
+and deliberately does not record, because this repository is public. So the allowlist is required
+for **identity** as much as for location, and §9 owes two rows. The test asserts against
+`NEVER_RETURNED`, the module's own list of measured-present keys, so the prose cannot drift from
+the behaviour.
+
+**The privacy test has a positive half, and it had to be invented to exist.** An assertion that no
+coordinate leaves would pass vacuously against the only real row anyone has: step 0's activity was
+indoors and carries none. So the fixture carries synthetic coordinates, a synthetic location name
+and a synthetic owner GUID, the assertion runs against `model_dump_json()` rather than against
+attribute names, and the forbidden *values* are what it looks for. Same shape as the cassette
+scrubber's positive half (§8), which is still unbuilt and which this is now the precedent for.
+
+**The finding that is not fixable from here: the request budget under-counts a paginated read.**
+`get_activities_by_date` pages 20 at a time **inside one call**, and `client._garmin_access` wraps
+that call — so §6's limiter takes **one token for `ceil(n/20)+1` HTTP requests**, and the
+pagination loop is past the only doorway we have. There is no hook. The mitigations are a **31-day
+window cap**, refused rather than truncated, and an honest `requests_basis` saying the count is
+derived from the rows returned rather than observed. The real alternative — our own pagination
+with `get_activities(start, limit)` — cannot filter by date and would walk backwards through
+history to reach an old window. **That is a decision for Mahi, not a cleanup**, and Pass B records
+it as a wrong *order*: one token spent before a loop whose length is unknown at that moment.
+
+**`requests_made` now means two things across two tools** (Pass A.2): measured `1` on
+`garmin_zones`, derived on `garmin_activities`. A field that silently means something different
+depending on which tool returned it is worse than no field, so this one ships beside
+`requests_basis`. Session C inherits the question when it adds the field to the metric tools.
+
+**Small things decided on evidence rather than taste:**
+
+- **Two tools, not one with an `action` enum.** §5's table describes `garmin_activities` as doing
+  both list and detail. It ships as two because a one-value enum is what left `server.py:725`
+  claiming "Only 'preview' exists" for three versions after that stopped being true.
+- **`workoutId` of `0` is not an id.** §16.2a in a new place: a zero read as an id would link a
+  session to a workout that does not exist. `0` and absent are both reported as "not from a
+  scheduled workout".
+- **`hrTimeInZone_*` is never padded.** A zero is the claim "no time in that zone"; an absent key
+  means Garmin did not say. "Was the easy run easy" needs those told apart — and that question is
+  answerable **from the list alone**, with no detail call, no zone table and no targets, which is
+  item 3's purpose arriving two sessions early.
+- **No pace where a pace is meaningless.** `0:00` is a pace; `None` is the truth. Driven off the
+  data (distance and speed both positive), not off a list of sports.
+- **`format_pace_min_km` is public now** — one converter for a pace prescribed and a pace run, so
+  the rounding cannot differ. What it does **not** share is `parse_pace_min_km`'s 150-720 s/km
+  band: that refuses a typo in a prescription, and a 9:00/km walk happened anyway. Asserted.
+- **No totals.** Rows out, no weekly sum, no verdict on the week — which is §1's division of
+  labour and also what makes multi-sport parent activities harmless, since nothing can
+  double-count what nothing adds up.
+
+**Step 0b shipped with it**, CLI-only: candidates for the three per-run endpoints plus the four
+session C needs, a `--activity-id` flag, and two new call shapes. `get_weekly_stress(end, weeks)`
+takes an end date and a **count of weeks**, which is neither DATE nor RANGE — the odd one out, and
+asserted so that passing it two dates cannot become the `race_predictions` call-shape bug again. A
+candidate with no id is **`SKIPPED`, not `ERROR`**: `error` means our call failed, and this call
+was never made. The check runs **before** the client is touched, so it needs neither an api object
+nor a token to say what is missing.
+
+**The suite caught my own mistake immediately**, which is worth recording as evidence the guards
+work: rewriting `_call`'s dispatch, I replaced the `NONE` fall-through with a raise, and
+`test_the_call_passes_no_arguments` failed on `race_predictions` — the exact endpoint whose call
+shape cost a month the first time.
+
+**Still unmeasured, and labelled:** whether a GPS run's row carries coordinates (step 0b, aimed at
+a run); whether an unplanned activity omits `workoutId` or carries `0`; **and the units** — step 0
+printed `distance: float`, which is a type and not a value, so metres and seconds rest on §10's
+measured metric account setting rather than on a reading. The fields say `distance_m` and
+`duration_s` and the note says inferred, until one activity is read against Connect.
+
+Tests: 789 → **815** (+26). Build: passed, and capability-probed inside the image — nine tools,
+`garmin_activities` read-only, the 31-day cap, and all seven new candidates present.
+
 ## RESUME HERE
 
 **The rule, holding: this block quotes no commit hash, no pending list, nothing unknowable at
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **789 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **815 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 ---
@@ -3503,12 +3592,33 @@ the morning snapshot exists looks exactly like the bug.
 - Reporting rule: the full response, verbatim, every field. The last three defects were all found
   by quoting output rather than summarising it.
 
-**B. Step 0b — the probe candidates session A needs.** CLI-only, prints no value, makes no tool
-reachable. Candidates for `get_activity`, `get_activity_splits`, `get_activity_hr_in_timezones`,
-`get_hrv_data_range`, `get_rhr_daily`, `get_sleep_daily` and `get_weekly_stress`; plus a way to
-aim the activities candidate at a **running** activity, which is the only thing that settles
-whether a GPS run's list row carries coordinates. Step 0's activity was indoors, so its lack of
-coordinate fields proves nothing.
+**~~B. Step 0b — the probe candidates session A needs.~~ BUILT 2026-11-04, not yet run.** All
+seven candidates exist, plus `--activity-id` and two new call shapes. **It needs a RUNNING
+activity's id**, which is what A1's list is for:
+
+```
+garmin-mcp probe --explain activity_detail,activity_splits,activity_hr_zones --activity-id <id>
+garmin-mcp probe --explain hrv_range,sleep_daily,rhr_daily,weekly_stress
+```
+
+The first settles **which call carries per-lap HR** (session A2 cannot be designed without it) and
+**whether a GPS run's row carries coordinates** — step 0's activity was indoors, so its lack of
+coordinate fields proves nothing. The second is session C's input and costs one extra run.
+
+**C. The live check for session A.** List last week and compare against Connect: the five
+sessions, their names, and which carry a `workout_id`. Two readings to take while there:
+
+- **One run's `distance_m` and `duration_s` against what Connect shows**, which turns the unit
+  from inferred into measured. Step 0 printed `float`, which is a type and not a value.
+- **An activity that did NOT come from a scheduled workout** — an unplanned run or a class — to
+  see whether `workout_id` is absent or zero.
+
+**D. A decision, not a check: the request budget under-counts a paginated read.**
+`get_activities_by_date` pages inside one call, so the limiter takes one token for several
+requests and the pagination is past the only doorway there is. Shipped mitigations are a 31-day
+cap and a `requests_basis` that says the count is derived. The alternative is our own pagination
+with `get_activities(start, limit)`, which cannot filter by date and would walk backwards through
+history to reach an old window. Worth a decision rather than a drive-by fix.
 
 
 **~~0. Push the branch and open its PR.~~ DONE** — the decline was deliberate,

@@ -161,6 +161,12 @@ ALLOWED = {
     # coalesce them with. Added deliberately, with the reason in
     # `source/zones.py`'s own docstring.
     "source/zones.py",
+    # v1.8-A: a date WINDOW is not a SourceCall keyed by one date, and there is
+    # no second metric sharing this payload to coalesce with. The reason lives
+    # in `source/activities.py`'s docstring, along with the finding that the
+    # library pages inside the call -- which is a budget problem the seam could
+    # not have solved either.
+    "source/activities.py",
     "cli.py",
 }
 
