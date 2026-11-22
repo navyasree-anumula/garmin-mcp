@@ -3811,6 +3811,48 @@ could be made against. It is `test_a_seven_day_window_across_a_month_boundary_re
 Tests: **815 → 861** (+46, none removed). Build: **passed**, locally, with a capability probe
 inside the image.
 
+## 2026-11-22 (the re-pin script) — the handover is a download, and the rule has a test
+
+`tools/repin.ps1` is in the repository. It is not new work on the re-pin itself; it is the
+delivery mechanism, which had failed **three times in three attempts** while the script's own
+logic was fine each time.
+
+**The third failure is the one worth recording, because the advice was ours.** The script pasted
+into the laptop died on `Missing closing ')' in expression` at
+`[System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $false))` —
+113 characters, wrapped on its way into the file. That exact line is what this project's own
+auto-memory recommended as the **fix** for the BOM bug of 2026-10-31. So the remedy for one
+delivery bug carried another, and the general rule had been written too narrowly: the earlier
+lesson said "a long `python -c` line", when the real rule is **no long line anywhere in a
+handed-over `.ps1`**. Two short lines replace it and neither can wrap.
+
+**Which failures are loud and which are silent, because that is the part that decides the
+blast radius.** A wrap inside *code* is a parse error you see immediately. A wrap inside a
+**double-quoted string** — a path default, a message — parses perfectly and changes the value,
+which is exactly how the `python -c` payload broke in October. The committed script therefore
+builds its config path from short `Join-Path` steps and its probe payload from short `+=`
+pieces with **no quote characters inside them** (`chr(10)` stands in for a newline), so a wrap
+cannot be silent anywhere in it.
+
+**`tests/test_repin_script.py` — eleven assertions, and a PowerShell file gets them for a
+reason.** A rule in a document that nothing holds is a comment, and this one has cost three
+evenings: no line over **72 characters** (with a negative control, since a width check that
+cannot fire is decoration), the digest parameter mandatory, the digest asserted **before**
+anything is written and the backup taken before the write, no `Set-Content` in any code line —
+naming it in a comment to explain why it is forbidden is allowed, and the first version of the
+guard read its own documentation as a violation — no `server_version` anywhere, `list_tools`
+and `docker ps` both present as the real instruments, the writes flag asserted to survive the
+edit, and no markdown fence saved into the file, which is failure number two with a test on it.
+
+It does not run PowerShell: that needs Windows and a Desktop config. It asserts the file's
+properties, and the behavioural guards are the script's own two, both of which run before
+anything leaves a trace.
+
+**Not in the image.** The Dockerfile copies `pyproject.toml` and `garmin_mcp/` only, so
+`tools/` adds nothing to what ships.
+
+Tests: **861 → 872** (+11, none removed). Build: not run — this commit changes no shipped code.
+
 ## RESUME HERE
 
 **If `SESSION-HANDOFF.md` exists at the repository root, read it before this block.** It is
@@ -3822,7 +3864,7 @@ If it is absent, nothing is pending that this file does not already say.
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **861 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **872 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 **Where v1.8 and v1.9 stand.** v1.8 sessions **A** (past activities, with the allowlist) and **B**
@@ -4325,13 +4367,18 @@ probe inside the image answered seven tools, and `docker ps` after relaunch show
 containers on `sha-75551ab` and none on an older tag. Writes stayed enabled. The paragraph below
 is kept because its lesson is not spent: a build claim is a measurement with a date on it.
 
-**The re-pin script now lives on the laptop** at
-`C:\Users\<user>\Documents\Personal stuff\garmin\repin.ps1` and takes `-NewTag`, `-Digest`,
-`-ExpectTool` and `-ExpectTools`, so a session hands over one invocation line instead of a
-script. Two runs in a row had failed on how the script was *delivered* rather than on what it
-did — a long `Join-Path` line that did not survive a paste, and then prose between fenced blocks
-that got saved into the `.ps1` and ran as a command. The digest argument stays mandatory: a
-re-pin that only pulls a tag is how this file carried a wrong pin for five days.
+**The re-pin script is in this repository at `tools/repin.ps1` as of 2026-11-22**, and the copy
+on the laptop at `C:\Users\<user>\Documents\Personal stuff\garmin\repin.ps1` is now a
+download rather than a paste. It takes `-NewTag`, `-Digest`, `-ExpectTools`, `-ExpectToolCount`
+and `-VerifyOnly`. **Three** runs in a row had failed on how the script was *delivered* rather
+than on what it did — a long `Join-Path` line that did not survive a paste, prose between fenced
+blocks that got saved into the `.ps1` and ran as a command, and a 113-character `WriteAllText`
+line that wrapped and produced `Missing closing ')' in expression`. The third was the shape this
+project's own memory recommended, so the advice carried the bug. `tests/test_repin_script.py`
+holds the rule now: **no line over 72 characters**, no `Set-Content`, no `server_version` as an
+instrument, no markdown fence saved into the file, the digest asserted before anything is
+written, and the writes flag asserted to survive the edit. The digest argument stays mandatory:
+a re-pin that only pulls a tag is how this file carried a wrong pin for five days.
 
 **SUPERSEDED 2026-10-31 (evening): the laptop was re-pinned, and the new tag was
 never measured.** Pace targets and strength warm-ups both worked from Desktop,
