@@ -3898,6 +3898,95 @@ record a tag the way it once did on the strength of a config edit.
 
 Tests: **861 → 874** (+13, none removed). Build: not run — this commit changes no shipped code.
 
+## 2026-11-22 (live, after the re-pin) — four defects in the first reads, one of them a privacy leak this project's own walk half-mitigated
+
+The re-pin landed and the client answers with `garmin_calendar`, `garmin_activities` and
+`garmin_zones` — a capability reading through the client rather than a version claim, and
+`server_version` agrees at `0.2.0+4c613ec`. Four live calls then found four defects, which is the
+rate this project's live checks have always had and the reason they are not optional.
+
+**What is now measured, and it closes most of two checks.**
+
+| Reading | Value, 22 Nov |
+|---|---|
+| `readiness` / `recovery_time` | **87** and **1** — the decoder fix of v1.8-B works on real data |
+| Zone profile | one profile, sport `DEFAULT`, method `HR_RESERVE`, max **191**, threshold **178**, resting used **53** |
+| Zone floors | **122 / 136 / 150 / 163 / 177** |
+| A run's units | **12,036 m** and **4,604 s** at **6:23/km** — internally consistent, so `distance_m` is metres and `duration_s` seconds |
+
+That last row **settles session A's 2.c and 10.a**: the unit was inferred from the account's
+metric setting and is now read off a value. The arithmetic is its own check — 4,604 s over
+12.036 km is 6:22.6/km against a reported 6:23.
+
+**Defect 1, and it is the serious one: §9 location leaves through the activity NAME.** Garmin
+auto-prefixes an activity name with the city — `"Amstelveen - W3 Sat easy 10k"` — and that name
+is returned by `garmin_activities` **and**, through the same field, by `garmin_calendar`. So the
+allowlist that drops `startLatitude`, `startLongitude`, `locationName` and the polyline is
+working exactly as designed while the place leaves anyway, in the one field nobody would think of
+as a coordinate.
+
+**This was not an unforeseen case. The walk saw it and mitigated the wrong half.**
+`docs/plan-2026-11-04-session-a-activities.md` §4.4 finding **4.d** reads, verbatim: *"An
+activity **name** is user-written text that can contain a place — 'morning run in <park>'. —
+**ACTIONABLE**: never logged."* The disposition closed the **logging** path and said nothing
+about the **return** path, and `test_the_name_is_never_logged` then passed, which made the
+finding look discharged. **A finding is not closed by mitigating one of its consumers**, and Pass
+A exists to enumerate consumers — its matrix lists the row's consumer as "the human" and stopped
+there. Garmin's own city prefix turns an occasional risk into a systematic one.
+
+**It needs a scope decision before code, because the two surfaces differ.** On
+`garmin_activities` the name is the athlete's own text and stripping a leading `"<place> - "` is
+a **heuristic** that could eat a legitimate name — `"Tempo - 3x2k"` has the same shape. On
+`garmin_calendar` the planned name is reachable exactly, through `workout_id`, so nothing has to
+be guessed. Recommended, not decided: strip on the activity surface with the false-positive case
+tested, prefer the planned name on the calendar surface, and give §9 its own row for "a place can
+arrive inside a name".
+
+**Defect 2: the calendar lists completed activities as entries, and an activity id lands in
+`scheduled_workout_id`.** Every done session appears **twice** — the scheduled workout, plus an
+item with `workout_id: null` whose id is the **activity** id (e.g. `25162731046`). The candidate
+list read the right key name with the wrong meaning: `id` is **confirmed** for a calendar item's
+schedule id, measured by the live undo of 2026-11-02, and on an *activity* item that same key is
+an activity id. **This is the `WORKOUT_ID_KEYS` defect of §16.2a in a third place** — a key whose
+spelling is right and whose referent is not.
+
+**What it does and does not endanger, checked rather than assumed.** It is a wrong *label*, not
+yet a wrong *delete*: `unschedule` matches on `workout_id` through the fallback-free
+`CALENDAR_WORKOUT_ID_KEYS`, and these activity items carry no `workout_id`, so the undo cannot
+select one. `_entries_on` does count them, so a refusal's "the date holds N in total" is inflated
+by the day's completed sessions. The fix is to read the item's **type** and either exclude
+activity items or label them, and **never offer an activity id in a field named for a schedule**,
+because the next consumer of that field is a move tool whose whole job is to act on it.
+
+**Defect 3: two entries nobody can identify, which is where this started.** 19 and 21 November
+still hold an entry with **no name, no `workout_id` and no schedule id**. The listing reports
+them honestly — `name_basis` says no candidate key answered — which is better than the silence
+before it, but it does not say what they are. Their raw item keys are the next reading, and the
+probe is the instrument.
+
+**Defect 4: `exercise_sets.duration_s` is milliseconds.** `135000` for three sets of 45 s and
+`180000` for six of 30 s — both exactly 1,000x. Either divide or rename to `_ms`; the field as
+shipped claims a unit it does not carry, which is the one thing §5 forbids most plainly. **And
+the whole structure is watch-detected rather than prescribed**: categories come back `UNKNOWN`,
+`CARDIO` and `TOTAL_BODY`, and `max_weight_g` is `0` because no weights were logged. That needs
+saying in the response, since "what the session did" and "what the watch guessed the session did"
+are different claims.
+
+**The schema-cache lead is now a finding, by this project's own rule.** An already-running
+conversation kept the old tool descriptions and the old metric list — no `readiness_latest` — after
+the re-pin. That is the **second** reading of the same behaviour (the first was 2026-10-31), and
+**a mechanism goes in the indicative only after two readings**. So: a fresh conversation after
+every re-pin is not hygiene, it is the documented requirement, and the "LEAD, not a finding" note
+further down this file is superseded.
+
+**One thing to carry into v1.9's priorities:** easy runs sat mostly in **zones 3–4** by heart
+rate, which makes HR targets (zone and bpm, preview showing bpm) more useful than when they were
+scoped — and `garmin_zones` already returns `trainingMethod` for exactly that conversion.
+
+Tests: unchanged this entry — it records readings and defects. The tests the four defects need are
+listed with each of them in **OPEN CHECKS** below, and three of the four need a scope decision or
+a measurement before a test can assert the right thing.
+
 ## RESUME HERE
 
 **If `SESSION-HANDOFF.md` exists at the repository root, read it before this block.** It is
@@ -3931,10 +4020,44 @@ plus from-date plus to-date, which the new listing is the precondition for and w
 create plus an unschedule whose two halves can disagree — or **v1.8 C**. Everything else below
 needs the laptop or needs a decision.
 
-**What the calendar read does not know yet, and one live call settles all of it:** the name key,
-the container key and the date key are candidates with the answering one reported on every call,
-and whether an empty month carries its container key decides whether the empty answer or the
-refusal is right for a quiet future month.
+**The 22 November live reads found four defects — F1 to F4 in TO FIX below — and the first is a
+§9 privacy leak: Garmin prefixes an activity name with the city, so a place leaves through
+`name` on two tools while the allowlist drops every coordinate.** It needs a scope decision
+before code, because the activity surface can only strip heuristically while the calendar surface
+can take the planned name exactly. **F2 is the one to read twice:** the calendar lists completed
+activities as entries and puts an activity id in `scheduled_workout_id`, which is a wrong label
+today and would be a wrong action the moment a move tool trusts that field.
+
+---
+
+## TO FIX — the four defects of the 22 November live reads, in order
+
+**F1. §9: a place leaves through the activity NAME.** Garmin prefixes an activity name with the
+city, and `garmin_activities` and `garmin_calendar` both return that field. **Needs a scope
+decision first** (the 22 November entry argues it): strip a leading `"<place> - "` on the activity
+surface, prefer the planned name via `workout_id` on the calendar surface, and give §9 a row.
+**Tests it needs, once decided:** a city-prefixed name loses the place; **a legitimate hyphenated
+name — `"Tempo - 3x2k"` — survives unchanged**, which is the false-positive half and the half a
+heuristic gets wrong; and both surfaces agree, asserted against one fixture so they cannot drift.
+
+**F2. The calendar lists completed activities, and an activity id lands in
+`scheduled_workout_id`.** Read the item's type; exclude or label activity items; never offer an
+activity id in a field named for a schedule. **Tests:** an activity item is not returned as a
+schedulable entry; **an activity id never appears as `scheduled_workout_id`**; `_entries_on` stops
+counting activity items toward a refusal's total; and a regression test that the undo still cannot
+match an item without a `workout_id`, which is what keeps this a wrong label rather than a wrong
+delete. One more is worth having even though it passes today: a calendar holding **both** a
+workout item and an activity item for the same date resolves to the workout item.
+
+**F3. `exercise_sets.duration_s` is milliseconds** — `135000` for 3x45 s. Divide, or rename to
+`_ms`. **Tests:** the measured pair converts (`135000` → `135.0` s, `180000` → `180.0` s), pinned
+to literals so a refactor cannot change what the unit means. **And label the structure as
+watch-detected**, since `UNKNOWN`/`CARDIO`/`TOTAL_BODY` categories and `max_weight_g: 0` are the
+watch's rep detection and not the prescription — one test that the note says so.
+
+**F4. The two unidentified entries of 19 and 21 November.** No name, no ids. **Not a test yet, a
+measurement**: read their raw item keys with the probe. A test asserting a shape nobody has seen
+would be an invented fixture pretending to be evidence.
 
 ---
 
@@ -3987,10 +4110,12 @@ either. **The merge and the publish have landed**, so what is left is a **re-pin
 Desktop conversation** — three new tools and four new metric keys have to be offered before they
 can be asked for, and a conversation open across the re-pin will not see them.
 
-**Still outstanding, measured 2026-11-22:** `garmin_auth_status` from Desktop reported the
-2 November build, so the re-pin has not happened and every live check below has been waiting on it
-for eighteen days. It now also gates check E. The instrument was the tool's own answer, not this
-file.
+**MOSTLY CLOSED 2026-11-22, after the re-pin.** `readiness` answered **87** and
+`recovery_time` **1**, so the v1.8-B decoder works on real data; the zone profile came back as
+one `DEFAULT` profile on `HR_RESERVE` with max **191**, threshold **178**, resting used **53** and
+floors **122 / 136 / 150 / 163 / 177**. **What is left is only what an app screen can answer**:
+the readiness **scale** and the recovery-time **unit** against the Connect app, and those five
+floors against Connect's own zone screen. Both are values, so no endpoint settles them.
 
 Re-pin to the tag for `main`'s current tip: `git log --oneline -1 main` names the commit, and
 **the registry is the instrument** — a 200 on `/v2/.../manifests/sha-<commit>`, never a green
@@ -4016,7 +4141,10 @@ exists looks exactly like the bug it is testing.
 
 **~~B. Step 0b — the probe candidates session A needs.~~ BUILT 2026-11-04, not yet run.** All
 seven candidates exist, plus `--activity-id` and two new call shapes. **It needs a RUNNING
-activity's id**, which is what A1's list is for:
+activity's id**, which is what A1's list is for — and **take that id from
+`garmin_activities.activity_id`, NOT from a calendar entry's `scheduled_workout_id`.** The
+calendar surfaces an activity id in that field today, which is defect **F2**: step 0b's input
+must not depend on the bug standing next to it.
 
 ```
 garmin-mcp probe --explain activity_detail,activity_splits,activity_hr_zones --activity-id <id>
@@ -4030,10 +4158,12 @@ coordinate fields proves nothing. The second is session C's input and costs one 
 **C. The live check for session A.** List last week and compare against Connect: the five
 sessions, their names, and which carry a `workout_id`. Two readings to take while there:
 
-- **One run's `distance_m` and `duration_s` against what Connect shows**, which turns the unit
-  from inferred into measured. Step 0 printed `float`, which is a type and not a value.
-- **An activity that did NOT come from a scheduled workout** — an unplanned run or a class — to
-  see whether `workout_id` is absent or zero.
+- ~~**One run's `distance_m` and `duration_s` against what Connect shows**, which turns the unit
+  from inferred into measured.~~ **DONE 2026-11-22: 12,036 m and 4,604 s at 6:23/km**, internally
+  consistent, so metres and seconds are measured rather than inferred. Session A's 2.c and 10.a
+  are closed.
+- **Still open: an activity that did NOT come from a scheduled workout** — an unplanned run or a
+  class — to see whether `workout_id` is absent or zero.
 
 **D. A decision, not a check: the request budget under-counts a paginated read.**
 `get_activities_by_date` pages inside one call, so the limiter takes one token for several
@@ -4043,27 +4173,34 @@ with `get_activities(start, limit)`, which cannot filter by date and would walk 
 history to reach an old window. Worth a decision rather than a drive-by fix.
 
 
-**E. The calendar read, live — the checks that close v1.9 session A.** The suite proves a parser
-and a projection against invented fixtures; it proves nothing about Garmin's key names. Needs the
-same re-pin and the same fresh conversation as A, and it settles four unmeasured things in about
-two calls:
+**E. The calendar read, live — PART RUN 2026-11-22, and the part that ran found three defects.**
+One call against a real calendar produced **F1**, **F2** and **F3** above, which is what a live
+check is for. Three readings of the five have **not** been taken, and one of them can falsify a
+shipped refusal rule:
 
-- `garmin_calendar("<today>")`, compared against Connect's calendar screen. This is the reading
-  that settles the **name key**, the **container key** and the **date key** at once, and promotes
-  the new fixtures out of `# invented:`.
-- `garmin_calendar("<monday>", "<sunday>")`, then a week that **crosses a month boundary** — expect
-  `months_read: 2` and `requests_made: 2`.
-- **An entry that is not a scheduled workout template**, if the account has one: a course, a race,
-  an event. Does it list with `workout_id: null`? That is the shape the write path's parser can
-  never return, and the likeliest shape of the 19 and 21 November entries.
+- **`keys_read` has not been reported.** The call returned names and `name_basis`, so the name key
+  answered — but **which** key answered was not quoted back, and that field is the whole point:
+  one reading settles the **container key**, the **date key** and the **name key** together and
+  promotes four `# invented:` fixtures in `test_scheduled.py` and `test_garmin_calendar.py`. It is
+  free, on any call already being made.
+- **A week that crosses a month boundary** — expect `months_read: 2` and `requests_made: 2`. This
+  is the assertion `docs/SCOPE.md` has wanted since v1.5, and the unit test proves our arithmetic
+  rather than Garmin's answer.
 - **A date in an empty future month.** Expect the empty note, **not** a refusal. A refusal means
-  Garmin answers an empty month without a container key, and the empty-versus-unreadable rule needs
-  a measured exception rather than an inferred one.
-- Cross-check the listing's row count for a busy date against `garmin_workout_unschedule`'s
-  refusal count for the same date. One parser, two surfaces: they must agree.
+  Garmin answers an empty month without a container key, and then the empty-versus-unreadable rule
+  needs a **measured** exception rather than an inferred one. **This is the only reading left that
+  can falsify shipped behaviour.**
+- ~~An entry that is not a scheduled workout template.~~ **DONE** — and the answer was worse than
+  the question: the calendar carries completed **activities** as entries, with an activity id in
+  `scheduled_workout_id` (**F2**), plus two entries with nothing readable at all (**F4**).
+- ~~Cross-check the listing's row count against `garmin_workout_unschedule`'s refusal count.~~
+  **Superseded by F2**: both surfaces count activity items, so they agree *today* for the wrong
+  reason. Re-take it **after** F2 lands, when the counts should agree because both exclude
+  activities.
 
 Reporting rule, same as always: the full response, verbatim, every field. `name_basis` and
-`keys_read` are exactly the fields a summary drops.
+`keys_read` are exactly the fields a summary drops — and `keys_read` being dropped is why one of
+these three is still open.
 
 ---
 
@@ -4077,6 +4214,10 @@ Mahi's list, in his order. Nothing here is blocked except where it says so.
 when the source entry is missing** — which is now a readable condition rather than a guess, because
 `garmin_calendar` returns the `scheduled_workout_id` for a date or says there is none.
 `garmin_calendar` was the precondition and it is in; this is the next session's first candidate.
+**It is also blocked on F2 in substance, if not in code:** the move acts on
+`scheduled_workout_id`, and that field currently carries an **activity** id for a completed
+session. A move built before F2 lands would be the first consumer to act on the wrong id rather
+than merely display it.
 
 **2. v1.8 C — health trends over 7–28 days** (HRV, sleep, RHR; stress weekly). Unchanged: four
 requests for the window, its own walk owed, and its inherited `requests_made` decision — which now
