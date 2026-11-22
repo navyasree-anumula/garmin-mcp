@@ -146,6 +146,30 @@ def test_the_writes_flag_is_asserted_to_survive_the_edit():
     assert text.index("GARMIN_MCP_ENABLE_WRITES") < text.index("WriteAllText")
 
 
+def test_the_config_path_is_searched_for_and_not_assumed():
+    """The MSIX path was hardcoded until 2026-11-22, when it stopped existing on
+    the laptop and step 3 refused -- correctly, but a guess that has gone stale
+    once should become a search. Both install shapes are covered: the standard
+    installer under `%APPDATA%\\Claude`, and ANY `Packages\\Claude*` rather than
+    one package id, because that id is exactly what changed."""
+    code = "\n".join(code_lines())
+
+    assert "$env:APPDATA" in code, "the standard installer's location"
+    assert "'Claude*'" in code, "any MSIX package, not one id"
+    assert "-ConfigPath" in code, "and an override when neither is right"
+
+
+def test_an_ambiguous_config_location_is_refused_not_picked():
+    """Two configs is a state where choosing one is an invisible arbitrary
+    choice -- the same argument `resolve` makes for two templates of one name.
+    A bounded refusal beats a silent partial."""
+    code = "\n".join(code_lines())
+    ambiguous = code.index("$found.Count -gt 1")
+
+    assert "ambiguous" in code[ambiguous:ambiguous + 400]
+    assert code.index("throw", ambiguous) < code.index("WriteAllText")
+
+
 @pytest.mark.parametrize("fenced", ("```", "~~~"))
 def test_no_markdown_fence_was_saved_into_the_script(fenced):
     """One earlier handover failed because prose between fenced blocks was saved

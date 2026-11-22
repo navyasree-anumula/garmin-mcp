@@ -19,13 +19,53 @@ $ErrorActionPreference = 'Stop'
 
 $Image = "${Repo}:${NewTag}"
 
+# Where the config can be. The MSIX path was the only one
+# hardcoded until 2026-11-22, when it stopped existing on the
+# laptop and the script refused at step 3 -- correctly, but a
+# guess that has gone stale once should become a search.
+function Get-ConfigCandidates {
+  $out = @()
+  $leaf = 'claude_desktop_config.json'
+
+  # The standard installer.
+  $a = Join-Path $env:APPDATA 'Claude'
+  $out += Join-Path $a $leaf
+
+  # Any MSIX package, rather than one package id.
+  $pk = Join-Path $env:LOCALAPPDATA 'Packages'
+  if (Test-Path -LiteralPath $pk) {
+    $ea = 'SilentlyContinue'
+    $dirs = @(Get-ChildItem $pk -Filter 'Claude*' -Directory `
+      -ErrorAction $ea)
+    foreach ($d in $dirs) {
+      $q = Join-Path $d.FullName 'LocalCache'
+      $q = Join-Path $q 'Roaming'
+      $q = Join-Path $q 'Claude'
+      $out += Join-Path $q $leaf
+    }
+  }
+  return $out
+}
+
 if (-not $ConfigPath) {
-  $p = Join-Path $env:LOCALAPPDATA 'Packages'
-  $p = Join-Path $p 'Claude_pzs8sxrjxfjjc'
-  $p = Join-Path $p 'LocalCache'
-  $p = Join-Path $p 'Roaming'
-  $p = Join-Path $p 'Claude'
-  $ConfigPath = Join-Path $p 'claude_desktop_config.json'
+  $cands = @(Get-ConfigCandidates)
+  $found = @($cands | Where-Object {
+    Test-Path -LiteralPath $_
+  })
+
+  if ($found.Count -eq 0) {
+    Write-Host 'Looked for the Desktop config at:'
+    $cands | ForEach-Object { Write-Host "    $_" }
+    throw 'no config found. Pass -ConfigPath. Nothing changed.'
+  }
+  if ($found.Count -gt 1) {
+    Write-Host 'More than one config exists:'
+    $found | ForEach-Object { Write-Host "    $_" }
+    throw 'ambiguous: pass -ConfigPath. Nothing changed.'
+  }
+
+  $ConfigPath = $found[0]
+  Write-Host "Config: $ConfigPath"
 }
 
 function Step($n, $what) {
