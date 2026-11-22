@@ -39,6 +39,13 @@ PAYLOAD_FILES = (
     "test_garmin_workout_create.py",
     "test_unschedule.py",
     "test_garmin_workout_unschedule.py",
+    # v1.9-A: a calendar item's container key, date key and NAME key are all
+    # unmeasured, so every fixture in these two files is `# invented:` and has
+    # to say so. The name is the one that matters: nothing in this repository
+    # had ever read it, so a fixture here is a guess about the field the tool
+    # exists to return.
+    "test_scheduled.py",
+    "test_garmin_calendar.py",
 )
 
 #: Two labels, and the second is not a loophole.

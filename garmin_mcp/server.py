@@ -23,6 +23,7 @@ from .source import write as source_write
 from .source import readings as source_readings
 from .source import zones as source_zones
 from .source import activities as source_activities
+from .source import scheduled as source_scheduled
 from .source.errors import GarminSourceError
 
 logger = logging.getLogger(__name__)
@@ -629,6 +630,154 @@ def garmin_zones() -> ZoneReadings:
         ],
         requests_made=reading.requests_made,
         note=reading.note,
+    )
+
+
+# --------------------------------------------------------------------------
+# The calendar -- what is PLANNED, read-only (docs/SCOPE.md §5, v1.9)
+# --------------------------------------------------------------------------
+
+
+class ScheduledEntryRow(BaseModel):
+    """One calendar entry, with the provenance of its own name attached."""
+
+    date: str = Field(description="The date this entry sits on, YYYY-MM-DD.")
+    name: str | None = Field(
+        description=(
+            "What this session is called. **None rather than a guess** when no "
+            "name could be read -- `name_basis` then says why. A calendar "
+            "item's key names have never been measured on this account, which "
+            "is why the name travels with its source."
+        )
+    )
+    name_basis: str = Field(
+        description=(
+            "Where this name came from: the calendar item's own key (named), a "
+            "join against the workout library, or why there is none."
+        )
+    )
+    workout_id: int | None = Field(
+        description=(
+            "The workout template this entry points at. **None is normal and "
+            "informative**: an entry with no template id is not a scheduled "
+            "workout at all -- a course, a race or an event -- and it is listed "
+            "rather than hidden, because an entry nothing could identify is "
+            "exactly what this tool was built for."
+        )
+    )
+    scheduled_workout_id: int | None = Field(
+        description=(
+            "The calendar entry's own id -- what removing or moving it needs, "
+            "and NOT the workout id. None means this server can show the entry "
+            "but cannot act on it; there is a warning when that happens."
+        )
+    )
+    sport: str | None = Field(
+        description="Garmin's sport key for the entry, when the item carries one."
+    )
+
+
+class CalendarWindowResult(BaseModel):
+    entries: list[ScheduledEntryRow]
+    months_read: int = Field(
+        description="How many calendar months this window touched -- one request each."
+    )
+    requests_made: int = Field(description="Garmin requests this call made.")
+    requests_basis: str = Field(
+        description="Whether the request count was measured or derived."
+    )
+    date_basis: str = Field(description="What the dates in these entries are.")
+    keys_read: dict[str, str] = Field(
+        description=(
+            "Which key in Garmin's payload carried each field, for the fields "
+            "whose spelling this server has never measured. Schema, not account "
+            "data -- the same argument `probe --explain` makes for printing "
+            "paths and never values."
+        )
+    )
+    warnings: list[str] = Field(
+        description="Anything about this answer a human should know. Usually empty."
+    )
+    note: str = Field(description="What these entries are and are not.")
+
+
+@mcp.tool(
+    title="Garmin calendar -- what is scheduled",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True
+    ),
+)
+def garmin_calendar(
+    start_date: Annotated[
+        str, Field(description="YYYY-MM-DD, inclusive. One date is enough.")
+    ],
+    end_date: Annotated[
+        str | None,
+        Field(
+            description=(
+                "YYYY-MM-DD, inclusive. Omit for a single day. At most 31 days "
+                "from `start_date`, and a wider window is refused rather than "
+                "truncated."
+            )
+        ),
+    ] = None,
+) -> CalendarWindowResult:
+    """What is on the training calendar -- the planned half of the loop.
+
+    **Reads only.** Nothing is created, moved or removed. Use
+    `garmin_workout_create` to put a session on a date and
+    `garmin_workout_unschedule(name, date)` to take one off.
+
+    **This is the tool to call before asking about a date at all.** Until it
+    existed, the only way to learn what a date held was the count inside an
+    unschedule refusal -- a destructive tool read for its error message. If the
+    question is "what is on Thursday", ask here.
+
+    **An entry with no `workout_id` is still listed.** A course, a race or an
+    event carries no workout template, and an entry that nothing could name is
+    precisely the case this tool was built for. Everything that can be read is
+    returned, and everything that cannot says so by name.
+
+    **Names carry their own provenance.** A calendar item's key names have never
+    been measured on this account: the ids were settled by a live undo and the
+    name was never read by anything. So each entry's `name_basis` says whether
+    the name came from the item's own key (and which one), from a join against
+    the workout library, or not at all. A name is never invented.
+
+    **An unreadable month is refused, not reported as an empty one.** "Nothing
+    is scheduled on Thursday" is a claim a human acts on by scheduling over
+    whatever is actually there, and an empty month and a payload we are not
+    reading correctly look identical from the outside.
+
+    **Cost: one Garmin request per calendar month the window touches**, plus one
+    pass over the workout library if an entry needed its name resolved. So a
+    week inside one month is one request, a week crossing a month boundary is
+    two, and `requests_made` is measured rather than derived.
+    """
+    try:
+        window = source_scheduled.read_window(start_date, end_date)
+    except GarminSourceError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return CalendarWindowResult(
+        entries=[
+            ScheduledEntryRow(
+                date=entry.date,
+                name=entry.name,
+                name_basis=entry.name_basis,
+                workout_id=entry.workout_id,
+                scheduled_workout_id=entry.scheduled_workout_id,
+                sport=entry.sport,
+            )
+            for entry in window.entries
+        ],
+        months_read=window.months_read,
+        requests_made=window.requests_made,
+        requests_basis=window.requests_basis,
+        date_basis=window.date_basis,
+        keys_read=window.keys_read,
+        warnings=list(window.warnings),
+        note=window.note,
     )
 
 
