@@ -3851,7 +3851,24 @@ anything leaves a trace.
 **Not in the image.** The Dockerfile copies `pyproject.toml` and `garmin_mcp/` only, so
 `tools/` adds nothing to what ships.
 
-Tests: **861 → 872** (+11, none removed). Build: not run — this commit changes no shipped code.
+**Then the first real run found a stale fact, which is what a run is for.** Steps 1 and 2 passed
+on the laptop — digest `sha256:21dd4d4b…885f5612` asserted against `sha-4c613ec`, and a
+**capability probe inside the image answered ten tools including `garmin_calendar`**. Step 3
+refused: **the MSIX config path no longer exists on that machine.** The path
+`…\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json` is what
+this file has called "confirmed by causation" since 2026-10-19, and it has gone — most likely a
+reinstall onto the standard (non-MSIX) build, whose config sits under `%APPDATA%\Claude`.
+
+**The refusal was the design working, and that is the part worth keeping.** Steps 1 and 2 only
+pull and probe; the backup and the write come after. So a wrong path costs a re-run and nothing
+else — no half-edited config, no restore. **A hardcoded path that has gone stale once should
+become a search**, so the script now looks in `%APPDATA%\Claude` and in **any**
+`Packages\Claude*` rather than one package id — the id is exactly what changed — prints every
+candidate it looked at when it finds none, and **refuses rather than choosing when it finds
+two**, because picking one would be an invisible arbitrary choice. `-ConfigPath` remains the
+override. Two more assertions hold that.
+
+Tests: **861 → 874** (+13, none removed). Build: not run — this commit changes no shipped code.
 
 ## RESUME HERE
 
@@ -3864,7 +3881,7 @@ If it is absent, nothing is pending that this file does not already say.
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **872 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **874 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
 **Where v1.8 and v1.9 stand.** v1.8 sessions **A** (past activities, with the allowlist) and **B**
