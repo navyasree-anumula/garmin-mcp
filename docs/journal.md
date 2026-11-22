@@ -3861,12 +3861,40 @@ reinstall onto the standard (non-MSIX) build, whose config sits under `%APPDATA%
 
 **The refusal was the design working, and that is the part worth keeping.** Steps 1 and 2 only
 pull and probe; the backup and the write come after. So a wrong path costs a re-run and nothing
-else — no half-edited config, no restore. **A hardcoded path that has gone stale once should
-become a search**, so the script now looks in `%APPDATA%\Claude` and in **any**
-`Packages\Claude*` rather than one package id — the id is exactly what changed — prints every
-candidate it looked at when it finds none, and **refuses rather than choosing when it finds
-two**, because picking one would be an invisible arbitrary choice. `-ConfigPath` remains the
-override. Two more assertions hold that.
+else — no half-edited config, no restore.
+
+**Where the config actually is, measured 2026-11-22 by searching the whole of `AppData`:**
+`%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc\claude_desktop_config.json`, last written
+**03:10 that morning**. Desktop has moved its data directory **out of the MSIX `Packages` tree
+entirely**, into a `Claude-Data` folder holding one directory per package id — the same id
+string, a different parent. A `Packages`-scoped search finds nothing, which is why the first
+search found nothing: it was scoped to the tree the config had just left. **The path this file
+called "confirmed by causation" since 2026-10-19 is gone**, which is the laptop-pin lesson in a
+new place: a confirmed fact still expires, and the date on it is what says when to re-measure.
+
+**A hardcoded path that has gone stale once should become a search**, so the script now looks in
+three places — `%APPDATA%\Claude` for the standard installer, **any** `Packages\Claude*` rather
+than one package id, and `%LOCALAPPDATA%\Claude-Data\<id>` — prints every candidate it looked at
+when it finds none, and **refuses rather than choosing when it finds two**, because picking one
+would be an invisible arbitrary choice. `-ConfigPath` remains the override. Two assertions hold
+that, one naming all three shapes.
+
+**One failure in the middle was neither Desktop's nor the script's, and it is the most
+transferable thing here.** A run was handed `-ConfigPath $cfg` where `$cfg` held the filename
+**twice** — `…\Roaming\Claude\claude_desktop_config.json\claude_desktop_config.json`, which the
+script printed verbatim before refusing. The cause was a diagnostic snippet written as
+`$cfg = Join-Path $cfg 'claude_desktop_config.json'`: **an assignment that mutates its own input
+is not safe to re-run, and at an interactive prompt it will be re-run.** A handover snippet must
+derive every value from an immutable source or a differently-named variable, so pasting it twice
+is the same as pasting it once. **That the script printed the path it was given is what made this
+diagnosable in one look** — the same argument as quoting a tool response verbatim instead of
+summarising it.
+
+**Then the re-pin succeeded** with `-ConfigPath` pointed at the measured location: digest
+`sha256:21dd4d4b…885f5612` asserted against `sha-4c613ec`, and the capability probe inside the
+image answering ten tools including `garmin_calendar`. **What that does NOT yet establish is what
+the laptop is serving** — only `docker ps` after the relaunch answers that, and this file does not
+record a tag the way it once did on the strength of a config edit.
 
 Tests: **861 → 874** (+13, none removed). Build: not run — this commit changes no shipped code.
 

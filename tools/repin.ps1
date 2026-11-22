@@ -26,6 +26,7 @@ $Image = "${Repo}:${NewTag}"
 function Get-ConfigCandidates {
   $out = @()
   $leaf = 'claude_desktop_config.json'
+  $ea = 'SilentlyContinue'
 
   # The standard installer.
   $a = Join-Path $env:APPDATA 'Claude'
@@ -34,7 +35,6 @@ function Get-ConfigCandidates {
   # Any MSIX package, rather than one package id.
   $pk = Join-Path $env:LOCALAPPDATA 'Packages'
   if (Test-Path -LiteralPath $pk) {
-    $ea = 'SilentlyContinue'
     $dirs = @(Get-ChildItem $pk -Filter 'Claude*' -Directory `
       -ErrorAction $ea)
     foreach ($d in $dirs) {
@@ -44,6 +44,19 @@ function Get-ConfigCandidates {
       $out += Join-Path $q $leaf
     }
   }
+
+  # Where Desktop actually keeps it as of 2026-11-22: a
+  # Claude-Data directory holding one folder per package id,
+  # OUTSIDE the MSIX Packages tree it used to live in.
+  $cd = Join-Path $env:LOCALAPPDATA 'Claude-Data'
+  if (Test-Path -LiteralPath $cd) {
+    $out += Join-Path $cd $leaf
+    $kids = @(Get-ChildItem $cd -Directory -ErrorAction $ea)
+    foreach ($k in $kids) {
+      $out += Join-Path $k.FullName $leaf
+    }
+  }
+
   return $out
 }
 

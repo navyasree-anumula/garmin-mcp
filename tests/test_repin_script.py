@@ -149,14 +149,16 @@ def test_the_writes_flag_is_asserted_to_survive_the_edit():
 def test_the_config_path_is_searched_for_and_not_assumed():
     """The MSIX path was hardcoded until 2026-11-22, when it stopped existing on
     the laptop and step 3 refused -- correctly, but a guess that has gone stale
-    once should become a search. Both install shapes are covered: the standard
-    installer under `%APPDATA%\\Claude`, and ANY `Packages\\Claude*` rather than
-    one package id, because that id is exactly what changed."""
+    once should become a search. Three shapes are covered: the standard
+    installer under `%APPDATA%\\Claude`, ANY `Packages\\Claude*` rather than one
+    package id, and `%LOCALAPPDATA%\\Claude-Data\\<id>` -- which is where the
+    config was **measured** on 2026-11-22, outside the MSIX tree entirely."""
     code = "\n".join(code_lines())
 
     assert "$env:APPDATA" in code, "the standard installer's location"
     assert "'Claude*'" in code, "any MSIX package, not one id"
-    assert "-ConfigPath" in code, "and an override when neither is right"
+    assert "'Claude-Data'" in code, "where it actually is, 2026-11-22"
+    assert "-ConfigPath" in code, "and an override when none is right"
 
 
 def test_an_ambiguous_config_location_is_refused_not_picked():
