@@ -509,24 +509,59 @@ class CalendarEntry:
     understood: bool
 
 
-def _schedule_entry_on(payload: Any, workout_id: int, day: str) -> CalendarEntry:
-    """**The one calendar parser.** Both the create path and the undo read this.
+@dataclass(frozen=True)
+class CalendarDay:
+    """Every item a calendar month holds for ONE date, and which keys answered.
 
-    The create path asks "is it already on that date" and the undo asks "which
-    entry is on that date" -- the same read of the same unmeasured shape. Two
-    parsers would mean a fix to one leaving the other wrong, so
-    `_scheduled_ids_on` is now a thin call into this and keeps its old
-    signature: the create path and its tests are untouched by construction.
+    **One parser, three callers since v1.9-A.** The create path asks "is my
+    workout already on that date", the undo asks "which entry is on that date",
+    and `garmin_calendar` asks "what is on that date **at all**" -- the same read
+    of the same unmeasured shape. The first two filter on a `workout_id` they
+    already know; the third cannot, and the one shape such a filter can never
+    return is an item with **no `workoutId`** -- a course, a race, an event type
+    nobody here has read. So the filter moved up into the callers and the
+    listing moved down here.
 
-    Records **which key carried each id**, because a calendar item is the one
-    shape in this module with no measured key names at all. `WORKOUT_ID_KEYS`
-    and `SCHEDULE_ID_KEYS` are confirmed for `upload_workout` and
-    `schedule_workout` *responses*; against a calendar item they are still
-    candidates. The first live undo settles them for free, the same way
-    `id_keys` settled the write's.
+    `understood` is the distinction that matters, and it is not cosmetic: a
+    month with nothing scheduled and a payload we are not reading correctly look
+    identical from the outside and have opposite conclusions. One means "go
+    ahead", the other means "do not answer this question at all".
+    """
+
+    items: tuple[dict[str, Any], ...]
+    container_key: str
+    date_key: str
+    understood: bool
+
+
+def _date_key_for(item: dict[str, Any], day: str) -> str:
+    """Which date spelling puts this item on this day, or "" for neither.
+
+    Prefix-matched rather than compared, since Garmin's dates carry a time on
+    some endpoints -- and that prefix match is also what makes a month view
+    containing neighbouring days harmless.
+    """
+    for candidate in CALENDAR_DATE_KEYS:
+        if str(item.get(candidate) or "").startswith(day):
+            return candidate
+    return ""
+
+
+def calendar_items_on(payload: Any, day: str) -> CalendarDay:
+    """**The one calendar parser.** Every item on `day`, in Garmin's own order.
+
+    Finds the container among `CALENDAR_KEYS` and the date among
+    `CALENDAR_DATE_KEYS`, and records which of each answered -- both are still
+    unmeasured, so every caller reports them and the first live read settles
+    them for free.
+
+    Returns an unreadable day rather than raising on every shape that is not a
+    dict holding a list: one of its callers decorates a refusal that is already
+    being written, and an exception there would replace a message a human can
+    act on with a stack trace.
     """
     if not isinstance(payload, dict):
-        return CalendarEntry(None, "", "", "", "", 0, False)
+        return CalendarDay((), "", "", False)
 
     items = None
     container_key = ""
@@ -536,24 +571,50 @@ def _schedule_entry_on(payload: Any, workout_id: int, day: str) -> CalendarEntry
             container_key = key
             break
     if not isinstance(items, list):
-        return CalendarEntry(None, "", "", "", "", 0, False)
+        return CalendarDay((), "", "", False)
 
-    matches = []
+    on_day: list[dict[str, Any]] = []
     date_key = ""
     for item in items:
         if not isinstance(item, dict):
             continue
-        if _first_id(item, CALENDAR_WORKOUT_ID_KEYS) != workout_id:
-            continue
-        for candidate in CALENDAR_DATE_KEYS:
-            on = str(item.get(candidate) or "")
-            if on.startswith(day):
-                matches.append(item)
-                date_key = candidate
-                break
+        answered = _date_key_for(item, day)
+        if answered:
+            on_day.append(item)
+            date_key = date_key or answered
 
+    return CalendarDay(tuple(on_day), container_key, date_key, True)
+
+
+def _schedule_entry_on(payload: Any, workout_id: int, day: str) -> CalendarEntry:
+    """This workout's entry on this date, if it has one.
+
+    **A thin filter over `calendar_items_on` since v1.9-A** -- the same move
+    `_scheduled_ids_on` made over this function in v1.7, for the same reason:
+    one parser, and callers that cannot drift from each other because there is
+    nothing left to drift. This signature and every string it produces are
+    unchanged, so the create path and the undo are untouched by construction.
+
+    Records **which key carried each id**, because a calendar item is the one
+    shape in this module whose key names were never measured until the first
+    live undo, and two of them still are not.
+
+    No `id` fallback for the template id, on purpose
+    (`CALENDAR_WORKOUT_ID_KEYS`): a calendar item spells the SCHEDULE id `id`,
+    so a fallback would match a number that means something else and the undo
+    would remove a different session while reporting success.
+    """
+    day_items = calendar_items_on(payload, day)
+    if not day_items.understood:
+        return CalendarEntry(None, "", "", "", "", 0, False)
+
+    matches = [
+        item
+        for item in day_items.items
+        if _first_id(item, CALENDAR_WORKOUT_ID_KEYS) == workout_id
+    ]
     if not matches:
-        return CalendarEntry(None, "", "", container_key, "", 0, True)
+        return CalendarEntry(None, "", "", day_items.container_key, "", 0, True)
 
     schedule_id, schedule_key = _first_id_with_key(matches[0], SCHEDULE_ID_KEYS)
     _, workout_key = _first_id_with_key(matches[0], CALENDAR_WORKOUT_ID_KEYS)
@@ -561,8 +622,8 @@ def _schedule_entry_on(payload: Any, workout_id: int, day: str) -> CalendarEntry
         schedule_id,
         schedule_key,
         workout_key,
-        container_key,
-        date_key,
+        day_items.container_key,
+        _date_key_for(matches[0], day),
         len(matches),
         True,
     )
@@ -575,27 +636,10 @@ def _entries_on(payload: Any, day: str) -> int:
     called X is on 5 Nov" means something different when that date holds three
     other sessions than when it holds none. The first says the name or the date
     is wrong; the second says the whole month may be.
+
+    A thin count over the one parser since v1.9-A.
     """
-    if not isinstance(payload, dict):
-        return 0
-
-    items = None
-    for key in CALENDAR_KEYS:
-        if key in payload:
-            items = payload[key]
-            break
-    if not isinstance(items, list):
-        return 0
-
-    count = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        for candidate in CALENDAR_DATE_KEYS:
-            if str(item.get(candidate) or "").startswith(day):
-                count += 1
-                break
-    return count
+    return len(calendar_items_on(payload, day).items)
 
 
 @dataclass

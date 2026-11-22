@@ -3723,6 +3723,94 @@ says why it does not.
 
 Tests: **815, unchanged** — documentation only. Build: not run.
 
+## 2026-11-22 (v1.9 session A) — reading the calendar, and a parser that could not list
+
+`garmin_calendar(start_date, end_date=None)` lists what is scheduled: date, name, `workout_id`,
+`scheduled_workout_id`, sport, one Garmin request per calendar month the window touches. Read-only,
+annotated honestly, and the tenth tool. The walk — ten dimensions plus passes A and B — is in
+`docs/plan-2026-11-22-calendar-read.md`, **written before the code**, which is now four sessions
+running.
+
+**What the absence had cost, dated.** On 20 November (Thursday 19th) and 22 November (Saturday
+21st) an unknown workout sat on the calendar and could not be identified. The only signal available
+was the **entry count inside an unschedule refusal** — `_entries_on` decorates that message with
+"the date holds N in total" — so the way to learn anything about the calendar was to call a
+destructive tool and read what it refused to do. A write tool used as a read instrument is the
+finding, not the workaround.
+
+**The mechanical reason it could not be done, which the walk found in the source rather than in a
+claim.** The read itself has existed since v1.5: `get_scheduled_workouts(year, month)` is called by
+the create path and by the undo, and `_schedule_entry_on` parses it. But that parser takes a
+`workout_id` and filters to it, because both of its callers already know which workout they mean.
+**The one shape such a filter can never return is an item with no `workoutId` at all** — a course,
+a race, an event type nobody here has read — which is a plausible shape for exactly the entries
+that could not be identified, and the live check is what will say whether it is the right one. So
+the filter moved up into the two callers and the listing moved down into `calendar_items_on`: one
+parser, three callers, and `_scheduled_ids_on` / `_entries_on` kept their signatures so the write
+path is untouched by construction. **The acceptance criterion was that `test_write.py`,
+`test_unschedule.py` and `test_garmin_workout_unschedule.py` pass unchanged. They do — 91 tests,
+no edits.**
+
+**The field this tool exists to return is the one nothing had ever measured.** No code in this
+repository had read a calendar item's **name**: the undo resolves a name to a `workout_id` through
+`get_workouts` first, so the name key never came up. `workoutName` is asserted by the library's own
+code for a workout *list item* and a workout *detail* (`garminconnect/__init__.py:3406`) — evidence
+about two endpoints that are not this one. So the name is read from candidates with the answering
+key reported, and when none answers the entry falls back to **one** join against the workout
+library (Mahi's decision 2, 2026-11-22), and `name_basis` says on every single entry which of those
+happened. **A name is never invented**, and a failed join degrades the name rather than raising:
+`list_workouts` refuses past its page cap with a class whose docstring promises "nothing was
+written", and surfacing that from a read tool would be a mislabel.
+
+**Three decisions taken at the start, all Mahi's:**
+
+- **A fourth tool, not a second `action` on `garmin_workouts`.** This document's own §5 cost table
+  had specified `garmin_workouts(action=scheduled, window=next_7_days)` since v1.4. The reason to
+  deviate is not taste: `garmin_workouts` takes `name` and `steps` as **required** parameters, so a
+  second action means making both optional, and "a preview with no steps" moves from a schema error
+  to a runtime refusal — weakening the one schema the agent composes against in order to add a read
+  that shares none of its arguments. **SCOPE §5 is amended in the same commit** (the tool table, a
+  fifth note, and the cost row), so the code and the document do not disagree for a version.
+- **Candidates, then one library join, for the name.** Above.
+- **The 31-day cap is kept**, although the reason the activity tool has one does not apply here —
+  that cap exists because the library paginates invisibly, while this tool's cost is one request
+  per month and visible. One convention across two window tools beats two, and the refusal says the
+  real reason rather than borrowing the other one's.
+
+**An unreadable month is refused, never reported as an empty one.** "Nothing is scheduled on
+Thursday" is a claim a human acts on by scheduling over whatever is actually there, and an empty
+container and a payload we are not reading correctly look identical from the outside. That is the
+distinction `CALENDAR_KEYS` was commented for in v1.7; this is the first tool where getting it
+wrong would be visible to a person rather than to a write path.
+
+**Measured today, not inferred:**
+
+- **The laptop is still on the 2 November image.** `garmin_auth_status` reported
+  `0.2.0+75551ab` on 22 November, which is seven tools; `main` carries ten.
+- **ghcr, read directly rather than off a green tick**: `sha-66d2dec` and `latest` both answer 200
+  and both resolve to digest `sha256:37c622befa7ca93e2f76341c9dc44391a8a0078d9d771b09c7cfd7e01bbfa000`.
+  The laptop's `sha-75551ab` resolves to `sha256:10afa15703b8a0534499fdf541d4619957f44b0dc6c7046026861f10dc98938c`,
+  which is what the 2 November re-pin asserted — so the pin is unchanged rather than unknown.
+- **The image builds and the tool is in it.** A local `docker build` passed, and a **capability
+  probe inside the image** answered **10 tools including `garmin_calendar`** — the rule this repo
+  wrote after `server_version` reached a client and was summarised away.
+
+**What is still unmeasured, and one live call settles all of it:** the name key, the container key
+and the date key are candidates with the answering one reported on every call; whether a month view
+includes neighbouring days (harmless either way — every date is read from its own month's payload,
+so an entry cannot arrive twice); and whether an **empty** month carries its container key, which
+decides whether the empty answer or the refusal is the right one for a quiet future month. Every
+calendar fixture in the two new test files is `# invented:` and both files are now in
+`test_fixture_provenance.py`'s list, so they cannot quietly stop saying so.
+
+**One test this session could finally write.** `docs/SCOPE.md` has asked since v1.5 for a test that
+"a seven-day calendar window spanning two months issues two `get_scheduled_workouts` reads, not
+one". The write path reads a single month, so for four versions there was no code the assertion
+could be made against. It is `test_a_seven_day_window_across_a_month_boundary_reads_two_months`.
+
+Tests: **815 → 861** (+46, none removed). Build: **passed**, locally, with a capability probe
+inside the image.
+
 ## RESUME HERE
 
 **If `SESSION-HANDOFF.md` exists at the repository root, read it before this block.** It is
@@ -3734,20 +3822,32 @@ If it is absent, nothing is pending that this file does not already say.
 write time.** Five earlier blocks went stale by doing exactly that. It states what the work is,
 which does not change when a merge lands.
 
-State: **815 passed, 2 skipped.** If that count disagrees with the suite, this block is older
+State: **861 passed, 2 skipped.** If that count disagrees with the suite, this block is older
 than the code and the suite wins.
 
-**Where v1.8 stands.** Sessions **A** (past activities, with the allowlist) and **B** (readiness
-fixed, zones readable) are built and merged, each walked across the ten dimensions plus passes A
-and B before its code. **Session C — health trends over a range — is the only unbuilt part**, and
-it is blocked on nothing but its own walk. Its plan is drafted in
-`docs/plan-2026-11-04-v1.8-candidates.md` §5, its field names are what step 0b collects for free,
-and the decision it inherits is named there: `requests_made` means something different on each
-tool that reports it, and C is where the metric tools either gain the field or stay silent about
-cost.
+**Where v1.8 and v1.9 stand.** v1.8 sessions **A** (past activities, with the allowlist) and **B**
+(readiness fixed, zones readable) are built and merged. **v1.8 session C — health trends over a
+range — is still the only unbuilt part of v1.8**, blocked on nothing but its own walk: its plan is
+drafted in `docs/plan-2026-11-04-v1.8-candidates.md` §5, its field names are what step 0b collects
+for free, and the decision it inherits is named there — `requests_made` means something different
+on each tool that reports it, and C is where the metric tools either gain the field or stay silent
+about cost.
 
-**The next session starts with C.** Everything else below either needs the laptop or needs a
-decision, and none of it blocks C.
+**v1.9 session A — reading the calendar — is built.** `garmin_calendar` lists what is scheduled on
+a date or across a window, walked across the ten dimensions plus passes A and B before its code
+(`docs/plan-2026-11-22-calendar-read.md`), with SCOPE §5 amended in the same commit for the tool it
+adds. Until it existed, the only way to learn what a date held was the entry count inside an
+unschedule refusal — a destructive tool read for its error message.
+
+**The next session has two unblocked choices.** **Moving a scheduled session** — one action, name
+plus from-date plus to-date, which the new listing is the precondition for and which today takes a
+create plus an unschedule whose two halves can disagree — or **v1.8 C**. Everything else below
+needs the laptop or needs a decision.
+
+**What the calendar read does not know yet, and one live call settles all of it:** the name key,
+the container key and the date key are candidates with the answering one reported on every call,
+and whether an empty month carries its container key decides whether the empty answer or the
+refusal is right for a quiet future month.
 
 ---
 
@@ -3800,6 +3900,11 @@ either. **The merge and the publish have landed**, so what is left is a **re-pin
 Desktop conversation** — three new tools and four new metric keys have to be offered before they
 can be asked for, and a conversation open across the re-pin will not see them.
 
+**Still outstanding, measured 2026-11-22:** `garmin_auth_status` from Desktop reported the
+2 November build, so the re-pin has not happened and every live check below has been waiting on it
+for eighteen days. It now also gates check E. The instrument was the tool's own answer, not this
+file.
+
 Re-pin to the tag for `main`'s current tip: `git log --oneline -1 main` names the commit, and
 **the registry is the instrument** — a 200 on `/v2/.../manifests/sha-<commit>`, never a green
 tick, because only "Build and publish" publishes and it does nothing on a pull request. The tag
@@ -3850,6 +3955,72 @@ cap and a `requests_basis` that says the count is derived. The alternative is ou
 with `get_activities(start, limit)`, which cannot filter by date and would walk backwards through
 history to reach an old window. Worth a decision rather than a drive-by fix.
 
+
+**E. The calendar read, live — the checks that close v1.9 session A.** The suite proves a parser
+and a projection against invented fixtures; it proves nothing about Garmin's key names. Needs the
+same re-pin and the same fresh conversation as A, and it settles four unmeasured things in about
+two calls:
+
+- `garmin_calendar("<today>")`, compared against Connect's calendar screen. This is the reading
+  that settles the **name key**, the **container key** and the **date key** at once, and promotes
+  the new fixtures out of `# invented:`.
+- `garmin_calendar("<monday>", "<sunday>")`, then a week that **crosses a month boundary** — expect
+  `months_read: 2` and `requests_made: 2`.
+- **An entry that is not a scheduled workout template**, if the account has one: a course, a race,
+  an event. Does it list with `workout_id: null`? That is the shape the write path's parser can
+  never return, and the likeliest shape of the 19 and 21 November entries.
+- **A date in an empty future month.** Expect the empty note, **not** a refusal. A refusal means
+  Garmin answers an empty month without a container key, and the empty-versus-unreadable rule needs
+  a measured exception rather than an inferred one.
+- Cross-check the listing's row count for a busy date against `garmin_workout_unschedule`'s
+  refusal count for the same date. One parser, two surfaces: they must agree.
+
+Reporting rule, same as always: the full response, verbatim, every field. `name_basis` and
+`keys_read` are exactly the fields a summary drops.
+
+---
+
+## NOT BUILT YET — the queue as of 2026-11-22
+
+Mahi's list, in his order. Nothing here is blocked except where it says so.
+
+**1. Move a scheduled session — one action.** Name, from-date, to-date. Today it takes a create
+(new date) plus an unschedule (old date), the whole structure has to be re-sent, and on
+22 November the old entry had already gone so the two halves disagreed. **It must refuse clearly
+when the source entry is missing** — which is now a readable condition rather than a guess, because
+`garmin_calendar` returns the `scheduled_workout_id` for a date or says there is none.
+`garmin_calendar` was the precondition and it is in; this is the next session's first candidate.
+
+**2. v1.8 C — health trends over 7–28 days** (HRV, sleep, RHR; stress weekly). Unchanged: four
+requests for the window, its own walk owed, and its inherited `requests_made` decision — which now
+has a third data point, since `garmin_calendar` measures the count honestly.
+
+**3. Composition fixes, three of them, all in the write path:**
+
+- **Garmin's native "skip last rest/recovery" toggle on repeat blocks.** Verify the
+  `RepeatGroupDTO` field by a Connect read-back — **likely `skipLastRestStep`, which is a candidate
+  and not a measurement**. Tool option e.g. `skip_last_rest: true`, summary `3x (last rest
+  skipped):`.
+- **A false-positive warning to retire.** `_TRAILING_REST_NOTE` / `_ends_on_a_rest`
+  (`server.py` around L911) fires whenever a repeat group's last child is a rest, **even when the
+  final round is written out flat** — and its text ("cannot be dropped") is also wrong once the
+  toggle above exists.
+- **Per-side exercises.** e.g. `{"per_side": 30, "switch": 5, "rest_after": 15}` → side A, switch
+  rest, side B, rest.
+
+**4. v1.9 beyond this session:** HR targets (zone and bpm, with the preview showing bpm — which is
+what `trainingMethod` was kept in `garmin_zones` for), and custom non-catalogue strength exercises.
+
+**5. Needs a decision before any code — menstrual cycle data.** `probe.py` leaves the
+menstrual/pregnancy endpoints out **on purpose** (§8, health data). Adding it reverses that, so it
+needs an explicit SCOPE decision — read-only, and never in a fixture, a cassette, this journal or
+anything else in a public repository — **before** a probe is written, not after.
+
+**6. Nice to have, not scheduled:** whole-week preview/approve · "until lap press" steps ·
+reps/weight · body battery · training-load numbers · lactate threshold · `tools.json` · cassettes
+(§8) · the provenance question.
+
+---
 
 **~~0. Push the branch and open its PR.~~ DONE** — the decline was deliberate,
 and it was withdrawn in session rather than lapsing. Branch

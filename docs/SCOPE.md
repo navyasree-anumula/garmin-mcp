@@ -279,11 +279,12 @@ composition above per-run detail.
 | `garmin_activities` | list, **and per-run detail: splits, pace, cadence, HR through the run** — date-windowed |
 | `garmin_health(metric, range)` | sleep, HRV, resting HR, stress, body battery, respiration, skin temperature |
 | `garmin_zones` | the configured heart-rate zones, with max and threshold HR (v1.8) |
+| `garmin_calendar` | what is SCHEDULED on a date or across a window: date, name, `workout_id`, `scheduled_workout_id` (v1.9) |
 | `garmin_workouts` | list / get / create / update / schedule / unschedule |
 | `garmin_body` | weight, composition |
 | `garmin_auth_status` | token state and expiry, and the tool set actually in force |
 
-Four notes on that table, each from measurement rather than preference:
+Five notes on that table, each from measurement rather than preference:
 
 - **`garmin_activities` per-run detail is unverified as of v1.4.** The probe has only ever
   called the activity *list*. Every per-run endpoint — detail, splits, typed splits, HR in
@@ -308,6 +309,19 @@ Four notes on that table, each from measurement rather than preference:
   `trainingMethod` is returned although nothing in v1.8 reads it — the same zone number means
   different bpm under percentage-of-max than under percentage-of-threshold, so v1.9's converter
   is wrong without it and a tidy-up must not delete it as unused.
+- **`garmin_calendar` is a fourth workout tool, not a second `action` — ratified
+  2026-11-22.** This document's own read sweep below budgeted it as
+  `garmin_workouts(action=scheduled, window=next_7_days)`; that row now reads `garmin_calendar`.
+  The reason is not taste: `garmin_workouts` takes `name` and `steps` as **required**
+  parameters, so a second action means making both optional, and "a preview with no steps"
+  moves from a schema error to a runtime refusal — weakening the one schema the agent composes
+  against in order to add a read that shares none of its arguments. The three-tools paragraph
+  below already settled that this surface splits where the *honesty* differs; this is the same
+  argument where the *arguments* differ. **What the absence cost, dated:** on 20 and 22 November
+  an unknown workout sat on the calendar and could not be identified, and the only signal
+  available was the entry count inside an unschedule refusal — a destructive tool read for its
+  error message. A read-only listing is also what makes moving a session one action instead of a
+  create plus an unschedule.
 - **SpO2 is deliberately absent from `garmin_health`'s metric list, and the tool still
   answers about it.** This watch measures none — `get_spo2_data` returns a full envelope of
   window timestamps with every reading null, confirmed 2026-10-09. "This watch does not
@@ -515,7 +529,7 @@ is roughly twelve seconds at §6's budget with the burst absorbed:
 | `garmin_training(metrics=[status, load_ratio, readiness, vo2_max, lactate_threshold], date=today)` | 2–3, coalesced | three metrics live in one `get_training_status` payload; the map dedupes the sources before any request is made |
 | `garmin_health(metrics=[sleep, hrv, resting_hr, body_battery], range=last_7_days)` | ~4, range endpoints | a trend in one request per metric, never 28 day-calls |
 | `garmin_activities(window=last_14_days)` | 1 | what was actually run, against what was prescribed |
-| `garmin_workouts(action=scheduled, window=next_7_days)` | 1–2 | what is already on the calendar |
+| `garmin_calendar(start_date, end_date)` | 1–2 | what is already on the calendar — one request per calendar month the window touches |
 
 Three requirements follow, and none of them is cosmetic:
 

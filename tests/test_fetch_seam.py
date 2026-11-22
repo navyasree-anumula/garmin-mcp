@@ -167,6 +167,12 @@ ALLOWED = {
     # library pages inside the call -- which is a budget problem the seam could
     # not have solved either.
     "source/activities.py",
+    # v1.9-A: a calendar MONTH is not a SourceCall keyed by one date, and no
+    # metric shares this payload. The reason lives in `source/scheduled.py`'s
+    # docstring, with the one that matters more -- it reads through the same
+    # parser the write path uses, so a listing and an undo cannot disagree
+    # about what is on a date.
+    "source/scheduled.py",
     "cli.py",
 }
 
